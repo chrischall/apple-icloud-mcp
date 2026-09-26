@@ -1,0 +1,532 @@
+# Changelog
+
+## [2.19.4](https://github.com/chrischall/ofw-mcp/compare/v2.19.3...v2.19.4) (2026-09-25)
+
+
+### Bug Fixes
+
+* **attachments:** re-check the upload root when opening the file ([#332](https://github.com/chrischall/ofw-mcp/issues/332)) ([d590f1d](https://github.com/chrischall/ofw-mcp/commit/d590f1d18d89840ca6c8aef3f43507520fc9e741))
+* **deps:** bump dotenv from 18.0.0 to 18.0.2 in the production-dependencies group ([#329](https://github.com/chrischall/ofw-mcp/issues/329)) ([4782ebd](https://github.com/chrischall/ofw-mcp/commit/4782ebdc848b6bd0c0b2686d5b5009bcbdb373e2))
+* **writes:** ask before sending messages or posting co-parent-visible OFW records ([#331](https://github.com/chrischall/ofw-mcp/issues/331)) ([8a7509b](https://github.com/chrischall/ofw-mcp/commit/8a7509bcd95087cbd7ee4e50ba113fdbc9daf761))
+
+## [2.19.3](https://github.com/chrischall/ofw-mcp/compare/v2.19.2...v2.19.3) (2026-09-23)
+
+
+### Bug Fixes
+
+* close five medium audit findings (xlsx OOM, since/until offsets, unconfirmed sends, attachment path confinement) ([#325](https://github.com/chrischall/ofw-mcp/issues/325)) ([2998807](https://github.com/chrischall/ofw-mcp/commit/2998807804f37b90b683bb88180c6cac5a8b97c1))
+
+## [2.19.2](https://github.com/chrischall/ofw-mcp/compare/v2.19.1...v2.19.2) (2026-09-23)
+
+
+### Bug Fixes
+
+* **deps:** require zod ^4.6.5 to match @chrischall/mcp-utils 2.4.0 ([#324](https://github.com/chrischall/ofw-mcp/issues/324)) ([9385981](https://github.com/chrischall/ofw-mcp/commit/938598102a5763b0e0ac882a1ba55117aaf89e02))
+* **deps:** upgrade @chrischall/mcp-utils to 2.4.0 and @fetchproxy/* to 3.2.0 ([#322](https://github.com/chrischall/ofw-mcp/issues/322)) ([9227648](https://github.com/chrischall/ofw-mcp/commit/9227648a10915cad7324a5057e7413e0395b199c))
+
+## [2.19.1](https://github.com/chrischall/ofw-mcp/compare/v2.19.0...v2.19.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **deps:** bump dotenv from 17.4.2 to 18.0.0 ([#317](https://github.com/chrischall/ofw-mcp/issues/317)) ([549e2f9](https://github.com/chrischall/ofw-mcp/commit/549e2f9d0dbecf3b962637c686bc08843651b030))
+* **tools:** annotate the ten that declared only readOnlyHint: false ([#319](https://github.com/chrischall/ofw-mcp/issues/319)) ([3841797](https://github.com/chrischall/ofw-mcp/commit/38417976266e9c83b8709a75d02dccf4908f6818))
+
+
+### Documentation
+
+* AGENTS.md pointed at a directory that does not exist ([#320](https://github.com/chrischall/ofw-mcp/issues/320)) ([44a67b7](https://github.com/chrischall/ofw-mcp/commit/44a67b75450d048379b25976fdab5f3ed3b61b4b))
+
+## [2.19.0](https://github.com/chrischall/ofw-mcp/compare/v2.18.0...v2.19.0) (2026-09-20)
+
+
+### Features
+
+* **client:** honour the caller's cancellation on every OFW request ([#313](https://github.com/chrischall/ofw-mcp/issues/313)) ([2b1ad8a](https://github.com/chrischall/ofw-mcp/commit/2b1ad8af60db7161f768d9dcf26439522818f469))
+
+## [2.18.0](https://github.com/chrischall/ofw-mcp/compare/v2.17.0...v2.18.0) (2026-09-19)
+
+
+### Features
+
+* **deps:** take mcp-utils 1.0.0, so server/discover works ([#310](https://github.com/chrischall/ofw-mcp/issues/310)) ([6e2bdfe](https://github.com/chrischall/ofw-mcp/commit/6e2bdfebdee628ec24d2004cca668eee96bda54b)), closes [#311](https://github.com/chrischall/ofw-mcp/issues/311)
+
+## [2.17.0](https://github.com/chrischall/ofw-mcp/compare/v2.16.3...v2.17.0) (2026-09-17)
+
+
+### Features
+
+* **mcp:** migrate server to SDK v2 ([#306](https://github.com/chrischall/ofw-mcp/issues/306)) ([1c562cd](https://github.com/chrischall/ofw-mcp/commit/1c562cd4bc79308bc9e1cb186195b4ea56a86b78))
+
+
+### Bug Fixes
+
+* **deps:** align Zod floor with mcp-utils 0.28.0 ([#309](https://github.com/chrischall/ofw-mcp/issues/309)) ([b9a27e4](https://github.com/chrischall/ofw-mcp/commit/b9a27e4cb7f3b8e1f29a0afff39c6d7f9d0c514e)), closes [#307](https://github.com/chrischall/ofw-mcp/issues/307)
+
+## [2.16.3](https://github.com/chrischall/ofw-mcp/compare/v2.16.2...v2.16.3) (2026-09-15)
+
+
+### Bug Fixes
+
+* **deps:** @fetchproxy/server 3.0.1 — capped peer frames, logged load drops, atomic identity writes ([#302](https://github.com/chrischall/ofw-mcp/issues/302)) ([a475da0](https://github.com/chrischall/ofw-mcp/commit/a475da0bb29347efbcf8129e820809dbd8ded53c))
+
+## [2.16.2](https://github.com/chrischall/ofw-mcp/compare/v2.16.1...v2.16.2) (2026-09-13)
+
+
+### Bug Fixes
+
+* **deps:** bump the production-dependencies group with 3 updates ([6c3a472](https://github.com/chrischall/ofw-mcp/commit/6c3a472feb53a66d6fb140c92d445712e705b9bf))
+
+## [2.16.1](https://github.com/chrischall/ofw-mcp/compare/v2.16.0...v2.16.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **deps:** @chrischall/mcp-utils 0.26.1 ([#296](https://github.com/chrischall/ofw-mcp/issues/296)) ([7fa965c](https://github.com/chrischall/ofw-mcp/commit/7fa965c508e06fb5a36445bd239a87644622598a))
+* **deps:** bump hono from 4.13.0 to 4.13.7 ([#294](https://github.com/chrischall/ofw-mcp/issues/294)) ([dff5c60](https://github.com/chrischall/ofw-mcp/commit/dff5c60d7a33bcc51c975f8f9798940811c8b7eb))
+* **deps:** declare the peer floors mcp-utils 0.26.1 requires ([#297](https://github.com/chrischall/ofw-mcp/issues/297)) ([7b97843](https://github.com/chrischall/ofw-mcp/commit/7b978437a7ac9dab020efa9cea146f1e1360e3e5))
+
+## [2.16.0](https://github.com/chrischall/ofw-mcp/compare/v2.15.1...v2.16.0) (2026-09-07)
+
+
+### Features
+
+* **security:** allowlist outbound requests to the OFW host ([#289](https://github.com/chrischall/ofw-mcp/issues/289)) ([cbee3ce](https://github.com/chrischall/ofw-mcp/commit/cbee3ced75ba5dcd4ab27a9132b8652e47e7f7dd))
+
+## [2.15.1](https://github.com/chrischall/ofw-mcp/compare/v2.15.0...v2.15.1) (2026-09-04)
+
+
+### Documentation
+
+* **skill:** the skill never told callers `view` exists ([#281](https://github.com/chrischall/ofw-mcp/issues/281)) ([0942e48](https://github.com/chrischall/ofw-mcp/commit/0942e48891cabdef2e24e56ae56067b0135c1254))
+
+## [2.15.0](https://github.com/chrischall/ofw-mcp/compare/v2.14.0...v2.15.0) (2026-09-04)
+
+
+### Features
+
+* **tools:** compact responses by default, and drop the formatting whitespace ([#276](https://github.com/chrischall/ofw-mcp/issues/276)) ([9a966e3](https://github.com/chrischall/ofw-mcp/commit/9a966e3e63cfd3136b17273f07a04a68fde60ee4))
+
+
+### Bug Fixes
+
+* **tools:** one sender key per rung, and a projector keeps only its own columns ([#279](https://github.com/chrischall/ofw-mcp/issues/279)) ([03d9dc5](https://github.com/chrischall/ofw-mcp/commit/03d9dc53a56ac2b3f9df3a02a8e0718ed2eb28bb))
+* **tools:** one sender key per rung, and a projector keeps only its own columns ([#280](https://github.com/chrischall/ofw-mcp/issues/280)) ([fe91f56](https://github.com/chrischall/ofw-mcp/commit/fe91f56ea2855e2adbb035557aecd4172eb75de7))
+
+## [2.14.0](https://github.com/chrischall/ofw-mcp/compare/v2.13.0...v2.14.0) (2026-08-31)
+
+
+### Features
+
+* **tools:** add ofw_healthcheck ([#264](https://github.com/chrischall/ofw-mcp/issues/264)) ([f26a154](https://github.com/chrischall/ofw-mcp/commit/f26a15432289c8b183599e5df71145ba0674e9dc)), closes [#265](https://github.com/chrischall/ofw-mcp/issues/265)
+* **tools:** classify a downed bridge as transport, not a missing credential ([#267](https://github.com/chrischall/ofw-mcp/issues/267)) ([cf7b6ac](https://github.com/chrischall/ofw-mcp/commit/cf7b6ace056273624bf55629be70f7521d96c3b8))
+
+## [2.13.0](https://github.com/chrischall/ofw-mcp/compare/v2.12.0...v2.13.0) (2026-08-29)
+
+
+### Features
+
+* **deps:** take @fetchproxy/server 2.2.0 so the concentrator can bind its sandbox address ([#259](https://github.com/chrischall/ofw-mcp/issues/259)) ([b0b7ef5](https://github.com/chrischall/ofw-mcp/commit/b0b7ef50cc69a09fd2f249ccb948bbffbba21c8a))
+
+## [2.12.0](https://github.com/chrischall/ofw-mcp/compare/v2.11.0...v2.12.0) (2026-08-28)
+
+
+### Features
+
+* cache the session token so a restart skips re-authenticating ([#244](https://github.com/chrischall/ofw-mcp/issues/244)) ([40f7489](https://github.com/chrischall/ofw-mcp/commit/40f74893224e384d718ec5a21c44ff550393d90b))
+* **release:** publish ofw-fpx alongside ofw ([#243](https://github.com/chrischall/ofw-mcp/issues/243)) ([d9f0c55](https://github.com/chrischall/ofw-mcp/commit/d9f0c55eb14ab9c83159ad094e1ebc36cb4563f7))
+
+
+### Bug Fixes
+
+* **deps:** mirror package.json's caret range in the lockfile ([#257](https://github.com/chrischall/ofw-mcp/issues/257)) ([2b4c5c6](https://github.com/chrischall/ofw-mcp/commit/2b4c5c6991c9850eb70098fc70eb11d70499e18d))
+* narrow ofw mint.yaml egress and declare OFW_DEBUG_LOG ([#239](https://github.com/chrischall/ofw-mcp/issues/239)) ([599eae7](https://github.com/chrischall/ofw-mcp/commit/599eae74a96903a1fd7d8ba5188ec9c74982250e))
+
+
+### Refactor
+
+* **auth:** take the path ordering from resolveAuthPattern ([#255](https://github.com/chrischall/ofw-mcp/issues/255)) ([4b9daf8](https://github.com/chrischall/ofw-mcp/commit/4b9daf8f6b4c5a385215c81c5e61391eed7dd178))
+
+
+### Documentation
+
+* correct the tokenManager comment left stale by the session cache ([#246](https://github.com/chrischall/ofw-mcp/issues/246)) ([d0963f4](https://github.com/chrischall/ofw-mcp/commit/d0963f41cb41cc63716c95e8e73322535279b97d))
+* list the cache env vars in server.json and .env.example ([#253](https://github.com/chrischall/ofw-mcp/issues/253)) ([e326c45](https://github.com/chrischall/ofw-mcp/commit/e326c458261e9579faaea09a1849ca187d6a2c99))
+* list the session-cache env vars in the Environment block ([#258](https://github.com/chrischall/ofw-mcp/issues/258)) ([3577023](https://github.com/chrischall/ofw-mcp/commit/357702391ae5f98a10c3bf46773ff40bd1cb9813))
+* npm test now typechecks before running vitest ([#251](https://github.com/chrischall/ofw-mcp/issues/251)) ([f4513b9](https://github.com/chrischall/ofw-mcp/commit/f4513b99fd446dbcbf8fb49cd3c7da61d536d7ed))
+* **readme:** npm test now typechecks before running vitest ([#252](https://github.com/chrischall/ofw-mcp/issues/252)) ([8fe1930](https://github.com/chrischall/ofw-mcp/commit/8fe19304949818d895e02b446fcdc41f93b5af2d))
+
+## [2.11.0](https://github.com/chrischall/ofw-mcp/compare/v2.10.2...v2.11.0) (2026-08-23)
+
+
+### Features
+
+* lead paginated list responses with paging state, add nextPage and sort ([#229](https://github.com/chrischall/ofw-mcp/issues/229)) ([0c2462a](https://github.com/chrischall/ofw-mcp/commit/0c2462a89850902caeacf80f5d56657e35ba3c88))
+
+
+### Bug Fixes
+
+* **pagination:** correct the offset base, envelope counting, and key precedence ([#234](https://github.com/chrischall/ofw-mcp/issues/234)) ([6130c50](https://github.com/chrischall/ofw-mcp/commit/6130c509b710c652a8716eb304f4438690d70917))
+
+
+### Refactor
+
+* drop the in-array truncation sentinel from ofw_list_messages ([#232](https://github.com/chrischall/ofw-mcp/issues/232)) ([f16eaa2](https://github.com/chrischall/ofw-mcp/commit/f16eaa27e22176f0e419297aec874ead62677956))
+
+## [2.10.2](https://github.com/chrischall/ofw-mcp/compare/v2.10.1...v2.10.2) (2026-08-07)
+
+
+### Refactor
+
+* **connector:** retire the standalone Cloudflare Worker connector ([#218](https://github.com/chrischall/ofw-mcp/issues/218)) ([d7fb155](https://github.com/chrischall/ofw-mcp/commit/d7fb155b1606d812ed4a63cac853a9bdca443c24))
+
+
+### Documentation
+
+* repair sentences the connector de-naming left behind ([#223](https://github.com/chrischall/ofw-mcp/issues/223)) ([ffdd4ec](https://github.com/chrischall/ofw-mcp/commit/ffdd4ec91db64c1602419ac07051e794db80812d))
+
+## [2.10.1](https://github.com/chrischall/ofw-mcp/compare/v2.10.0...v2.10.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **deps:** move to @fetchproxy/server 2.0.0 for the v3 handshake ([#216](https://github.com/chrischall/ofw-mcp/issues/216)) ([9675baf](https://github.com/chrischall/ofw-mcp/commit/9675baf602cb857af4587d020cdde0166c7a81f7))
+
+## [2.10.0](https://github.com/chrischall/ofw-mcp/compare/v2.9.2...v2.10.0) (2026-07-31)
+
+
+### Features
+
+* **messages:** guarded send-by-draft, accurate threading verdicts, lifecycle fixes ([#206](https://github.com/chrischall/ofw-mcp/issues/206)) ([e0994dd](https://github.com/chrischall/ofw-mcp/commit/e0994dd99279d6da477dccf5c8333c6381a4f41e))
+
+
+### Bug Fixes
+
+* **messages:** evidence-based threading verdicts, honest autoVerified, attachments carried on send-by-draft ([#209](https://github.com/chrischall/ofw-mcp/issues/209)) ([087e478](https://github.com/chrischall/ofw-mcp/commit/087e478280f70b6a128beb1cff098bd3cabf058c))
+
+## [2.9.2](https://github.com/chrischall/ofw-mcp/compare/v2.9.1...v2.9.2) (2026-07-30)
+
+
+### Bug Fixes
+
+* **deps:** bump @fetchproxy/* to 1.7.0 and @chrischall/mcp-utils to 0.14.0 ([#203](https://github.com/chrischall/ofw-mcp/issues/203)) ([1be0764](https://github.com/chrischall/ofw-mcp/commit/1be0764a16e45baf589daf19c263aff9c2f6ea7b))
+
+## [2.9.1](https://github.com/chrischall/ofw-mcp/compare/v2.9.0...v2.9.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* emit every timestamp with an explicit offset and a display value ([#200](https://github.com/chrischall/ofw-mcp/issues/200)) ([d8407fc](https://github.com/chrischall/ofw-mcp/commit/d8407fc01dcd1ead7a646ae819aa5b0152f2fab5)), closes [#201](https://github.com/chrischall/ofw-mcp/issues/201)
+
+## [2.9.0](https://github.com/chrischall/ofw-mcp/compare/v2.8.0...v2.9.0) (2026-07-28)
+
+
+### Features
+
+* **messages:** make it impossible to report stale draft/message state ([#196](https://github.com/chrischall/ofw-mcp/issues/196)) ([cdedecb](https://github.com/chrischall/ofw-mcp/commit/cdedecb64f648c718bda78e355d5b84fe9ab541e))
+
+## [2.8.0](https://github.com/chrischall/ofw-mcp/compare/v2.7.1...v2.8.0) (2026-07-27)
+
+
+### Features
+
+* **attachments:** deliver readable content for every file type ([#185](https://github.com/chrischall/ofw-mcp/issues/185)) ([1d8dffc](https://github.com/chrischall/ofw-mcp/commit/1d8dffc588f14afa8fe93f0670c879d03b2628f4))
+* **messages:** let callers and operators refuse reads that stamp the record ([#194](https://github.com/chrischall/ofw-mcp/issues/194)) ([48c514e](https://github.com/chrischall/ofw-mcp/commit/48c514e1c0ff3636e7732d6c3e8afdfe46beaa7b))
+
+
+### Bug Fixes
+
+* correct three misleading messages and skip an empty cache RPC ([#190](https://github.com/chrischall/ofw-mcp/issues/190)) ([546fd06](https://github.com/chrischall/ofw-mcp/commit/546fd063eca4295fa2185f5486b969a1e9765f03))
+* **extract:** cap decompression by actual output, not the declared size ([#188](https://github.com/chrischall/ofw-mcp/issues/188)) ([23a2dd5](https://github.com/chrischall/ofw-mcp/commit/23a2dd5f1dc05967cfeb202f1a47ba42f337c041))
+
+
+### Refactor
+
+* hoist an import and stop a docstring overstating what it throws ([#193](https://github.com/chrischall/ofw-mcp/issues/193)) ([9d4cb1e](https://github.com/chrischall/ofw-mcp/commit/9d4cb1e662cad21beb538b6e68d537973047d612))
+
+## [2.7.1](https://github.com/chrischall/ofw-mcp/compare/v2.7.0...v2.7.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* **deps:** require @chrischall/mcp-connector &gt;=1.1.1 ([#184](https://github.com/chrischall/ofw-mcp/issues/184)) ([32a284e](https://github.com/chrischall/ofw-mcp/commit/32a284e889911cb52ae7f129866d32e782cfd47b))
+* stop ofw_save_draft self-inflicting STALE_DRAFT and silently dropping replyToId ([#179](https://github.com/chrischall/ofw-mcp/issues/179)) ([4f57fbb](https://github.com/chrischall/ofw-mcp/commit/4f57fbb733caf3fee0fc0ca7359fd550357a31c7))
+
+## [2.7.0](https://github.com/chrischall/ofw-mcp/compare/v2.6.7...v2.7.0) (2026-07-21)
+
+
+### Features
+
+* **messages:** make every read declare how fresh its data is ([#169](https://github.com/chrischall/ofw-mcp/issues/169)) ([d42bb8d](https://github.com/chrischall/ofw-mcp/commit/d42bb8d1bf92ea57308c312c958e1b29ca3738a6))
+
+
+### Bug Fixes
+
+* normalize attachment MIME and guarantee a hosted retrieval path ([#172](https://github.com/chrischall/ofw-mcp/issues/172)) ([59952fc](https://github.com/chrischall/ofw-mcp/commit/59952fceebd341ad00af41e21f17c03c55cabe25))
+
+## [2.6.7](https://github.com/chrischall/ofw-mcp/compare/v2.6.6...v2.6.7) (2026-07-19)
+
+
+### Bug Fixes
+
+* refuse to overwrite a draft that changed on OFW since it was cached ([#158](https://github.com/chrischall/ofw-mcp/issues/158)) ([1f8f5b1](https://github.com/chrischall/ofw-mcp/commit/1f8f5b17dd899b98083f978a692859fb105ec084))
+
+
+### Refactor
+
+* **messages:** drop the dead selfUserId read-state branch ([#161](https://github.com/chrischall/ofw-mcp/issues/161)) ([7da6e18](https://github.com/chrischall/ofw-mcp/commit/7da6e1866988b0ca44d37213245eaeadb639f66a)), closes [#149](https://github.com/chrischall/ofw-mcp/issues/149)
+
+## [2.6.6](https://github.com/chrischall/ofw-mcp/compare/v2.6.5...v2.6.6) (2026-07-19)
+
+
+### Bug Fixes
+
+* **deps:** move to workers-oauth-provider 0.8.x ([#156](https://github.com/chrischall/ofw-mcp/issues/156)) ([356f735](https://github.com/chrischall/ofw-mcp/commit/356f735e53432bd7259787f33d186f3f889bedf5))
+
+## [2.6.5](https://github.com/chrischall/ofw-mcp/compare/v2.6.4...v2.6.5) (2026-07-19)
+
+
+### Bug Fixes
+
+* **ci:** run the Workers test pool in CI ([#155](https://github.com/chrischall/ofw-mcp/issues/155)) ([8caa631](https://github.com/chrischall/ofw-mcp/commit/8caa6314bfd0b2e58cbaceef137a640196fef527))
+
+
+### Documentation
+
+* replace duplicated fleet policy with a pointer ([#151](https://github.com/chrischall/ofw-mcp/issues/151)) ([b4c0e5e](https://github.com/chrischall/ofw-mcp/commit/b4c0e5e9f74183ee4579b5ed97018cc480fd91f5))
+* restore the branch-protection ruleset specifics ([#154](https://github.com/chrischall/ofw-mcp/issues/154)) ([d40024c](https://github.com/chrischall/ofw-mcp/commit/d40024cb65391be6f1602941ab4116592f7cd3e5))
+
+## [2.6.4](https://github.com/chrischall/ofw-mcp/compare/v2.6.3...v2.6.4) (2026-07-18)
+
+
+### Bug Fixes
+
+* reconcile cached read flag with recipient viewedAt ([#148](https://github.com/chrischall/ofw-mcp/issues/148)) ([c8c039e](https://github.com/chrischall/ofw-mcp/commit/c8c039eb13697769fe1c62a56f8fa401c8216aa4))
+
+## [2.6.3](https://github.com/chrischall/ofw-mcp/compare/v2.6.2...v2.6.3) (2026-07-17)
+
+
+### Bug Fixes
+
+* restore release publishing — npm has been stuck at 2.5.0 since 2.6.0 ([#146](https://github.com/chrischall/ofw-mcp/issues/146)) ([3385c23](https://github.com/chrischall/ofw-mcp/commit/3385c2330c93bc72c8e452054e1bb9e24b657804))
+
+## [2.6.2](https://github.com/chrischall/ofw-mcp/compare/v2.6.1...v2.6.2) (2026-07-17)
+
+
+### Bug Fixes
+
+* ofw_sync_messages: always sync the newest messages, never starve them behind a backfill ([#144](https://github.com/chrischall/ofw-mcp/issues/144)) ([f2079e1](https://github.com/chrischall/ofw-mcp/commit/f2079e192983cbc5de9e23238e83374df1dc324b))
+
+## [2.6.1](https://github.com/chrischall/ofw-mcp/compare/v2.6.0...v2.6.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* label a live-fetched sent message as sent, not inbox ([#141](https://github.com/chrischall/ofw-mcp/issues/141)) ([9df8f10](https://github.com/chrischall/ofw-mcp/commit/9df8f10d4cc4a2b7da399c52c7eeb9d2ed1200ee))
+* resume bounded non-deep sync instead of falsely reporting done ([#140](https://github.com/chrischall/ofw-mcp/issues/140)) ([8893649](https://github.com/chrischall/ofw-mcp/commit/889364981cc8b26bc92af6b10f9a293be206b0d6))
+
+## [2.6.0](https://github.com/chrischall/ofw-mcp/compare/v2.5.0...v2.6.0) (2026-07-14)
+
+
+### Features
+
+* bound and resume ofw_sync_messages for the Workers subrequest limit ([#137](https://github.com/chrischall/ofw-mcp/issues/137)) ([b650a38](https://github.com/chrischall/ofw-mcp/commit/b650a3808e0406add6b72ad2c9d297c8a65f44ac))
+* host ofw-mcp as a Cloudflare Worker remote connector for claude.ai ([#130](https://github.com/chrischall/ofw-mcp/issues/130)) ([3c79036](https://github.com/chrischall/ofw-mcp/commit/3c79036f4f56f64569043538a05f96fc4d79cbe8))
+* serve connector at connector.ofw.nullnet.app custom domain ([#133](https://github.com/chrischall/ofw-mcp/issues/133)) ([52481b3](https://github.com/chrischall/ofw-mcp/commit/52481b33898ce8fe08b08ab07bc313c2bddbb188))
+
+
+### Bug Fixes
+
+* guard client.ts .env load so the Worker starts ([#135](https://github.com/chrischall/ofw-mcp/issues/135)) ([0736940](https://github.com/chrischall/ofw-mcp/commit/0736940d9facf626b3e92b5f2ad6bd98bf391ead))
+* show a clean message when OFW rejects login credentials ([#136](https://github.com/chrischall/ofw-mcp/issues/136)) ([0f523a4](https://github.com/chrischall/ofw-mcp/commit/0f523a4204c1807621f047b59c8d26ad3142cb51))
+
+## [2.5.0](https://github.com/chrischall/ofw-mcp/compare/v2.4.4...v2.5.0) (2026-07-13)
+
+
+### Features
+
+* OFW_CALENDAR_WRITES opt-in enables calendar writes in drafts mode ([#122](https://github.com/chrischall/ofw-mcp/issues/122)) ([c885bb9](https://github.com/chrischall/ofw-mcp/commit/c885bb993d93f4ae7d2567dd7ca70e0e6d024d07))
+* **skill:** add OurFamilyWizard fpx access skill ([#126](https://github.com/chrischall/ofw-mcp/issues/126)) ([3a5da32](https://github.com/chrischall/ofw-mcp/commit/3a5da326f1874bcdfac5f30764fe974b38359815))
+
+
+### Bug Fixes
+
+* **skill:** correct requests.md retry-recipe temp file and id/entityId precedence ([#129](https://github.com/chrischall/ofw-mcp/issues/129)) ([24d550a](https://github.com/chrischall/ofw-mcp/commit/24d550ad916c2ac71d7f9fe9ea8e4ff05ee52582))
+
+## [2.4.4](https://github.com/chrischall/ofw-mcp/compare/v2.4.3...v2.4.4) (2026-07-07)
+
+
+### Bug Fixes
+
+* bump @chrischall/mcp-utils to 0.12.0 ([#120](https://github.com/chrischall/ofw-mcp/issues/120)) ([6420871](https://github.com/chrischall/ofw-mcp/commit/6420871101d7658fddda1b65558c61943d475e51))
+* sanitize co-parent-controlled attachment filename on download (path traversal) ([#115](https://github.com/chrischall/ofw-mcp/issues/115)) ([82232d6](https://github.com/chrischall/ofw-mcp/commit/82232d639b24b78a494ff6a4300f2e564c18a760))
+
+
+### Refactor
+
+* adopt mcp-utils parseLenient ([#117](https://github.com/chrischall/ofw-mcp/issues/117)) ([ffd8183](https://github.com/chrischall/ofw-mcp/commit/ffd818310779c3b9f41be08499bfa17054bfc5c7))
+* tighten parseLenient generic call site in ofw _shared ([#119](https://github.com/chrischall/ofw-mcp/issues/119)) ([51836de](https://github.com/chrischall/ofw-mcp/commit/51836de1e84f535b56d1fd5d8d6ce4b698b2f2b3))
+
+
+### Documentation
+
+* document first-party dependency-bump label exception ([#121](https://github.com/chrischall/ofw-mcp/issues/121)) ([4fd8948](https://github.com/chrischall/ofw-mcp/commit/4fd894886f00cffe723c294bed7ba2965910462b))
+
+## [2.4.3](https://github.com/chrischall/ofw-mcp/compare/v2.4.2...v2.4.3) (2026-06-15)
+
+
+### Refactor
+
+* remove drifted root plugin.json cruft ([#104](https://github.com/chrischall/ofw-mcp/issues/104)) ([f5d5c0f](https://github.com/chrischall/ofw-mcp/commit/f5d5c0f6ffce52fffff1f84fca2f841d1e5ec8fb))
+
+
+### Documentation
+
+* correct inverted merge-model guidance (repo is squash-only) ([#99](https://github.com/chrischall/ofw-mcp/issues/99)) ([0673060](https://github.com/chrischall/ofw-mcp/commit/0673060e3eac79b7e85ded3d473cb94193c72d37))
+* refresh CLAUDE.md architecture + auto-review follow-up convention ([#103](https://github.com/chrischall/ofw-mcp/issues/103)) ([ab92c37](https://github.com/chrischall/ofw-mcp/commit/ab92c3747b5c39b3d8ed0ee90d4ae57385777d81))
+
+## [2.4.2](https://github.com/chrischall/ofw-mcp/compare/v2.4.1...v2.4.2) (2026-06-13)
+
+
+### Bug Fixes
+
+* revert userConfig migration, realign .mcp.json with the fleet ([#97](https://github.com/chrischall/ofw-mcp/issues/97)) ([6319764](https://github.com/chrischall/ofw-mcp/commit/6319764ec2a8babcdd758405d36f08576821793a))
+
+## [2.4.1](https://github.com/chrischall/ofw-mcp/compare/v2.4.0...v2.4.1) (2026-06-13)
+
+
+### Bug Fixes
+
+* make OFW credentials editable in the plugin/Connectors UI via userConfig ([#95](https://github.com/chrischall/ofw-mcp/issues/95)) ([26a2f15](https://github.com/chrischall/ofw-mcp/commit/26a2f154be228520db02f689f7ec0f4313f08250))
+
+## [2.4.0](https://github.com/chrischall/ofw-mcp/compare/v2.3.2...v2.4.0) (2026-06-12)
+
+
+### Features
+
+* OFW_WRITE_MODE gate (none/drafts/all) for structural write protection ([#90](https://github.com/chrischall/ofw-mcp/issues/90)) ([383adec](https://github.com/chrischall/ofw-mcp/commit/383adecb7d5b3fad2e99fd986a03c8291ded1ce4))
+* runtime validation of OFW API responses at the client boundary ([#92](https://github.com/chrischall/ofw-mcp/issues/92)) ([a9caead](https://github.com/chrischall/ofw-mcp/commit/a9caeadbb29f64b328dfe81afb56460a5e4ad29d))
+
+
+### Bug Fixes
+
+* bot PRs bypass the CI gate unconditionally (upstream curtaincall[#86](https://github.com/chrischall/ofw-mcp/issues/86) review) ([#86](https://github.com/chrischall/ofw-mcp/issues/86)) ([f02c04a](https://github.com/chrischall/ofw-mcp/commit/f02c04a12c9fb25d9dfd1bdc2ab71a4c24738b5e))
+* verify send/draft writes landed, paginate drafts sync, validate pagination inputs ([#81](https://github.com/chrischall/ofw-mcp/issues/81)) ([63804e6](https://github.com/chrischall/ofw-mcp/commit/63804e6ac7aa078c795cc2b403dc8be1a3c7265f))
+
+
+### Documentation
+
+* add missing tools to the README table (sync, unread-sent, attachments) ([#91](https://github.com/chrischall/ofw-mcp/issues/91)) ([eefb2c9](https://github.com/chrischall/ofw-mcp/commit/eefb2c9b5522e8d57bec3580db8c8c3b1880869c))
+* declare MIT license and add README badges ([#88](https://github.com/chrischall/ofw-mcp/issues/88)) ([adfc3ea](https://github.com/chrischall/ofw-mcp/commit/adfc3ea6eccb7c0cb1ce099a8ed95f6c327a0104))
+
+## [2.3.2](https://github.com/chrischall/ofw-mcp/compare/v2.3.1...v2.3.2) (2026-06-10)
+
+
+### Bug Fixes
+
+* restrict cache dir/db permissions to owner-only (0700/0600) ([#78](https://github.com/chrischall/ofw-mcp/issues/78)) ([5328567](https://github.com/chrischall/ofw-mcp/commit/53285674e4c835de6eb23f640c67d4f7670ba0c7))
+
+
+### Refactor
+
+* adopt shared TokenManager for the OFW bearer lifecycle ([#80](https://github.com/chrischall/ofw-mcp/issues/80)) ([d70cce2](https://github.com/chrischall/ofw-mcp/commit/d70cce20f0780f82492cd4c77332d2502cb8715d))
+
+## [2.3.1](https://github.com/chrischall/ofw-mcp/compare/v2.3.0...v2.3.1) (2026-06-02)
+
+
+### Performance
+
+* stream attachment upload from disk instead of buffering it ([#69](https://github.com/chrischall/ofw-mcp/issues/69)) ([83006be](https://github.com/chrischall/ofw-mcp/commit/83006be10ef094ab0c98b5e63b6a279c453ca458))
+
+
+### Refactor
+
+* adopt mcp-utils 0.4.0 fileBlob for attachment upload ([#72](https://github.com/chrischall/ofw-mcp/issues/72)) ([7b55342](https://github.com/chrischall/ofw-mcp/commit/7b55342dfef9e69cb5e8861b0a5498eb667a6cfb))
+
+## [2.3.0](https://github.com/chrischall/ofw-mcp/compare/v2.2.0...v2.3.0) (2026-05-29)
+
+
+### Features
+
+* adopt @fetchproxy/server 0.11.0 ([#61](https://github.com/chrischall/ofw-mcp/issues/61)) ([062d412](https://github.com/chrischall/ofw-mcp/commit/062d41200c36852bfe33d08df27f4d88a455cfc7))
+
+
+### Bug Fixes
+
+* **ci:** arm auto-merge from verdict comment when structured_output is empty ([#60](https://github.com/chrischall/ofw-mcp/issues/60)) ([3eed592](https://github.com/chrischall/ofw-mcp/commit/3eed592c769a8a8951e22e0533db0c770a6ff43a))
+* **ci:** treat instant-merge race as success in auto-merge arm ([#58](https://github.com/chrischall/ofw-mcp/issues/58)) ([f3ce06b](https://github.com/chrischall/ofw-mcp/commit/f3ce06bbf075581d84d28947c24e999715d751d4))
+
+## [2.2.0](https://github.com/chrischall/ofw-mcp/compare/v2.1.0...v2.2.0) (2026-05-28)
+
+
+### Features
+
+* **send-message:** accept messageId to send an existing draft ([#55](https://github.com/chrischall/ofw-mcp/issues/55)) ([c8c20cb](https://github.com/chrischall/ofw-mcp/commit/c8c20cba6fa7f3d81eaf120a2ccdf7203dee8fcc))
+
+
+### Bug Fixes
+
+* **client:** add per-request timeout to prevent multi-minute hangs ([#54](https://github.com/chrischall/ofw-mcp/issues/54)) ([77376fe](https://github.com/chrischall/ofw-mcp/commit/77376fe737695eb038a38b42ab12efee206ebac2))
+
+## [2.1.0](https://github.com/chrischall/ofw-mcp/compare/v2.0.19...v2.1.0) (2026-05-27)
+
+
+### Features
+
+* **deps:** adopt @fetchproxy/bootstrap 0.8.0 for SW-eviction-resilient startup capture ([#52](https://github.com/chrischall/ofw-mcp/issues/52)) ([9f01ebf](https://github.com/chrischall/ofw-mcp/commit/9f01ebf9a47cdd07109c023aa81e65dc53856b67))
+
+## [2.0.19](https://github.com/chrischall/ofw-mcp/compare/v2.0.18...v2.0.19) (2026-05-25)
+
+
+### Bug Fixes
+
+* **ci:** prevent labeled event from cancelling auto-review ([#48](https://github.com/chrischall/ofw-mcp/issues/48)) ([025c3d1](https://github.com/chrischall/ofw-mcp/commit/025c3d1e5a8f8517f270bbf4f717be70ba6309f9))
+
+## [2.0.18](https://github.com/chrischall/ofw-mcp/compare/v2.0.17...v2.0.18) (2026-05-23)
+
+
+### Documentation
+
+* add Acknowledgement of Terms section to README ([#43](https://github.com/chrischall/ofw-mcp/issues/43)) ([7163909](https://github.com/chrischall/ofw-mcp/commit/71639092d6b313d07407e072ad2ff1c9c3298ddf))
+* **claude-md:** call out 100-char limit on server.json description ([a3a02e7](https://github.com/chrischall/ofw-mcp/commit/a3a02e773991e8112b7b68f2f531de46b5d5a72a))
+* **claude-md:** call out 100-char limit on server.json description ([02c10a6](https://github.com/chrischall/ofw-mcp/commit/02c10a6e9c3740d5320748e77fce227f371e185a))
+
+## [2.0.17](https://github.com/chrischall/ofw-mcp/compare/v2.0.16...v2.0.17) (2026-05-22)
+
+
+### Bug Fixes
+
+* **calendar:** mark ofw_update_event as destructive ([bddb81b](https://github.com/chrischall/ofw-mcp/commit/bddb81b7e63d24ee2d86e3001b912c7dd56692d0))
+* **messages:** ofw_save_draft replaces via create+delete; ofw_get_message routes drafts ([f79bd25](https://github.com/chrischall/ofw-mcp/commit/f79bd259a747a026ac05b1f7a99dce153a985c9a))
+* ofw_save_draft create-then-delete (Bug 1); ofw_get_message drafts routing (Bug 2) ([b8fb221](https://github.com/chrischall/ofw-mcp/commit/b8fb22149b66ec19b1076579ed1acb3e21b32882))
+* **pr-auto-review:** drop id-token:write to avoid OIDC token exchange failure ([1e10203](https://github.com/chrischall/ofw-mcp/commit/1e10203109d5399dccf22ee54ee56c2b2487e351))
+* **pr-auto-review:** drop id-token:write to fix OIDC 401 ([b2f340c](https://github.com/chrischall/ofw-mcp/commit/b2f340ca37398bee5341bd1e917a4442613bbb69))
+* **pr-auto-review:** pass github_token to skip OIDC App exchange ([f046f68](https://github.com/chrischall/ofw-mcp/commit/f046f6846ef17ed1364640cffebf005584cd6664))
+
+
+### Performance
+
+* **sync:** parallelize attachment metadata fetches ([b71bff7](https://github.com/chrischall/ofw-mcp/commit/b71bff7c444eec34e6692e558098cc316158e8d8))
+
+
+### Refactor
+
+* dedupe BASE_URL and OFW_PROTOCOL_HEADERS into src/protocol.ts ([b56f2bb](https://github.com/chrischall/ofw-mcp/commit/b56f2bb5d26ffd4855f29efcaaabe12fd3ade342))
+* export ApiRecipient and reuse across 5 call sites ([9cff708](https://github.com/chrischall/ofw-mcp/commit/9cff708961639e0696fdd27b05106da851c6eb43))
+* extract parseBoolEnv helper, dedupe across three call sites ([073d3bd](https://github.com/chrischall/ofw-mcp/commit/073d3bd99ce45de2ed43b1a8e928f8e9bd1ca6de))
+* **messages:** extract postMessageAndRefetch helper ([064b6f1](https://github.com/chrischall/ofw-mcp/commit/064b6f13339466dbfbef7f72af66e684812143ec))
+* name token TTL and expiry-skew constants ([04e08f4](https://github.com/chrischall/ofw-mcp/commit/04e08f4e2b629e989f9e2ddaa14a5173a8288272))
+
+
+### Documentation
+
+* **claude,skill:** document create-then-delete and drafts-routing behaviors ([0f19b8f](https://github.com/chrischall/ofw-mcp/commit/0f19b8fedd741e439a6b58bc9f92f3ec94c7248a))
+* **claude:** add OFW_DEBUG_LOG to env-var table ([da7e3bb](https://github.com/chrischall/ofw-mcp/commit/da7e3bbab8cf09ed7e9d755e0b91013ffe36ba99))
+* **claude:** replace stale cache-write-through wording with GET-after-POST ([06d2a1c](https://github.com/chrischall/ofw-mcp/commit/06d2a1cb8850f03f47288044e59e02a30c5cc7c7))
+* **claude:** rewrite Release workflow section to match current zero-touch loop ([969d1e4](https://github.com/chrischall/ofw-mcp/commit/969d1e4cceb32280cb07036ab68c026611b5e044))
+* correct merge-method claim and document the new rulesets ([02e7274](https://github.com/chrischall/ofw-mcp/commit/02e72744e6d32e4a8fbb6fea45572ae6782b0188))
+* correct merge-method claim; document the new rulesets ([b93bf4b](https://github.com/chrischall/ofw-mcp/commit/b93bf4b77cf7f4369c6351053b096dbd91f3e30a))
+* **manifest,server:** mark OFW creds as optional to reflect fetchproxy fallback ([a52e127](https://github.com/chrischall/ofw-mcp/commit/a52e12726bc23d577d99b8a150ef57ba1def3ecf))
+* **readme:** correct Node version requirement to &gt;=22.5 ([e03ff22](https://github.com/chrischall/ofw-mcp/commit/e03ff222e16f6c6fba13f2c49ebdd9189729d471))
+* **readme:** refresh project structure and dev workflow sections ([61cce90](https://github.com/chrischall/ofw-mcp/commit/61cce90cccd198dbfb0d621ccf8a6f2e1f19d4e5))
+* **skill:** add missing tools to the Messages inventory ([1c72311](https://github.com/chrischall/ofw-mcp/commit/1c723111e7419bf2dd385fe2d4ec0c5bb92313fb))

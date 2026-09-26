@@ -1,0 +1,158 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { z } from 'zod';
+import { McpServer } from '@modelcontextprotocol/server';
+import { OFWClient } from '../../src/client.js';
+import { registerJournalTools } from '../../src/tools/journal.js';
+
+type ToolHandler = (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+let handlers: Map<string, ToolHandler>;
+
+function makeClient(returnValue: unknown) {
+  const c = new OFWClient();
+  vi.spyOn(c, 'request').mockResolvedValue(returnValue);
+  return c;
+}
+
+function setup(client: OFWClient) {
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  handlers = new Map();
+  vi.spyOn(server, 'registerTool').mockImplementation((name: string, _config: unknown, cb: unknown) => {
+    handlers.set(name, cb as ToolHandler);
+    return undefined as never;
+  });
+  registerJournalTools(server, client);
+}
+
+afterEach(() => vi.restoreAllMocks());
+
+describe('ofw_list_journal_entries', () => {
+  it('calls /pub/v1/journals with default pagination', async () => {
+    // The envelope OFW actually returns, captured live.
+    const entries = { data: [{ id: 1, title: 'Today' }], metadata: { currentPage: 1, totalPages: 1, totalElements: 1, perPage: 10, first: true, last: true } };
+    const client = makeClient(entries);
+    setup(client);
+    const result = await handlers.get('ofw_list_journal_entries')!({});
+    expect(client.request).toHaveBeenCalledWith('GET', '/pub/v1/journals?start=1&max=10');
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe('text');
+    // Every upstream key survives untouched — the wrapper only prepends paging
+    // state, it never renames or drops what OurFamilyWizard sent.
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toMatchObject(entries);
+    expect(parsed.hasMore).toBe(false);
+    expect(parsed.nextStart).toBeNull();
+    // Paging state must precede the records in the serialized JSON.
+    expect(parsed.returned).toBe(1);
+    expect(parsed.total).toBe(1);
+    expect(Object.keys(parsed).indexOf('hasMore')).toBeLessThan(Object.keys(parsed).indexOf('data'));
+  });
+
+  it('reports zero returned when the response carries no record array at all', async () => {
+    // Defensive: these endpoints are unvalidated passthroughs, so an upstream
+    // shape with no array must still produce honest paging state rather than
+    // a crash or a confident "there is more".
+    const client = makeClient({ message: 'no records' });
+    setup(client);
+    const parsed = JSON.parse((await handlers.get('ofw_list_journal_entries')!({})).content[0].text);
+    expect(parsed.returned).toBe(0);
+    expect(parsed.hasMore).toBe(false);
+    expect(parsed.nextStart).toBeNull();
+    expect(parsed.message).toBe('no records');
+  });
+
+  it('passes a non-object payload straight through, unwrapped and unrelocated', async () => {
+    // OFW returns {data, metadata} here (verified live), so this is defensive.
+    // If it ever returned a bare array, adding a paging field would mean moving
+    // the records — never worth changing a response's top-level shape.
+    const client = makeClient([{ id: 1 }]);
+    setup(client);
+    const parsed = JSON.parse((await handlers.get('ofw_list_journal_entries')!({})).content[0].text);
+    expect(parsed).toEqual([{ id: 1 }]);
+  });
+
+  it('passes custom start and max', async () => {
+    const client = makeClient({ entries: [] });
+    setup(client);
+    await handlers.get('ofw_list_journal_entries')!({ start: 11, max: 5 });
+    expect(client.request).toHaveBeenCalledWith('GET', '/pub/v1/journals?start=11&max=5');
+  });
+});
+
+describe('ofw_create_journal_entry', () => {
+  it('posts to /pub/v1/journals', async () => {
+    const client = makeClient({ id: 1 });
+    setup(client);
+    const result = await handlers.get('ofw_create_journal_entry')!({ title: 'Today', body: 'Good day' });
+    expect(client.request).toHaveBeenCalledWith(
+      'POST',
+      '/pub/v1/journals',
+      expect.objectContaining({ title: 'Today' })
+    );
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe('text');
+  });
+
+  it('a POST that times out returns JOURNAL_UNCONFIRMED telling the caller NOT to retry (BUG-2)', async () => {
+    const client = new OFWClient();
+    vi.spyOn(client, 'request').mockRejectedValue(new Error('OFW API request timed out after 30000ms: POST /pub/v1/journals'));
+    setup(client);
+    const result = await handlers.get('ofw_create_journal_entry')!({ title: 'Today', body: 'Good day' }) as { content: Array<{ text: string }>; isError?: boolean };
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.result).toBe('JOURNAL_UNCONFIRMED');
+    expect(parsed.mayHaveLanded).toBe(true);
+    expect(parsed.remedy).toMatch(/ofw_list_journal_entries/);
+  });
+
+  it('a definitive 4xx rejection stays a plain error', async () => {
+    const client = new OFWClient();
+    vi.spyOn(client, 'request').mockRejectedValue(new Error('OFW API error: 422 Unprocessable Entity for POST /pub/v1/journals'));
+    setup(client);
+    await expect(handlers.get('ofw_create_journal_entry')!({ title: 'T', body: 'B' })).rejects.toThrow(/422/);
+  });
+});
+
+
+describe('journal input schemas', () => {
+  it('rejects non-positive start/max (journal offsets are 1-based)', () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    const configs = new Map<string, { inputSchema?: z.ZodObject }>();
+    vi.spyOn(server, 'registerTool').mockImplementation((name: string, config: unknown, _cb: unknown) => {
+      configs.set(name, config as { inputSchema?: z.ZodObject });
+      return undefined as never;
+    });
+    registerJournalTools(server, new OFWClient());
+
+    const schema = configs.get('ofw_list_journal_entries')!.inputSchema!;
+    expect(schema.safeParse({ start: 0 }).success).toBe(false);
+    expect(schema.safeParse({ max: 0 }).success).toBe(false);
+    expect(schema.safeParse({ start: 1, max: 10 }).success).toBe(true);
+  });
+});
+
+describe('OFW_WRITE_MODE gating', () => {
+  let original: string | undefined;
+  beforeEach(() => {
+    original = process.env.OFW_WRITE_MODE;
+  });
+  afterEach(() => {
+    if (original === undefined) delete process.env.OFW_WRITE_MODE;
+    else process.env.OFW_WRITE_MODE = original;
+  });
+
+  it('ofw_create_journal_entry is absent below mode "all"', () => {
+    for (const mode of ['none', 'drafts']) {
+      process.env.OFW_WRITE_MODE = mode;
+      setup(makeClient({}));
+      expect(handlers.has('ofw_create_journal_entry')).toBe(false);
+      expect(handlers.has('ofw_list_journal_entries')).toBe(true); // reads unaffected
+    }
+  });
+
+  it('ofw_create_journal_entry registers in mode "all"', () => {
+    process.env.OFW_WRITE_MODE = 'all';
+    setup(makeClient({}));
+    expect(handlers.has('ofw_create_journal_entry')).toBe(true);
+  });
+});

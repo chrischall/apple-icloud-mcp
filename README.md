@@ -1,0 +1,365 @@
+# OurFamilyWizard MCP
+
+[![CI](https://github.com/chrischall/ofw-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/chrischall/ofw-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/ofw-mcp)](https://www.npmjs.com/package/ofw-mcp)
+[![license](https://img.shields.io/npm/l/ofw-mcp)](LICENSE)
+
+A [Model Context Protocol](https://modelcontextprotocol.io) server that connects Claude to [OurFamilyWizard](https://www.ourfamilywizard.com), giving you natural-language access to your co-parenting messages, calendar, expenses, and journal.
+
+> [!WARNING]
+> **AI-developed project.** This codebase was entirely built and is actively maintained by [Claude Sonnet 4.6](https://www.anthropic.com/claude). No human has audited the implementation. Review all code and tool permissions before use.
+
+## What you can do
+
+Ask Claude things like:
+
+- *"Show me my recent OFW messages"*
+- *"What's on the kids' calendar next week?"*
+- *"List recent expenses and tell me what I owe"*
+- *"Add a journal entry about today's pickup"*
+- *"Draft a reply to the last message from my co-parent"*
+
+## Requirements
+
+- [Claude Desktop](https://claude.ai/download)
+- [Node.js](https://nodejs.org) 22.5 or later (`node:sqlite` is the cache backend)
+- An active OurFamilyWizard account
+
+## Acknowledgement of Terms
+
+By using this MCP server, you acknowledge and agree to the following:
+
+**1. This server accesses your own OurFamilyWizard account.** Auth happens via your own credentials. It does not — and cannot — access your co-parent's account, your children's accounts, or anyone else's.
+
+**2. [OurFamilyWizard's Terms](https://www.ourfamilywizard.com/legal/terms) govern your use of this server**, just as they govern your direct use of OFW. There is no explicit anti-scraping clause; the governing language is broader:
+
+> Users may not obtain or attempt to obtain any materials or information through any means not intentionally made available.
+
+And on credentials: *"You are solely responsible for (1) maintaining the strict confidentiality of assigned Authentication Methods, (2) instructing any individual to whom the assigned Authentication Method is shared ('Authorized User') to not allow another person to use the Authentication Method."* OFW does contemplate "Authorized Users" and third-party-enabled integrations — but the account holder remains responsible.
+
+You are agreeing to those terms — read by the maintainer 2026-05-23 — every time you invoke a tool in this server.
+
+**3. Personal, family use only.** This project is not affiliated with, endorsed by, sponsored by, or in partnership with OurFamilyWizard, LLC or its parent. It is a personal automation tool for the named account holder. Do not use it on behalf of a co-parent without their consent, do not share credentials with anyone, and do not use it to bulk-extract another family's data.
+
+**4. OFW is a court-of-record platform.** Messages, expenses, calendar entries, and journal entries on OFW may be entered into legal proceedings — including custody, divorce, and parenting-plan-modification cases. Anything this server writes to OFW (drafts you save, events you create, expenses you log) will appear with the same legal weight as if you had typed it yourself. **Do not let this MCP send a message, create an event, or log an expense that you have not read and approved.** Review every write operation before confirming.
+
+**5. You accept full responsibility** for any consequences — both technical (account warnings, suspension) and legal (anything OFW records about your account activity). The MCP author is not your attorney; if you're using OFW in connection with an active legal matter, talk to your actual attorney before automating anything.
+
+This section is the maintainer's good-faith summary of the terms — it is not legal advice and does not modify or supersede OurFamilyWizard's actual ToS.
+
+## Installation
+
+### 1. Clone and build
+
+```bash
+git clone https://github.com/chrischall/ofw-mcp.git
+cd ofw-mcp
+npm install
+npm run build
+```
+
+### 2. Add to Claude Desktop
+
+Edit your Claude Desktop config file:
+
+- **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add the `ofw` entry inside `"mcpServers"` (create the key if it doesn't exist):
+
+```json
+{
+  "mcpServers": {
+    "ofw": {
+      "command": "node",
+      "args": ["/absolute/path/to/ofw-mcp/dist/index.js"],
+      "env": {
+        "OFW_USERNAME": "your-email@example.com",
+        "OFW_PASSWORD": "your-ofw-password"
+      }
+    }
+  }
+}
+```
+
+Replace `/absolute/path/to/ofw-mcp` with the actual path where you cloned the repo. On Mac, run `pwd` inside the cloned directory to get it.
+
+### 3. Restart Claude Desktop
+
+Quit completely (Cmd+Q on Mac, not just close the window) and relaunch.
+
+### 4. Verify
+
+Ask Claude: *"What does my OFW dashboard look like?"* — it should show your unread message count, upcoming events, and outstanding expenses.
+
+## Authentication
+
+`ofw-mcp` tries three auth paths in order; whichever succeeds first is used. Existing setups keep working unchanged.
+
+1. **Env-var credentials (legacy, recommended for Claude Desktop).** Set `OFW_USERNAME` + `OFW_PASSWORD` and the server logs in via OFW's form endpoint. This is the path shown in the Claude Desktop config above.
+2. **fetchproxy fallback (no env vars needed).** When the credentials are absent, the server reads `localStorage["auth"]` once at startup from your already-signed-in `ourfamilywizard.com` tab via the [fetchproxy](https://github.com/chrischall/fetchproxy) browser extension. After that one read, all OFW API calls go directly from Node — the extension is **not** in the request hot path. Install the fetchproxy extension (Chrome Web Store / Safari `.dmg`), sign into OurFamilyWizard once, and the MCP just works. If you have multiple OFW accounts and want them to use separate caches, set `OFW_CACHE_IDENTITY` to a label per profile.
+3. **Error.** If neither path is available, the server tells you exactly which fix to apply. Set `OFW_DISABLE_FETCHPROXY=1` to skip the fetchproxy fallback entirely (turns missing credentials into a hard error — useful in headless CI).
+
+### Credential options (env-var path)
+
+**Option A — env block in Claude Desktop config** (shown above, recommended):
+
+```json
+"env": {
+  "OFW_USERNAME": "your-email@example.com",
+  "OFW_PASSWORD": "your-ofw-password"
+}
+```
+
+**Option B — `.env` file** in the project directory:
+
+```bash
+cp .env.example .env
+# edit .env and fill in your credentials
+```
+
+Environment variables always take priority over the `.env` file. You can also pass them directly on the command line:
+
+```bash
+OFW_USERNAME=you@example.com OFW_PASSWORD=yourpass node dist/index.js
+```
+
+## Available tools
+
+Read-only tools run automatically. Writes that reach your co-parent or the court-visible record — **Confirm (server)** below — are confirmed by the server itself before anything is sent (see [Server-side confirmation](#server-side-confirmation-mcp_confirm_mode)); the other writes rely on your MCP host's own approval prompt (**Confirm**). The *Write mode* column shows the minimum `OFW_WRITE_MODE` a tool needs to be available at all — see [Write protection](#write-protection-ofw_write_mode) below.
+
+| Tool | What it does | Permission | Write mode |
+|------|-------------|------------|------------|
+| `ofw_get_profile` | Your profile and co-parent info | Auto | any |
+| `ofw_get_notifications` | Dashboard counts (unread messages, upcoming events, outstanding expenses) | Auto | any |
+| `ofw_list_message_folders` | Folders with unread counts — **get folder IDs here before listing messages** | Auto | any |
+| `ofw_list_messages` | Messages in a folder | Auto | any |
+| `ofw_get_message` | Full content of a single message | Auto | any |
+| `ofw_sync_messages` | Sync messages into the local cache (unread bodies left unfetched to avoid read receipts) | Auto | any |
+| `ofw_get_unread_sent` | Sent messages a recipient hasn't read yet (from local cache) | Auto | any |
+| `ofw_check_freshness` | Cheap live check that the cache still matches OFW — per id, whether it is still a `draft` or was `sent`/`deleted`, without a full sync | Auto | any |
+| `ofw_status` | **One live call for "where does everything stand?"** — the full verified draft inventory, and the current state of any ids or draft keys | Auto | any |
+| `ofw_download_attachment` | Download a message attachment to disk, or inline as extracted content / bytes | Auto | any |
+| `ofw_send_message` | Send a message | Confirm (server) | `all` |
+| `ofw_list_drafts` | Draft messages | Auto | any |
+| `ofw_save_draft` | Create or update a draft | Confirm | `drafts` |
+| `ofw_delete_draft` | Delete a draft | Confirm | `drafts` |
+| `ofw_upload_attachment` | Upload a local file from the upload directory (`OFW_UPLOAD_DIR`, default `~/Downloads/ofw-mcp`) to My Files; returns a fileId to attach via `ofw_send_message`/`ofw_save_draft`. Sharing (`shareClass: SHARED`) needs mode `all` | Auto (PRIVATE) / Confirm (server) (SHARED) | `drafts` |
+| `ofw_list_events` | Calendar events in a date range | Auto | any |
+| `ofw_create_event` | Create a calendar event | Confirm (server) unless private | `all` (or `drafts` + `OFW_CALENDAR_WRITES`) |
+| `ofw_update_event` | Update a calendar event | Confirm (server) if shared | `all` (or `drafts` + `OFW_CALENDAR_WRITES`) |
+| `ofw_delete_event` | Delete a calendar event | Confirm (server) if shared | `all` (or `drafts` + `OFW_CALENDAR_WRITES`) |
+| `ofw_get_expense_totals` | Expense summary totals | Auto | any |
+| `ofw_list_expenses` | Expense history | Auto | any |
+| `ofw_create_expense` | Log a new expense | Confirm (server) | `all` |
+| `ofw_list_journal_entries` | Journal entries | Auto | any |
+| `ofw_create_journal_entry` | Create a journal entry | Confirm | `all` |
+
+### Data freshness (`OFW_FRESHNESS_TTL_SECONDS`)
+
+Message and draft reads are served from the local cache, which means a result can look authoritative while being minutes or months out of date. The cache also cannot detect some changes on its own: **editing a draft in the OFW web app bumps no timestamp at all**, so "nothing changed" and "we didn't look" are indistinguishable unless the server says which happened.
+
+So every read tool (`ofw_list_messages`, `ofw_list_drafts`, `ofw_get_message`, `ofw_list_message_folders`, `ofw_sync_messages`) returns a `freshness` block alongside its data:
+
+```json
+"freshness": {
+  "source": "cache",
+  "asOf": "2026-07-20T12:40:00.000Z",
+  "ageSeconds": 5231,
+  "staleness": "unverified",
+  "lastServerSyncAt": "2026-07-20T13:59:00.000Z",
+  "syncComplete": false,
+  "historyComplete": true,
+  "warning": "Served from cache last verified 87 min ago; the last sync did not finish checking drafts. Re-read before asserting current state — call ofw_check_freshness for a cheap live confirmation, or ofw_sync_messages to refresh."
+}
+```
+
+`staleness` is `fresh` only when the data was fetched live in that call, or verified against OFW within the threshold by a sync that actually reached that folder. It degrades to `unverified` when it ages out or a sync skipped the folder, and `stale` when the folder has never been checked at all. Anything other than `fresh` always carries a human-readable `warning` stating the age and the reason. The bias is deliberate and one-directional: a false `unverified` costs one extra call, whereas a false `fresh` lets remembered state be narrated as present fact.
+
+Drafts additionally carry per-item `cacheStatus`, `asOf`, and **`serverConfirmed`** — true only when a completed drafts walk verified them inside the threshold. `serverConfirmed: false` means a draft's existence and unsent status are *remembered*, not known, and should not be stated as current fact without calling `ofw_check_freshness` first.
+
+`ofw_check_freshness` is the cheap way to re-verify: one request for a folder count comparison plus one per message id, no bodies, no full sync. Draft ids are compared by **content revision**, not timestamp, for the reason above. It probes ids that are cached as drafts, as sent messages, or as already-read inbox messages freely, because none of those can change anything; any other id would mark an unread inbox message as read on OurFamilyWizard — an irreversible change to a court-visible record — so those are skipped unless you pass `allowMarkRead: true`.
+
+Set `OFW_FRESHNESS_TTL_SECONDS` to tune the threshold (default `300`, i.e. 5 minutes). Unusable values fall back to the default rather than widening the window.
+
+### Is it still what I think it is? (`ofw_status`)
+
+Freshness answers *how old is this data*. It does not answer *is this entity still what I think it is* — and that is a different failure. A draft that has been **sent** still exists on the server, so "does this id exist?" comes back `true` for the one case where the answer matters most.
+
+`ofw_status` is the call that should back any status summary:
+
+```json
+{
+  "checkedAt": "2026-07-28T09:12:00.000Z",
+  "requested": [
+    { "id": 538279699, "state": "sent", "sentAt": "2026-07-27T23:31:09", "inSync": false },
+    { "id": 538086428, "state": "draft", "inSync": true }
+  ],
+  "complete": true
+}
+```
+
+- `state` is `draft`, `sent`, `received`, `deleted` or `unknown`, read live from OFW. `unknown` means the question was **not** answered — it is not a synonym for "fine".
+- With no arguments it returns the **full** draft inventory, verified against OFW first.
+- `complete: true` means every part of the snapshot was confirmed live. If it is false, `incompleteReasons` says what wasn't, and the payload is not a basis for stating a count.
+
+**Draft keys.** Editing a draft mints a new OFW id every time (`ofw_save_draft` replaces by create-then-delete, because OFW's update-in-place endpoint silently no-ops). `ofw_save_draft` therefore also returns a `draftKey` that stays constant across every edit *and* follows the message into Sent. `ofw_status(draftKeys: ["dk_…"])` resolves it to the current id and state — including `state: "sent"` with `sentMessageId` — so "what happened to the draft I was working on?" is one call, not a guess about which id is current.
+
+### Absence is never reported from a stale cache
+
+A cached read that comes back **empty** is shaped identically to a verified "nothing there". `ofw_list_messages`, `ofw_list_drafts` and `ofw_get_unread_sent` therefore refuse rather than answer when the result is empty *and* the backing cache is not `fresh`:
+
+```json
+{
+  "result": "UNVERIFIED_EMPTY",
+  "reason": "No drafts were found, but the backing cache is \"unverified\" — it was last verified 207 min ago. Refusing to report absence from unverified data…",
+  "remedy": "Call ofw_sync_messages(folders:[\"drafts\"]) and retry, re-call with autoRefresh:true, or use ofw_status(includeDraftInventory:true) for a single live answer.",
+  "complete": false
+}
+```
+
+A false negative ("no, that was never sent") is more dangerous than a refusal, because it reads as a definitive answer. Non-empty results are never withheld — a stale cache that *did* find something is still evidence of presence, labelled with its age as before. Pass `autoRefresh: true` (or set `OFW_AUTO_REFRESH=true`) to have the tool sync and answer instead of refusing; a refresh that still cannot make the read verifiable refuses anyway.
+
+Every list read also carries an explicit **`complete`** boolean describing the *result set* — "this is every matching item on OurFamilyWizard as of `asOf`" — with a `completeNote` naming what is missing when it is false. Check it before stating a count.
+
+### Server-side confirmation (`MCP_CONFIRM_MODE`)
+
+The writes marked **Confirm (server)** above — sending a message, logging an expense, creating/updating/deleting a *shared* calendar event, and uploading a file as `SHARED` — are confirmed by this server, not left to the host. A client that can show a confirmation prompt (Claude Code) gets one, with a preview of exactly what would happen. A client that cannot (claude.ai, Claude Desktop) gets two steps: the first call writes **nothing** and returns that preview plus a `confirmToken`, and only a repeat call with the same arguments and that token proceeds.
+
+Previews name what you are approving — recipients by name, subject and full body, the reply target, attachment file names; the expense amount and description; the event's title, date, time, visibility and (for an update) before and after. The token is bound to exactly that: a different body, amount or recipient is refused, and so is a draft or event that changed on OurFamilyWizard after the preview (say, the co-parent edited the event), even with `force: true`. A token works once and expires.
+
+| Variable | Default | |
+|---|---|---|
+| `MCP_CONFIRM_MODE` | `ask-user` | What a gated write does on a client that cannot show a prompt. `ask-user`: two steps, and the model must get your approval in chat before using the token. `auto`: two steps, but the model may use the token after reviewing the preview itself. `refuse`: such writes are refused (do them on ourfamilywizard.com). An unrecognised value is treated as `refuse`. |
+| `MCP_CONFIRM_TTL_SECONDS` | `600` | How long a token stays valid. |
+| `MCP_CONFIRM_SECRET` | random per process | Signing key; set it only if tokens must survive a server restart. |
+
+Private events and `PRIVATE` uploads — which the co-parent never sees — are not gated. `OFW_WRITE_MODE` below stays the structural layer underneath: a tool your write mode excludes does not exist at all.
+
+**A write that times out is not a write that failed.** If `ofw_send_message`, `ofw_create_expense`, `ofw_create_event` or `ofw_create_journal_entry` loses its connection or times out without a definitive answer from OFW, the result is `SEND_UNCONFIRMED` / `EXPENSE_UNCONFIRMED` / `EVENT_UNCONFIRMED` / `JOURNAL_UNCONFIRMED`: it may have landed. Check the matching list tool (or ourfamilywizard.com) before retrying, or the co-parent sees it twice.
+
+### Write protection (`OFW_WRITE_MODE`)
+
+The host's "Confirm" permission above is a *hint* to the MCP host — a host configured to auto-approve tools (or a user who clicked "always allow" once) would leave nothing between model output and a sent message. Because OurFamilyWizard is a court-of-record platform, the server also supports a structural gate: set `OFW_WRITE_MODE` in the server's `env` block and tools above your chosen level are **never registered**, so no host setting or prompt-injected instruction can invoke them.
+
+| `OFW_WRITE_MODE` | What's available |
+|------------------|------------------|
+| `none` | Read/sync/search only. No write tools exist. |
+| `drafts` | Adds draft-level writes: `ofw_save_draft`, `ofw_delete_draft`, `ofw_upload_attachment` (PRIVATE only). Nothing that lands on the court-visible record — the AI prepares, only a human signed into the OFW web UI can send. |
+| `all` | Everything (the default — fully backward compatible). |
+
+Unrecognized values fail closed to `none`, with a warning on stderr — a typo never silently grants write access.
+
+### Reading is a write, too (`OFW_ALLOW_MARK_READ`)
+
+Fetching a message body for the first time marks it read on OurFamilyWizard and stamps a **"First Viewed" timestamp your co-parent can see**. That is part of the record and cannot be undone — and it happens as a side effect of an ordinary read, so `OFW_WRITE_MODE` does not govern it.
+
+By default nothing changes: reads behave exactly as they always have. Two controls exist if you want them:
+
+| Setting | Effect |
+|---|---|
+| `ofw_get_message(allowMarkRead: false)` | Refuses a fetch that would stamp an unread inbox message, returning a structured `MARK_READ_BLOCKED` payload instead. Cached bodies, sent messages and already-read messages still return normally — none of them can stamp anything. |
+| `OFW_ALLOW_MARK_READ=false` | Deployment-wide ceiling. No tool may stamp: `ofw_get_message` refuses, `ofw_check_freshness` / `ofw_status` ignore `allowMarkRead:true`, `ofw_sync_messages` ignores `fetchUnreadBodies:true`. A per-call argument cannot raise it. |
+
+`OFW_FETCH_UNREAD_BODIES=true` flips `ofw_sync_messages` to fetch unread bodies by default (off unless set) — useful where read receipts are routine. It is capped by `OFW_ALLOW_MARK_READ`.
+
+#### Calendar opt-in (`OFW_CALENDAR_WRITES`)
+
+Calendar events sit between the two message tiers: they have no draft stage (a created event is immediately visible on the shared record), but unlike a sent message they are reversible — an event can be edited or deleted afterward. If you run in `drafts` mode but are comfortable with direct calendar writes, set `OFW_CALENDAR_WRITES=true` to additionally register `ofw_create_event`, `ofw_update_event`, and `ofw_delete_event`. The flag is redundant in `all` mode and never overrides `none`.
+
+### Egress allowlist
+
+Every outbound request passes its constructed URL through a host check before `fetch` — the server refuses to contact any host other than `ofw.ourfamilywizard.com`. Today it always passes, and that is the point: it makes "this server only ever talks to OFW" a structural invariant rather than a code-review promise, so a later refactor or a compromised dependency that pointed a request elsewhere throws instead of carrying your bearer token or messages off-host. It is a pre-flight check on the URL we build, not a redirect-following egress filter.
+
+## Troubleshooting
+
+**"0 messages"** — Claude may have read the notification counts rather than the actual messages. Ask explicitly: *"List the messages in my OFW inbox"* or *"Use ofw_list_message_folders then ofw_list_messages"*.
+
+**"OFW auth: set OFW_USERNAME + OFW_PASSWORD, or install the fetchproxy extension…"** — neither auth path is configured. Either fill in the `env` block in your Claude Desktop config, or install the [fetchproxy extension](https://github.com/chrischall/fetchproxy) and sign into `ourfamilywizard.com` in your browser.
+
+**"fetchproxy fallback failed"** — the env-var path wasn't configured and the extension couldn't be reached. Confirm the fetchproxy extension is installed, signed into OFW, and that it's running (open the extension popup). If you want to disable the fallback entirely, set `OFW_DISABLE_FETCHPROXY=1`.
+
+**"OFW login not attempted — this OurFamilyWizard email and password were already rejected"** — OFW refused these credentials earlier in this session. OFW counts failed sign-ins against the account, so the server does not re-send a rejected password on every call. Update `OFW_USERNAME` / `OFW_PASSWORD` to your current login (or restart the server) and try again.
+
+**403 Forbidden** — wrong credentials. Verify your username/password at [ofw.ourfamilywizard.com](https://ofw.ourfamilywizard.com).
+
+**Tools not appearing in Claude** — go to **Claude Desktop → Settings → Developer** to see connected servers and any error output. Make sure you fully quit and relaunched after editing the config.
+
+**Can't find the config file on Mac** — in Finder press Cmd+Shift+G and paste `~/Library/Application Support/Claude/`.
+
+## Security
+
+- Credentials live only in your local config file or `.env`
+- They are passed to the server as environment variables and never logged
+- The server authenticates with OFW using the same login flow as the web app
+- Use a strong, unique OFW password
+- Outbound requests are host-allowlisted to `ofw.ourfamilywizard.com` (see [Egress allowlist](#egress-allowlist))
+
+### Local data, and how to remove it
+
+The server keeps co-parenting data on this machine, readable only by your user account:
+
+| What | Where | Permissions |
+|---|---|---|
+| Message cache (message bodies, recipients, drafts, attachment records) | `~/.cache/ofw-mcp/<hash>.db` (plus `-wal`/`-shm`), or `OFW_CACHE_DIR` | dir `0700`, files `0600` |
+| Downloaded attachments | `~/Downloads/ofw-mcp/`, or `OFW_ATTACHMENTS_DIR` | dirs the server creates `0700`, files `0600` |
+| Session token | `$MCP_DATA_DIR/.ofw-mcp/session.json`, or `OFW_SESSION_FILE` | `0600` |
+
+The cache keeps everything it has synced until you remove it; nothing expires it. When you no longer need it — the account is closed, the case is over, or you are handing the machine on — quit your MCP host and delete it:
+
+```bash
+rm -rf ~/.cache/ofw-mcp        # or your OFW_CACHE_DIR
+rm -rf ~/Downloads/ofw-mcp     # or your OFW_ATTACHMENTS_DIR
+rm -f  ~/.ofw-mcp/session.json # or your OFW_SESSION_FILE
+```
+
+The next start rebuilds the cache from OurFamilyWizard with `ofw_sync_messages`. A directory you pointed `OFW_ATTACHMENTS_DIR` at yourself keeps its own permissions (it may be shared on purpose); only what the server creates, and the default `~/Downloads/ofw-mcp`, are locked down.
+
+## Development
+
+```bash
+npm test         # tsc typecheck, then the vitest suite
+npm run build    # tsc → dist/, then esbuild bundle → dist/bundle.js
+npm run dev      # node --env-file=.env dist/index.js (requires built dist)
+```
+
+Main is protected. All changes land via PR — open with `gh pr create --label <release-notes-label>` and add `ready-to-merge` once you're satisfied with the auto-review feedback. See `CLAUDE.md` for the full PR + release flow.
+
+### Project structure
+
+```
+src/
+  index.ts          MCP server entry (McpServer + StdioServerTransport)
+  client.ts         OFW HTTP client with Bearer token + 401/429 retry
+  auth.ts           resolveAuth(): env-var creds → fetchproxy → error
+  auth-password.ts  Spring Security form login (legacy env-var path)
+  cache.ts          SQLite cache (messages, drafts, attachments, sync state)
+  sync.ts           Folder ID resolution + per-folder sync logic
+  config.ts         Cache dir, attachment dir, env parsing
+  tools/
+    _shared.ts      Recipient mapping, response helpers, path expansion
+    user.ts         ofw_get_profile, ofw_get_notifications
+    messages.ts     Folders, list, get, send, drafts, sync, attachments
+    calendar.ts     List, create, update, delete events
+    expenses.ts     Totals, list, create
+    journal.ts      List, create entries
+tests/              Mirrors src/; mocks OFWClient.request via vi.spyOn
+```
+
+### Auth flow
+
+Auth resolution lives in `src/auth.ts`. Three paths, in priority order:
+
+1. **Env vars present** → `src/auth-password.ts` does the legacy OFW Spring Security form login:
+   1. `GET /ofw/login.form` — establishes a session cookie
+   2. `POST /ofw/login` — submits credentials, returns `{ auth: "<token>" }`
+2. **Env vars absent (and `OFW_DISABLE_FETCHPROXY` unset)** → `@fetchproxy/bootstrap` reads `localStorage["auth"]` + `localStorage["tokenExpiry"]` once from the user's signed-in `ourfamilywizard.com` tab, then closes the bridge.
+3. **Nothing configured** → throws with both fixes spelled out.
+
+Either path returns a Bearer token to `OFWClient`, which then operates from Node with `Authorization: Bearer <token>` — fetchproxy is **not** in the request hot path. On 401 the client re-resolves auth and replays once. Tokens are cached for 6h (env-var path) or until `tokenExpiry` (fetchproxy path).
+
+Also see the [fetchproxy README](https://github.com/chrischall/fetchproxy) for extension install instructions.
+
+## License
+
+MIT
