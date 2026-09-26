@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { forgetSecrets } from '../src/errors.js';
 import { resetConfigWarnings } from '../src/config.js';
 import { setSleepForTests } from '../src/http.js';
+import { resetICloudLatch } from '../src/icloud-auth.js';
 
 const DATA_DIR = mkdtempSync(join(tmpdir(), 'aws-mcp-test-'));
 const homeStateExisted = existsSync(join(homedir(), '.aws-mcp'));
@@ -27,6 +28,7 @@ beforeEach(() => {
   }
   process.env.MCP_DATA_DIR = DATA_DIR;
   forgetSecrets();
+  resetICloudLatch();
   resetConfigWarnings();
   setSleepForTests(() => Promise.resolve());
   vi.stubGlobal(
