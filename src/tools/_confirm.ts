@@ -1,6 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { CallToolResult, InputRequiredResult, ServerContext } from '@modelcontextprotocol/server';
 import { confirmationFromEnv, confirmTokenParam, requireConfirmationWithFallback } from '@chrischall/mcp-utils';
-import { fnv1a64 } from './draft-freshness.js';
 
 export { confirmTokenParam };
 
@@ -13,48 +13,42 @@ export const CONFIRM_NOTE =
 export interface ConfirmWriteOptions {
   /** The tool name the token is bound to; a token never crosses tools. */
   tool: string;
-  /** `ofw.<entity>.<verb>` action id. */
+  /** `apple.<service>.<entity>.<verb>` action id. */
   action: string;
   /** Prompt text shown above the preview on a client that can be asked. */
   message: string;
-  /** The primary id acted on (`draft:42`, `event:7`, `expense:new`). */
+  /** The primary thing acted on (`playlist:p.abc`, `event:<href>`, `mail:new`). */
   target: string;
   /**
-   * A version of the target that rotates when it is edited — a draft's content
-   * revision, a hash of the event as last read. Bound into the token so a
-   * phase-2 call against a target the co-parent changed in between is refused
-   * as DRAFT_CHANGED instead of acting on a version nobody approved. Omit when
-   * the target has no prior state (a create).
+   * A version of the target that changes when it is edited — an ETag, or
+   * `stateRevision()` of the record as just read. Bound into the token, so a
+   * phase-2 call against a target that changed in between is refused as
+   * DRAFT_CHANGED instead of acting on a version nobody approved. Omit for a
+   * create (nothing exists yet).
    */
   revision?: string;
   /** Exactly what the write will send; its hash is bound into the token. */
   payload: unknown;
-  /**
-   * What the user sees. Human-readable: names, subjects, amounts, dates —
-   * never only numeric ids. Included in the elicitation prompt too.
-   */
+  /** What the user sees: names, titles, dates, addresses — never only ids. */
   preview: Record<string, unknown>;
+  /** The tool's validated arguments (bound into elicitation acceptance; `confirmToken` is stripped). */
+  args: unknown;
   /** The phase-2 token from the tool's input, or undefined on phase 1. */
   confirmToken: string | undefined;
 }
 
 /**
- * Confirm-gate for a write that reaches the co-parent or the court-visible
- * record. A client that can show a confirmation prompt is asked; one that
- * cannot (claude.ai, Claude Desktop — measured in mcp-utils
- * docs/CLIENT-BEHAVIOUR.md) gets the two-phase token flow governed by
+ * Confirm-gate for a write that is irreversible or reaches another person
+ * (a send, a delete, an invitation). A client that can show a prompt is asked;
+ * one that cannot (claude.ai) gets the two-phase token flow governed by
  * `MCP_CONFIRM_MODE`: phase 1 performs no write and returns the preview plus a
- * `confirmToken`; only a repeat call with that token proceeds. The token is
- * bound to this tool, the target, its revision and the exact payload, is
- * single-use and expires (`MCP_CONFIRM_TTL_SECONDS`).
+ * `confirmToken`; only a repeat call with that token proceeds.
  *
- * Call it on EVERY invocation with the freshly-built payload and a freshly
- * read revision — the caller's own re-read is what makes a stale token fail.
- * `OFW_WRITE_MODE` stays the structural layer underneath: a tool this gate
- * protects is still not registered at all below its write mode.
+ * Call it on EVERY invocation, after all reads and validation and immediately
+ * before the write, with the freshly built payload and a freshly read
+ * revision — the re-read is what makes a stale token fail.
  *
- * Returns `undefined` to proceed with the write, otherwise the result to
- * return unchanged.
+ * Returns `undefined` to proceed, otherwise the result to return unchanged.
  */
 export function confirmWrite(
   ctx: ServerContext,
@@ -66,9 +60,10 @@ export function confirmWrite(
       action: opts.action,
       message: opts.message,
       details: opts.preview,
-      unsupportedNote: 'Complete this action on ourfamilywizard.com instead.',
+      unsupportedNote: 'Make this change in the Apple app (Music, Calendar, Contacts or Mail) instead.',
       tool: opts.tool,
       confirmToken: opts.confirmToken,
+      args: opts.args,
       subject: () => ({
         target: opts.target,
         ...(opts.revision !== undefined ? { revision: opts.revision } : {}),
@@ -80,10 +75,9 @@ export function confirmWrite(
 }
 
 /**
- * A revision string for a target as just read from OFW (an event detail), for
- * `ConfirmWriteOptions.revision`. Any change to the value rotates it, so a
- * token minted against one state cannot act on another.
+ * A revision string for a record as just read, for `ConfirmWriteOptions.revision`
+ * when the upstream offers no ETag. Any change to the value rotates it.
  */
 export function stateRevision(value: unknown): string {
-  return `s1:${fnv1a64(JSON.stringify(value))}`;
+  return `s1:${createHash('sha256').update(JSON.stringify(value) ?? 'undefined').digest('base64url').slice(0, 22)}`;
 }

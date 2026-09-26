@@ -6,8 +6,7 @@ import { configDefaults, defineConfig } from 'vitest/config';
 // `npm test` stays coverage-free for fast local iteration.
 export default defineConfig({
   test: {
-    // Forces the session cache off and pins its path into a temp dir, so no
-    // test can read or write the developer's real ~/.ofw-mcp — see tests/_setup.ts.
+    // Blank Apple env, a temp MCP_DATA_DIR and a fetch that throws — see tests/_setup.ts.
     setupFiles: ['./tests/_setup.ts'],
     exclude: [
       ...configDefaults.exclude,
