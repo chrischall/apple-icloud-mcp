@@ -163,7 +163,7 @@ describe('login form memory across restarts', () => {
     rememberLoginForm(a, 'full'); // unchanged: no second write
     resetMailLoginMemory(); // a new process
     expect(loginOrder(a)).toEqual(['full', 'local']);
-    const file = join(process.env.MCP_DATA_DIR as string, '.apple-cloud-mcp', 'mail-login.json');
+    const file = join(process.env.MCP_DATA_DIR as string, '.apple-icloud-mcp', 'mail-login.json');
     const stored = readFileSync(file, 'utf8');
     expect(stored).not.toContain('aaaa-bbbb-cccc-dddd');
     expect(stored).not.toContain('persist@icloud.com');

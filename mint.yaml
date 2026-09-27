@@ -1,6 +1,6 @@
 version: 1
-name: Apple Cloud
-slug: apple-cloud
+name: Apple iCloud
+slug: apple-icloud
 summary: >-
   Apple Music playlists and library, iCloud Calendar, Contacts and Mail,
   Apple Maps, WeatherKit and iTunes search for Claude — no Mac required.
@@ -73,7 +73,7 @@ auth:
       type: password
       required: false
       persist: user
-      help: "Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx apple-cloud-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months."
+      help: "Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx apple-icloud-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months."
     - name: APPLE_MUSIC_WEB_USER_TOKEN
       label: "Apple Music web session token (unofficial)"
       type: password
@@ -126,7 +126,7 @@ state:
     which IMAP login form worked, digests of rejected iCloud passwords (so a
     revoked one is not re-sent on every start) and spent confirmation tokens
     (so none can be replayed after a restart). Files live under
-    $MCP_DATA_DIR/.apple-cloud-mcp, mode 0600, and hold no personal credential.
+    $MCP_DATA_DIR/.apple-icloud-mcp, mode 0600, and hold no personal credential.
 egress:
   allow:
     - api.music.apple.com

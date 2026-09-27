@@ -54,7 +54,7 @@ export function getEnabledServices(env: EnvSource = process.env): EnabledService
   if (unknown.length > 0 && warnedServices !== raw) {
     warnedServices = raw;
     console.error(
-      `[apple-cloud-mcp] WARNING: APPLE_SERVICES names no such service: ${unknown.map((u) => `"${u}"`).join(', ')} — ignored, ` +
+      `[apple-icloud-mcp] WARNING: APPLE_SERVICES names no such service: ${unknown.map((u) => `"${u}"`).join(', ')} — ignored, ` +
         'so a misspelled service registers NO tools. ' +
         `Registered services: ${enabled.size > 0 ? [...enabled].join(', ') : 'none'}. Valid names: ${SERVICES.join(', ')}.`,
     );
@@ -99,7 +99,7 @@ export function getWriteMode(env: EnvSource = process.env): WriteMode {
   if (warnedWriteMode !== raw) {
     warnedWriteMode = raw;
     console.error(
-      `[apple-cloud-mcp] WARNING: unrecognized APPLE_WRITE_MODE "${raw}" — failing closed to "none" ` +
+      `[apple-icloud-mcp] WARNING: unrecognized APPLE_WRITE_MODE "${raw}" — failing closed to "none" ` +
         '(read-only). Valid values: none, additive, all.',
     );
   }
@@ -170,7 +170,7 @@ export function getDisplayTimeZone(env: EnvSource = process.env): string {
     if (canonical !== undefined) return canonical;
     if (warnedTz !== raw) {
       warnedTz = raw;
-      console.error(`[apple-cloud-mcp] WARNING: DISPLAY_TZ "${raw}" is not a known IANA zone — using the system zone.`);
+      console.error(`[apple-icloud-mcp] WARNING: DISPLAY_TZ "${raw}" is not a known IANA zone — using the system zone.`);
     }
   }
   return systemTimeZone();

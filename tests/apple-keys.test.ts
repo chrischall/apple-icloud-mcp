@@ -224,7 +224,7 @@ describe('resolveDeveloperKey', () => {
     });
 
     it('names APPLE_PRIVATE_KEY_PATH when that is where the shared key lives', () => {
-      const dir = mkdtempSync(join(tmpdir(), 'apple-cloud-mcp-key-'));
+      const dir = mkdtempSync(join(tmpdir(), 'apple-icloud-mcp-key-'));
       try {
         const file = join(dir, 'AuthKey.p8');
         writeFileSync(file, PEM);
@@ -248,7 +248,7 @@ describe('resolveDeveloperKey', () => {
   });
 
   it('reads APPLE_PRIVATE_KEY_PATH when no inline key is set', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'apple-cloud-mcp-key-'));
+    const dir = mkdtempSync(join(tmpdir(), 'apple-icloud-mcp-key-'));
     try {
       const file = join(dir, 'AuthKey.p8');
       writeFileSync(file, PEM);

@@ -114,7 +114,7 @@ export function renderNotices(root = ROOT) {
     '     package-lock.json and node_modules. Do not edit by hand: tests/third-party-notices.test.ts fails when this',
     '     file drifts from the installed dependencies. -->',
     '',
-    '`apple-cloud-mcp` itself is MIT-licensed (see `LICENSE`). Its npm package depends on, and `dist/bundle.js`',
+    '`apple-icloud-mcp` itself is MIT-licensed (see `LICENSE`). Its npm package depends on, and `dist/bundle.js`',
     '(the `.mcpb` entry point, which ships without `node_modules`) contains code from, the third-party packages',
     'below. This is the complete production dependency tree from `package-lock.json` — a superset of what the',
     'bundle actually includes. Each package remains under its own license, and the full text of every license and',

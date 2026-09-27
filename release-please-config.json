@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "packages": {
     ".": {
-      "package-name": "apple-cloud-mcp",
+      "package-name": "apple-icloud-mcp",
       "release-type": "node",
       "initial-version": "0.1.0",
       "changelog-sections": [

@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "apple-cloud-mcp"
+        "apple-icloud-mcp"
       ],
       "env": {
         "APPLE_TEAM_ID": "${APPLE_TEAM_ID}",

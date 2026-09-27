@@ -19,8 +19,8 @@ import { resetConfigWarnings } from '../src/config.js';
 import { setSleepForTests } from '../src/http.js';
 import { resetICloudLatch } from '../src/icloud-auth.js';
 
-const DATA_DIR = mkdtempSync(join(tmpdir(), 'apple-cloud-mcp-test-'));
-const homeStateExisted = existsSync(join(homedir(), '.apple-cloud-mcp'));
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'apple-icloud-mcp-test-'));
+const homeStateExisted = existsSync(join(homedir(), '.apple-icloud-mcp'));
 
 beforeEach(() => {
   for (const key of Object.keys(process.env)) {
@@ -46,7 +46,7 @@ afterEach(() => {
 
 afterAll(() => {
   rmSync(DATA_DIR, { recursive: true, force: true });
-  const leaked = join(homedir(), '.apple-cloud-mcp');
+  const leaked = join(homedir(), '.apple-icloud-mcp');
   if (!homeStateExisted && existsSync(leaked)) {
     rmSync(leaked, { recursive: true, force: true });
     throw new Error(`A test wrote to ${leaked}; tests must only use the temp MCP_DATA_DIR.`);

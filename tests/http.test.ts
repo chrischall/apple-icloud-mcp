@@ -307,8 +307,8 @@ describe('httpRequest — debug logging', () => {
     fetchMock.mockResolvedValueOnce(res(200, 'ok'));
     await httpRequest({ service: 'music', method: 'GET', url: URL_MUSIC, query: { token: 'q' } });
     const lines = err.mock.calls.map((c) => String(c[0]));
-    expect(lines[0]).toBe('[apple-cloud-mcp] → GET https://api.music.apple.com/v1/catalog/us/songs');
-    expect(lines[1]).toMatch(/^\[apple-cloud-mcp\] ← 200 GET \/v1\/catalog\/us\/songs \(\d+ ms, 2 B\)$/);
+    expect(lines[0]).toBe('[apple-icloud-mcp] → GET https://api.music.apple.com/v1/catalog/us/songs');
+    expect(lines[1]).toMatch(/^\[apple-icloud-mcp\] ← 200 GET \/v1\/catalog\/us\/songs \(\d+ ms, 2 B\)$/);
     fetchMock.mockRejectedValueOnce(new Error('connect ECONNREFUSED super-secret-password'));
     await rejection(httpRequest({ service: 'music', method: 'POST', url: URL_MUSIC }));
     const fail = err.mock.calls.map((c) => String(c[0])).find((l) => l.includes('✗'))!;

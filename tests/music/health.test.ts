@@ -28,7 +28,7 @@ describe('musicHealth', () => {
     expect(h).toMatchObject({ configured: true, ok: true, probe: PROBE_LABEL, credential: { source: 'official: APPLE_MUSIC_DEVELOPER_TOKEN', detail: { official: { developerToken: 'APPLE_MUSIC_DEVELOPER_TOKEN', userToken: false }, web: { enabled: false } } } });
     expect(h.notes).toEqual([
       'APPLE_MUSIC_DEVELOPER_TOKEN expires Thu, Dec 31, 2099, 7:00 PM EST.',
-      "Official API: catalog only — set APPLE_MUSIC_USER_TOKEN for your library (run `npx apple-cloud-mcp music-auth` with the server's Apple Developer key set — or, without the key, with APPLE_MUSIC_DEVELOPER_TOKEN set to a token its owner mints with `music-auth --print-developer-token`).",
+      "Official API: catalog only — set APPLE_MUSIC_USER_TOKEN for your library (run `npx apple-icloud-mcp music-auth` with the server's Apple Developer key set — or, without the key, with APPLE_MUSIC_DEVELOPER_TOKEN set to a token its owner mints with `music-auth --print-developer-token`).",
       'official developer token: OK',
     ]);
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /v1/test']);

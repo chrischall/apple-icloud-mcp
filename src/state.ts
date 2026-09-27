@@ -7,7 +7,7 @@ import { createFileStatePersistence, resolveStateFile, type SyncStatePersistence
  * repeat work (scraping the Apple Music web-player token, iCloud's DAV
  * discovery round trips).
  *
- * Files live under `$MCP_DATA_DIR/.apple-cloud-mcp/` (mcp-host injects MCP_DATA_DIR;
+ * Files live under `$MCP_DATA_DIR/.apple-icloud-mcp/` (mcp-host injects MCP_DATA_DIR;
  * a local install falls back to `$HOME`), are written atomically with mode
  * 0600, and are BOUND to the credential they were derived from via a salted
  * digest — rotate the credential and the stale record is discarded, and the
@@ -17,7 +17,7 @@ import { createFileStatePersistence, resolveStateFile, type SyncStatePersistence
  * to stderr and is never fatal: everything cached here can be re-derived.
  */
 
-export const STATE_SUBDIR = '.apple-cloud-mcp';
+export const STATE_SUBDIR = '.apple-icloud-mcp';
 
 export function isStateCacheEnabled(env: EnvSource = process.env): boolean {
   return parseBoolEnv('APPLE_STATE_CACHE', { env, default: true });
@@ -60,7 +60,7 @@ export function stateCache<T>(
         store.save(value);
         return true;
       } catch (err) {
-        console.error(`[apple-cloud-mcp] WARNING: could not write cache ${fileName}: ${err instanceof Error ? err.message : String(err)}`);
+        console.error(`[apple-icloud-mcp] WARNING: could not write cache ${fileName}: ${err instanceof Error ? err.message : String(err)}`);
         return false;
       }
     },

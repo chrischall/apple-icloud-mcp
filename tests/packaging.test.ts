@@ -13,15 +13,15 @@ describe('packaging', () => {
   it('publishes unscoped under the repo name, like the rest of the fleet, with the registry name to match', () => {
     const server = read('server.json');
     const pkg = read('package.json');
-    expect(pkg.name).toBe('apple-cloud-mcp');
-    expect(pkg.mcpName).toBe('io.github.chrischall/apple-cloud-mcp');
+    expect(pkg.name).toBe('apple-icloud-mcp');
+    expect(pkg.mcpName).toBe('io.github.chrischall/apple-icloud-mcp');
     expect(server.name).toBe(pkg.mcpName);
     expect(pkg.publishConfig?.access).toBe('public');
     for (const p of server.packages) expect(p.identifier).toBe(pkg.name);
   });
 
   it('names the bin after the package', () => {
-    expect(Object.keys(read('package.json').bin)).toEqual(['apple-cloud-mcp']);
+    expect(Object.keys(read('package.json').bin)).toEqual(['apple-icloud-mcp']);
   });
 
   it('ships mint.yaml (mcp-host reads it from the published package)', () => {
