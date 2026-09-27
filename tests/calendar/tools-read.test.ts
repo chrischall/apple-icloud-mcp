@@ -85,6 +85,19 @@ describe('apple_calendar_list_calendars', () => {
 });
 
 describe('apple_calendar_list_events', () => {
+  it('lists an RDATE PERIOD occurrence with its own end, and the first occurrence of a series of RDATEs only', async () => {
+    h.dav.addCalendar({ id: 'x', name: 'Extra', order: 2 });
+    h.dav.put('x', 'per.ics', ics(...vevent('UID:per', 'DTSTART:20261006T130000Z', 'DTEND:20261006T140000Z', 'RRULE:FREQ=WEEKLY;COUNT=2', 'RDATE;VALUE=PERIOD:20261021T170000Z/PT3H', 'SUMMARY:Workshop')));
+    h.dav.put('x', 'rd.ics', ics(...vevent('UID:rd', 'DTSTART:20261022T170000Z', 'DTEND:20261022T173000Z', 'RDATE:20261029T170000Z', 'SUMMARY:Checkup')));
+    const r = await h.call('apple_calendar_list_events', { daysAhead: 5, calendars: ['Extra'], view: 'full' });
+    expect(r.json).toMatchObject({ total: 2, complete: true });
+    expect(r.json.notes ?? []).not.toContainEqual(expect.stringMatching(/could not be read/));
+    expect(r.json.events.map((e: { id: string; start: string; end: string }) => [e.id, e.start, e.end])).toEqual([
+      ['x/per.ics#occ=2026-10-21T17:00:00Z', '2026-10-21T13:00:00-04:00', '2026-10-21T16:00:00-04:00'],
+      ['x/rd.ics#occ=2026-10-22T17:00:00Z', '2026-10-22T13:00:00-04:00', '2026-10-22T13:30:00-04:00'],
+    ]);
+  });
+
   it('expands, sorts and pages with the window and paging facts before the data', async () => {
     const r = await h.call('apple_calendar_list_events', { daysAhead: 5, limit: 2 });
     expect(r.isError).toBe(false);
@@ -382,6 +395,22 @@ describe('apple_calendar_find_free_time', () => {
     expect(weekend.json.notes).toContain('2 weekend day(s) were skipped (weekdaysOnly).');
     const late = await h.call('apple_calendar_find_free_time', { fromDate: '2026-10-22T18:00', daysAhead: 1 });
     expect(late.json.notes).toContain('1 day(s) are not listed because their working hours fall outside the window or have passed.');
+  });
+
+  it('with includeAllDay, blocks all-day events marked free too (Apple Calendar marks them free by default)', async () => {
+    h.dav.put('home', 'vacation.ics', ics(...vevent('UID:v', 'DTSTART;VALUE=DATE:20261027', 'DTEND;VALUE=DATE:20261029', 'TRANSP:TRANSPARENT', 'SUMMARY:Vacation')));
+    const args = { fromDate: '2026-10-26', daysAhead: 4, calendars: ['Home'] };
+    const blocked = await h.call('apple_calendar_find_free_time', { ...args, includeAllDay: true });
+    expect(blocked.json.days.map((d: { date: string; free: unknown[] }) => [d.date, d.free.length])).toEqual([
+      ['2026-10-26', 1],
+      ['2026-10-27', 0],
+      ['2026-10-28', 0],
+      ['2026-10-29', 1],
+    ]);
+    expect(blocked.json.notes).toContain('Busy = events not marked free (transparent), not cancelled and not declined by you; all-day events block their whole day, even ones marked free.');
+    // Without it, all-day events never block (marked free or not); a timed event marked free still never does.
+    const open = await h.call('apple_calendar_find_free_time', args);
+    expect(open.json.days.map((d: { date: string; free: unknown[] }) => d.free.length)).toEqual([1, 1, 1, 1]);
   });
 
   it('refuses inverted hours, over-long windows and partial data', async () => {
