@@ -480,6 +480,13 @@ describe('serializeForWrite', () => {
     expect(serialize(vcal)).toContain('DESCRIPTION:line one\\nline two\\nline three');
   });
 
+  it('stores a U+2028 / U+2029 separator in a text value as an escaped LF too (ical.js would write it raw)', () => {
+    const vcal = build((ev) => setTextProp(ev, 'description', 'one\u2028two\u2029three'));
+    const text = serializeForWrite(vcal);
+    expect(text).toContain('DESCRIPTION:one\\ntwo\\nthree');
+    expect(text).not.toMatch(/[\u2028\u2029]/);
+  });
+
   it('refuses text in which a value would start another property: an injected ATTENDEE is an email iCloud sends', () => {
     const raw = (value: string) => build((ev) => ev.updatePropertyWithValue('url', value));
     const injected = raw('https://x.test/\r\nATTENDEE;RSVP=TRUE:mailto:victim@x.com');

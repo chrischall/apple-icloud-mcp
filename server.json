@@ -171,7 +171,7 @@
         },
         {
           "name": "APPLE_STATE_CACHE",
-          "description": "Set to false to disable the small on-disk caches (web-player token, iCloud discovery) under $MCP_DATA_DIR/.aws-mcp.",
+          "description": "Set to false to write nothing under $MCP_DATA_DIR/.aws-mcp: no web-player token or iCloud discovery cache, and the rejected-password latch and spent confirmation tokens then last only as long as the process.",
           "isRequired": false,
           "format": "string"
         },

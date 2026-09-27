@@ -176,36 +176,88 @@ describe('apple_healthcheck results', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('runs the iCloud probes (one shared password) one at a time, everything else alongside them', async () => {
-    expect([...ICLOUD_SERVICES]).toEqual(['calendar', 'contacts', 'mail']);
+  /** Probes that record when they start and settle only when the test says so, with the result it gives. */
+  function gatedProbes() {
     const events: string[] = [];
-    const gates = new Map<ServiceName, () => void>();
+    const gates = new Map<ServiceName, (health?: Partial<ServiceHealth>) => void>();
     const gated = (service: ServiceName): HealthProbe => ({
       service,
       check: () => {
         events.push(`start ${service}`);
         return new Promise<ServiceHealth>((resolve) => {
-          gates.set(service, () => {
+          gates.set(service, (health = { configured: true, ok: true }) => {
             events.push(`end ${service}`);
-            resolve({ service, configured: true, ok: true });
+            resolve({ service, configured: true, ...health });
           });
         });
       },
     });
+    return { events, gated, open: (s: ServiceName, health?: Partial<ServiceHealth>) => gates.get(s)!(health) };
+  }
+
+  it('runs the iCloud probes (one shared password) one at a time while no verdict is in, everything else alongside', async () => {
+    expect([...ICLOUD_SERVICES]).toEqual(['calendar', 'contacts', 'mail']);
+    const { events, gated, open } = gatedProbes();
     const pending = register([gated('mail'), gated('music'), gated('calendar'), gated('contacts'), gated('maps')]).cb({}, {});
     await vi.waitFor(() => expect(events).toEqual(['start mail', 'start music', 'start maps']));
-    gates.get('music')!();
-    gates.get('mail')!();
+    open('music');
+    // A 5xx says nothing about the password: the next iCloud probe still waits its turn.
+    open('mail', { ok: false, error: { code: 'UPSTREAM_ERROR', message: '503', status: 503 } });
     await vi.waitFor(() => expect(events.at(-1)).toBe('start calendar'));
     expect(events).not.toContain('start contacts');
-    gates.get('calendar')!();
+    // Neither does a result with no error at all.
+    open('calendar', { configured: false, missing: ['ICLOUD_USERNAME'] });
     await vi.waitFor(() => expect(events.at(-1)).toBe('start contacts'));
-    gates.get('contacts')!();
-    gates.get('maps')!();
+    open('contacts');
+    open('maps');
     const out = JSON.parse((await pending).content[0]!.text) as Record<string, any>;
     // Reported in the order the probes were given, not the order they ran.
     expect(out.services.map((r: ServiceHealth) => r.service)).toEqual(['mail', 'music', 'calendar', 'contacts', 'maps']);
-    expect(out.ok).toBe(true);
+    expect(out.summary.failing).toEqual(['mail']);
+    expect(out.summary.notConfigured).toEqual(['calendar']);
+  });
+
+  it('runs the remaining iCloud probes together once one has answered ok: the pair works, nothing left to protect', async () => {
+    const { events, gated, open } = gatedProbes();
+    const pending = register([gated('calendar'), gated('contacts'), gated('mail')]).cb({}, {});
+    await vi.waitFor(() => expect(events).toEqual(['start calendar']));
+    open('calendar');
+    await vi.waitFor(() => expect(events).toEqual(['start calendar', 'end calendar', 'start contacts', 'start mail']));
+    open('mail');
+    open('contacts');
+    const out = JSON.parse((await pending).content[0]!.text) as Record<string, any>;
+    expect(out.summary.working).toEqual(['calendar', 'contacts', 'mail']);
+  });
+
+  it('an unreachable iCloud costs two probe timeouts, not three (the whole report must beat a 60 s client timeout)', async () => {
+    vi.useFakeTimers();
+    const started: Array<[ServiceName, number]> = [];
+    const hanging = (service: ServiceName): HealthProbe => ({
+      service,
+      check: () => {
+        started.push([service, Date.now()]);
+        return new Promise<ServiceHealth>(() => undefined);
+      },
+    });
+    const t0 = Date.now();
+    const pending = register([hanging('calendar'), hanging('contacts'), hanging('mail')]).cb({}, {});
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(2 * PROBE_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    // Contacts waited for calendar's verdict; once that timed out, mail did not wait for contacts'.
+    expect(started).toEqual([
+      ['calendar', t0],
+      ['contacts', t0 + PROBE_TIMEOUT_MS],
+      ['mail', t0 + PROBE_TIMEOUT_MS],
+    ]);
+    const out = JSON.parse((await pending).content[0]!.text) as Record<string, any>;
+    expect(out.services.map((r: ServiceHealth) => r.error?.code)).toEqual(['TIMEOUT', 'TIMEOUT', 'TIMEOUT']);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('sends a revoked iCloud password once per healthcheck: the first rejection latches before the next probe', async () => {

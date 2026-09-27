@@ -14,7 +14,9 @@ npm run build          # tsc → dist/, then esbuild bundle → dist/bundle.js (
 npm test               # tsc typecheck + vitest run
 npm run test:coverage  # what CI runs: 100% lines/branches/functions/statements on src/** (excl. src/index.ts)
 npm run dev            # node --env-file=.env dist/index.js
+npm run notices        # regenerate THIRD_PARTY_NOTICES.md (the bundle script does this too)
 npx @chrischall/aws-mcp music-auth   # one-time MusicKit sign-in that prints APPLE_MUSIC_USER_TOKEN
+npx @chrischall/aws-mcp music-auth --print-developer-token --days 7   # hand out a dev token, never the .p8
 ```
 
 ## Architecture
@@ -29,13 +31,14 @@ src/
   http.ts           the ONE HTTPS chokepoint (global fetch, host allowlist, timeouts+cancel, bounded retries,
                     manual redirects, streamed size cap, UnconfirmedWriteError for unknown write outcomes)
   apple-keys.ts     .p8 normalization/validation, ES256 tokens for MusicKit, Maps (/v1/token exchange), WeatherKit
-  icloud-auth.ts    ICLOUD_USERNAME/ICLOUD_APP_PASSWORD + the credential-rejection latch
+  icloud-auth.ts    ICLOUD_USERNAME/ICLOUD_APP_PASSWORD + the credential-rejection latch (memory + disk, 24 h)
   time.ts           strict date parsing (offset-less = wall clock in DISPLAY_TZ), DST-correct formatting
   state.ts          tiny 0600 JSON caches under $MCP_DATA_DIR/.aws-mcp, bound to the credential
   health.ts         HealthProbe contract + makeProbe; tools/healthcheck.ts runs them all (apple_healthcheck)
   tools/_shared.ts  defineTool (service switch + write-mode gate + structured scrubbed errors), ANNOTATIONS,
                     pageInfo/pagedResponse (paging facts FIRST), jsonResponse (minified)
-  tools/_confirm.ts confirmWrite (mcp-utils elicitation / two-phase confirmToken), stateRevision
+  tools/_confirm.ts confirmWrite (mcp-utils elicitation / two-phase confirmToken) with a disk-backed spent-token
+                    store (confirm-spent.json) so a token can't be replayed after a restart; stateRevision
   music/            Apple Music: credentials (official|web), client, web-token scraper, 25 tools, auth-cli
   dav/              WebDAV client, multistatus XML (xmldom), iCloud discovery (shared by calendar + contacts)
   calendar/         CalDAV events: ical.js parse/expand/build, ids with #occ=, series edits, free time
@@ -75,7 +78,8 @@ A module exports `register<X>Tools(server, deps?)` from `src/<x>/tools.ts` and `
   `additive` = only adds to your own account; nothing modified, removed, or sent to another person
   (calendar create refuses attendees in additive mode for that reason).
 - **Confirm gate** (`confirmWrite`) on sends, deletes, playlist track removal/rewrites, and events with
-  attendees; called on EVERY invocation after reads, right before the write, with a human-readable preview and
+  attendees (calendar create/update say so conditionally — never end a conditionally gated tool's description
+  with the unconditional `CONFIRM_NOTE`); called on EVERY invocation after reads, right before the write, with a human-readable preview and
   a revision (ETag or `stateRevision`) so a stale token fails as DRAFT_CHANGED. Never a boolean `confirm` (CI lint).
 - **Annotate every tool** from `ANNOTATIONS` (an unannotated tool is published as destructive).
 - stdout is JSON-RPC: `console.error` only. imapflow's default logger writes to stdout — always `logger: false`.
@@ -95,12 +99,18 @@ Responses report `backend`. Track removal is `DELETE …/tracks?ids[library-song
 occurrence; `mode` mandatory; videos use the same key); reorders `PUT` the full list built from a fresh full
 read; `PATCH` sends name+description+isPublic together like the web player. Apple-curated/collaborative
 playlists are `canEdit:false`. `next` hrefs drop `limit` — always send explicit `offset`/`limit`.
+Apple's reads lag its writes: `write-log.ts` remembers (2 min) the order each create/add/remove/reorder
+replaced, and `playlistStateRefusal` refuses a rewrite whose fresh read still shows the old state, or whose
+`expectedRevision` doesn't match (`PLAYLIST_CHANGED`); every rewrite returns the new `revision`. The health
+probe uses `GET /v1/test` (a catalog id can be withdrawn) and checks each backend independently.
 
 **iCloud DAV** (dav/) — discovery: `PROPFIND /` Depth **0** → principal → home-set, an ABSOLUTE URL on the
 partition host (moved by href, not redirect). Credentials go only to `https://*.icloud.com`. 401 latches the
 credential (`icloud-auth.ts`); a bare 403 latches only on the two discovery hosts (on partition hosts it's
 usually a read-only calendar). REPORT responses include the collection's own href — skip it (`sameResource`).
-A 207 on DELETE/MOVE is a partial failure, not success. The dsid in paths is scrubbed from errors.
+A 207 on DELETE/MOVE is a partial failure, not success. The dsid in paths is scrubbed from errors. The latch is
+persisted (`icloud-rejected.json`, salted digests + time) so a hosted cold start doesn't re-send a revoked
+password; the healthcheck runs the iCloud probes one at a time until one answers, so a revoked pair is sent once.
 
 **Calendar** — event id `<calendarId>/<file>.ics`, occurrence `…#occ=<UTC Z | YYYY-MM-DD>` (parsed from the
 end). A bare id on a recurring series is refused for single-occurrence edits; never fall back to the first
@@ -111,7 +121,11 @@ sees them — keep those guards. API all-day end dates are INCLUSIVE; iCalendar 
 windows are widened a day each side (iCloud evaluates all-day events in its own zone) then filtered exactly.
 `futureEvents` splits the series (UNTIL on the old, new UID for the new, COUNT adjusted; restore on failure);
 `allEvents` time changes shift DTSTART, EXDATE/RDATE/UNTIL, overrides AND plain BYDAY weekdays by wall
-clock. PUT with If-Match; 412 → "changed since read".
+clock. PUT with If-Match; 412 → "changed since read". **Every write goes through `serializeForWrite`**, which
+re-parses the ICS and refuses it if any line break slipped into a value or the ATTENDEE/ORGANIZER/UID set differs
+from what was built — a CR/LF in a `url` once injected an ATTENDEE past the confirm gate. Schemas refuse control
+characters (C0, C1, U+2028/9) in single-line fields. `list_events`/`search_events` default to a compact
+`view`. Additive mode refuses calendars shared with others (`CS:shared-owner` / sharee privileges, unverified live).
 
 **Contacts** — vCard 3.0 edited as RAW LINES (a generic serializer rewrote Apple's `itemN.` groups); untouched
 lines round-trip byte-for-byte. `entryId` = hash of property+group+raw value, `~n` suffix for duplicates,
@@ -122,7 +136,8 @@ response means truncated — say so.
 
 **Mail** — IMAP login tries the address local part then the full address (Apple domains only; a custom domain
 uses the full address) and remembers which worked (`mail-login.json`) so cold starts don't spend failed
-sign-ins. Reads use `BODY.PEEK` (never marks read). iCloud has no MOVE: move = COPY, verify, then remove
+sign-ins. Reads use `BODY.PEEK` and `get_message` has no markRead (use `update_flags`). Replies take
+`inReplyTo`; a Reply-To the recipients don't include is warned about, never silently followed. iCloud has no MOVE: move = COPY, verify, then remove
 exactly those UIDs (imapflow's fallback deletes originals even when the copy failed). Send drives nodemailer's
 `SMTPConnection` step by step so "nothing was sent" and "may have been sent" are distinguishable, then APPENDs
 to "Sent Messages" (iCloud SMTP doesn't). The CONNECT tunnel pauses the socket until nodemailer listens (the

@@ -141,6 +141,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
         attributes: compactObject({ name: args.name, description: args.description, isPublic: args.isPublic }),
         ...(Object.keys(relationships).length > 0 ? { relationships } : {}),
       };
+      const sentAt = s.client.now();
       const res = await s.request({
         method: 'POST',
         path: '/v1/me/library/playlists',
@@ -162,6 +163,10 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
         added += r.added;
         warnings.push(...appendWarnings(r));
       }
+      // A reorder/remove must not rebuild the list from a read that shows only part of it yet (the first batch
+      // without the appended ones): that PUT would drop the rest. The new playlist has no prior order to match a
+      // stale read against, so its track count stands in for one.
+      if (added > 0) s.client.playlistWrites.record(id, { at: sentAt, what: `create playlist with ${added} tracks`, tracks: added });
       let verified = false;
       let current: Record<string, unknown> | undefined;
       try {

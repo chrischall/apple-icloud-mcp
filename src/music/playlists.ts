@@ -211,7 +211,7 @@ export function playlistStateRefusal(
 ): CallToolResult | undefined {
   const currentRevision = trackRevision(tracks);
   const now = c.now();
-  const pending = c.playlistWrites.pending(playlistId, currentRevision, now);
+  const pending = c.playlistWrites.pending(playlistId, tracks, now);
   const refuse = (message: string, hint: string): CallToolResult =>
     jsonErrorResponse({
       error: {

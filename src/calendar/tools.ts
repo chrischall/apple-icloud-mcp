@@ -103,10 +103,18 @@ const spanParam = z
  * `serializeForWrite` checks the written text again before any PUT.
  */
 
-/** One line: no control characters at all (title, location, attendee name). */
-const SINGLE_LINE = /^[^\u0000-\u001f\u007f]*$/;
-/** Notes may span lines: tab, LF and CR are allowed (a CR or CRLF is stored as LF); other control characters are not. */
-const MULTI_LINE = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]*$/;
+/**
+ * One line: no control characters at all — C0, DEL and C1 (U+0085 NEXT LINE
+ * among them) — and no U+2028 / U+2029 line or paragraph separator, which
+ * some parsers split lines on (title, location, attendee name).
+ */
+const SINGLE_LINE = /^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]*$/;
+/**
+ * Notes may span lines: tab, LF and CR are allowed, and so are U+2028 /
+ * U+2029 (each line break is stored as an escaped LF); other control
+ * characters, C1 included, are not.
+ */
+const MULTI_LINE = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]*$/;
 /**
  * A URL: no whitespace or control characters of any kind. `URL.canParse`
  * alone is not enough — the WHATWG parser silently STRIPS tab, CR and LF, so

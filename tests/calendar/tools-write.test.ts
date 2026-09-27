@@ -373,6 +373,18 @@ describe('apple_calendar_update_event', () => {
     expect(h.dav.writes()).toEqual([]);
   });
 
+  it('refuses to rewrite an event that ALREADY holds a raw CR in a value, and says the stored event may be the cause', async () => {
+    // Written by another app: the request itself is clean, so the error must not send the caller hunting through it.
+    h.dav.put('home', 'cr.ics', ics(...vevent('UID:cr', 'DTSTART:20261023T140000Z', 'DTEND:20261023T150000Z', 'SUMMARY:Has\rCR')));
+    const r = await h.call('apple_calendar_update_event', { eventId: 'home/cr.ics', location: 'Room 1' });
+    expect(r.json.error).toMatchObject({
+      code: 'INVALID_ARGUMENT',
+      message: expect.stringMatching(/or one already stored in the event.*Nothing was written\.$/),
+      hint: expect.stringMatching(/the stored event already holds one/),
+    });
+    expect(h.dav.writes()).toEqual([]);
+  });
+
   it('keeps a series in its zone when timeZone is mis-cased (never rewritten as UTC)', async () => {
     const r = await h.call('apple_calendar_update_event', { eventId: 'work/s.ics', span: 'allEvents', startDate: '2026-10-19T10:00', timeZone: 'america/new_york' });
     expect(r.json).toMatchObject({ updated: true, verified: true });

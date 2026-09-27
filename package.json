@@ -40,7 +40,7 @@
   },
   "scripts": {
     "build": "tsc && npm run bundle",
-    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --external:dotenv --banner:js='import { createRequire as __createRequire } from \"module\"; const require = __createRequire(import.meta.url);' --footer:js='/*! Bundled third-party code keeps its own licenses; see THIRD_PARTY_NOTICES.md. ical.js is MPL-2.0 (source: https://github.com/kewisch/ical.js), timezones-ical-library is Apache-2.0. */' --outfile=dist/bundle.js",
+    "bundle": "node scripts/third-party-notices.mjs && esbuild src/index.ts --bundle --platform=node --format=esm --external:dotenv --banner:js='import { createRequire as __createRequire } from \"module\"; const require = __createRequire(import.meta.url);' --footer:js='/*! Bundled third-party code keeps its own licenses; see THIRD_PARTY_NOTICES.md. ical.js is MPL-2.0 (source: https://github.com/kewisch/ical.js), timezones-ical-library is Apache-2.0. */' --outfile=dist/bundle.js",
     "dev": "node --env-file=.env dist/index.js",
     "notices": "node scripts/third-party-notices.mjs",
     "test": "npm run typecheck && vitest run",

@@ -201,7 +201,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
       const whole = offset === 0 && complete;
       if (whole && total === undefined) total = tracks.length;
       const revision = whole ? trackRevision(tracks) : undefined;
-      const pending = revision !== undefined && !catalog ? c.playlistWrites.pending(id, revision, c.now()) : undefined;
+      const pending = revision !== undefined && !catalog ? c.playlistWrites.pending(id, tracks, c.now()) : undefined;
       if (pending) {
         notes.push(
           `This read does not show the change made ${Math.max(0, Math.round((c.now() - pending.at) / 1000))} s ago (${pending.what}) yet — ` +

@@ -521,6 +521,29 @@ describe('playlist rewrites never rebuild from a read that lags the last write',
     expect(ids(l)).toEqual(['i.C777', 'i.MV', 'i.T2', 'i.T3', 'i.T2', 'i.T1']);
   });
 
+  it('create then reorder: a read listing only the first batch of a new playlist is not rewritten over the rest', async () => {
+    const { l, tools, h } = setup();
+    l.lag = true;
+    // 150 tracks: 100 go in the create, 50 are appended — the lagging read shows the playlist with the first 100.
+    const tracks = Array.from({ length: 150 }, (_, i) => String(1000 + i));
+    const created = await callTool(tools, 'apple_music_create_playlist', { name: 'Big', tracks });
+    expect(created.data).toMatchObject({ tracksAdded: 150, verified: false });
+    const id = created.data.id as string;
+    const refused = await callTool(tools, REORDER, { playlistId: id, operation: 'reverse' }, NO_ELICIT_CTX);
+    expect(errorOf(refused)).toMatchObject({ code: 'PLAYLIST_CHANGED', playlistId: id });
+    expect(errorOf(refused).message).toMatch(/\(create playlist with 150 tracks, 0 s ago\).*would undo it/);
+    const rm = await callTool(tools, REMOVE, { playlistId: id, positions: [1] }, NO_ELICIT_CTX);
+    expect(errorOf(rm)).toMatchObject({ code: 'PLAYLIST_CHANGED' });
+    const g = await callTool(tools, 'apple_music_get_playlist', { playlistId: id, allTracks: true });
+    expect(g.data.total).toBe(100);
+    expect(g.data.notes).toContainEqual(expect.stringMatching(/does not show the change made 0 s ago \(create playlist with 150 tracks\) yet/));
+    expect(l.playlists.get(id)!.tracks).toHaveLength(150);
+    l.lag = false;
+    const r = parse(await callConfirmed(h(REORDER), { playlistId: id, operation: 'reverse' }));
+    expect(r).toMatchObject({ tracksBefore: 150, tracksAfter: 150, verified: true });
+    expect(l.playlists.get(id)!.tracks).toHaveLength(150);
+  });
+
   it('remove then reorder, and the guard lapses after its TTL', async () => {
     useWeb();
     const l = new FakeLibrary();

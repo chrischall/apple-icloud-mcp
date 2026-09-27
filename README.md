@@ -223,7 +223,7 @@ The package ships a [`mint.yaml`](mint.yaml) that mcp-host reads when you regist
 Give it your time zone (`DISPLAY_TZ`): the runner is on UTC, and times you give without an offset ("3pm") are
 read in `DISPLAY_TZ`. Set **`MCP_CONFIRM_SECRET`** too: without it, a confirmation token issued just before the
 child restarts (a redeploy, a machine move) stops working and you have to preview again. Spent tokens are
-recorded on disk, so a shared secret never lets one be replayed.
+recorded on disk, so a shared secret does not let one be replayed.
 
 ## Tools
 
@@ -270,7 +270,7 @@ recorded on disk, so a shared secret never lets one be replayed.
 
 | Tool | What it does | Mode | Confirm |
 |---|---|---|---|
-| `apple_calendar_list_calendars` | List your iCloud calendars (event calendars only): id, name, color, whether you can add events to it, and which one new events go into by default. | read |  |
+| `apple_calendar_list_calendars` | List your iCloud calendars (event calendars only): id, name, color, whether you can add events to it, whether it is shared (shared: with you by someone else; sharedByYou: by you with others), and which one new events go into by default. | read |  |
 | `apple_calendar_list_events` | List iCloud Calendar events (appointments, meetings) in a date window, recurring events expanded into occurrences, sorted by start. | read |  |
 | `apple_calendar_search_events` | Search iCloud Calendar events by text (case-insensitive match in title, location or notes) within a date window: fromDate (default today; may be in the past) + toDate or daysAhead (default 30), max 366 days. | read |  |
 | `apple_calendar_get_event` | Get one iCloud Calendar event in full (notes untruncated, attendees, alerts, recurrence rule in plain English) by the id list/search returned. | read |  |
@@ -334,7 +334,7 @@ recorded on disk, so a shared secret never lets one be replayed.
 | Value | What is registered |
 |---|---|
 | `none` | Read tools only. |
-| `additive` | Reads, plus writes that only **add** to your own account: create a playlist or folder, append tracks, add to library/favorites, create an event (without attendees) or a contact. Nothing existing is modified or removed and nothing is sent to anyone. |
+| `additive` | Reads, plus writes that only **add** to your own account: create a playlist or folder, append tracks, add to library/favorites, create an event (without attendees, and not in a calendar shared with other people) or a contact. Nothing existing is modified or removed and nothing is sent to anyone. |
 | `all` (default) | Everything. |
 
 Gated tools are not registered at all below their mode, so no prompt or injected instruction can call them.
@@ -354,7 +354,7 @@ target changed in between.
 |---|---|
 | `MCP_CONFIRM_MODE` | `ask-user` (default — the model must get your OK before repeating the call), `auto` (the model may confirm after reviewing the preview), `refuse` (never). Unknown values mean `refuse`. |
 | `MCP_CONFIRM_TTL_SECONDS` | How long a token is valid (default 600). |
-| `MCP_CONFIRM_SECRET` | Token signing key; random per process by default. Set it so a token survives a restart; spent tokens are recorded on disk (`$MCP_DATA_DIR/.aws-mcp`), so none can be replayed. |
+| `MCP_CONFIRM_SECRET` | Token signing key; random per process by default. Set it so a token survives a restart; spent tokens are recorded on disk (`confirm-spent.json`), so none can be replayed (unless `APPLE_STATE_CACHE=false` or the directory is unwritable — a warning says so). |
 
 ## Environment variables
 
@@ -382,7 +382,7 @@ All optional; each service activates when its credentials are present. Values th
 | Variable | Meaning |
 |---|---|
 | `APPLE_MUSIC_DEVELOPER_TOKEN` 🔒 | Optional: a pre-minted Apple Music developer token (JWT) instead of signing one from the key above. |
-| `APPLE_MUSIC_USER_TOKEN` 🔒 | Music User Token for your library, from a one-time MusicKit sign-in: run `npx @chrischall/aws-mcp music-auth` with the Apple Developer key set. Lasts about 6 months. |
+| `APPLE_MUSIC_USER_TOKEN` 🔒 | Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx @chrischall/aws-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months. |
 | `APPLE_MUSIC_WEB_USER_TOKEN` 🔒 | Opt-in web-player mode (no developer account needed; unlocks rename/delete/remove/reorder): the media-user-token cookie from a signed-in music.apple.com tab. |
 | `APPLE_MUSIC_WEB_DEVELOPER_TOKEN` 🔒 | Optional override for the web-player developer token (normally read automatically from music.apple.com). |
 | `APPLE_MUSIC_STOREFRONT` | Two-letter Apple Music storefront (e.g. us, gb). Default: your account's storefront, else us. |
@@ -404,7 +404,7 @@ All optional; each service activates when its credentials are present. Values th
 | `APPLE_SERVICES` | Comma-separated services to enable (music, calendar, contacts, mail, maps, weather, itunes). Default: all. |
 | `DISPLAY_TZ` | IANA time zone (e.g. America/New_York) for displayed times and for dates you give without an offset. Set this on a hosted server, which runs in UTC. |
 | `APPLE_UNITS` | "metric" (default) or "imperial" units for weather (Maps distances always show both). |
-| `APPLE_STATE_CACHE` | Set to false to disable the small on-disk caches (web-player token, iCloud discovery) under $MCP_DATA_DIR/.aws-mcp. |
+| `APPLE_STATE_CACHE` | Set to false to write nothing under $MCP_DATA_DIR/.aws-mcp: no web-player token or iCloud discovery cache, and the rejected-password latch and spent confirmation tokens then last only as long as the process. |
 | `APPLE_REQUEST_TIMEOUT_MS` | Per-request timeout in milliseconds (default 30000). |
 | `APPLE_DEBUG_LOG` | Set to 1 to log every upstream request line to stderr (credentials redacted). |
 
@@ -412,9 +412,9 @@ All optional; each service activates when its credentials are present. Values th
 
 | Variable | Meaning |
 |---|---|
-| `MCP_CONFIRM_MODE` | What a confirm-gated write (send mail, delete an event/contact/playlist, remove tracks, invite attendees) does on a client that cannot show a prompt, like claude.ai: "ask-user" (default: first call previews and returns a confirmToken, the model must get your OK), "auto", or "refuse". Unknown values mean "refuse". |
+| `MCP_CONFIRM_MODE` | How confirm-gated writes (send mail, deletes, removing tracks, invitations) behave on a client with no prompt, like claude.ai: "ask-user" (default: preview + confirmToken, the model must get your OK), "auto", or "refuse". Unknown values mean refuse. |
 | `MCP_CONFIRM_TTL_SECONDS` | Lifetime of a confirmToken in seconds (default 600). |
-| `MCP_CONFIRM_SECRET` 🔒 | Signing key for confirmTokens. Random per process by default; set it on a hosted server so a restart between preview and confirm does not void the token. |
+| `MCP_CONFIRM_SECRET` 🔒 | Signing key for confirmTokens. Random per process by default; set it so a token issued just before a restart or redeploy still works (spent tokens are recorded on disk, so none can be replayed). |
 
 🔒 = a secret: store it as one.
 <!-- ENV:END -->
@@ -440,7 +440,8 @@ variables to set if not), whether Apple accepted them just now, the active write
 |---|---|
 | iCloud "credentials rejected" | The app-specific password was revoked (Apple ID password changed) or the normal password was used. Generate a new app-specific password. |
 | Apple Music 401 | Developer key problem: wrong Team/Key ID, or the key lacks MusicKit. In web mode: the `media-user-token` cookie expired — copy a fresh one. |
-| Apple Music 403 | The Music User Token expired (≈6 months), was minted with a different key, or the account has no Apple Music subscription. Run `music-auth` again. |
+| Apple Music 403 | The Music User Token expired (≈6 months), was minted with a different key, or the account has no Apple Music subscription. Run `music-auth` again (without the developer key: ask its owner for `music-auth --print-developer-token`). |
+| `PLAYLIST_CHANGED` | Apple has not caught up with the previous playlist change yet (its reads lag writes by seconds), or the playlist was edited elsewhere. Re-read with `apple_music_get_playlist` and retry. |
 | Times are off by hours | Set `DISPLAY_TZ` to your IANA zone. |
 | Mail times out on a hosted deployment | Check `imap.mail.me.com` / `smtp.mail.me.com` are in the egress allowlist. |
 
@@ -452,11 +453,19 @@ variables to set if not), whether Apple accepted them just now, the active write
   every error and log line is scrubbed of every credential the process has used.
 - Only Apple's hosts are contacted; a redirect or DAV href pointing anywhere else is refused before any
   credential travels.
-- Reading mail does not mark it read unless you ask. HTML mail is converted to text with hidden content dropped.
-- **Local data:** two small cache files under `$MCP_DATA_DIR/.aws-mcp/` (or `~/.aws-mcp/`): the Apple Music
-  web-player token and iCloud discovery URLs, plus which IMAP login form worked. They are mode 0600, bound to
-  the credential they came from, and contain no credential. Delete the directory to remove them, or set
-  `APPLE_STATE_CACHE=false` to never write them.
+- Reading mail never marks it read (`apple_mail_update_flags` does that when asked). HTML mail is converted to
+  text with hidden content dropped, and mail and calendar text is labelled as content from its sender.
+- **Local data:** small files under `$MCP_DATA_DIR/.aws-mcp/` (or `~/.aws-mcp/`), all mode 0600 and none holding
+  your password or tokens:
+  - `music-web-token.json` — Apple Music web player's own public developer token (web mode only);
+  - `dav-calendar.json`, `dav-contacts.json` — iCloud discovery URLs, bound to the credential they came from;
+  - `mail-login.json` — which IMAP login form iCloud accepted;
+  - `icloud-rejected.json` — salted digests of rejected Apple ID/password pairs and when, so a revoked
+    password is not re-sent for 24 hours even after a restart;
+  - `confirm-spent.json` — digests of used confirmation tokens, so none can be replayed after a restart.
+
+  Delete the directory to remove them, or set `APPLE_STATE_CACHE=false` to never write them (the latch and the
+  spent-token record then last only as long as the process, and a warning says so).
 
 ## Development
 

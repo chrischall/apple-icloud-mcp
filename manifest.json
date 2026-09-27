@@ -239,7 +239,7 @@
     },
     {
       "name": "apple_calendar_list_calendars",
-      "description": "List your iCloud calendars (event calendars only): id, name, color, whether you can add events to it, and which one new events go into by default."
+      "description": "List your iCloud calendars (event calendars only): id, name, color, whether you can add events to it, whether it is shared (shared: with you by someone else; sharedByYou: by you with others), and which one new events go into by default."
     },
     {
       "name": "apple_calendar_list_events",

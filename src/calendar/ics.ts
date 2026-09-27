@@ -356,13 +356,14 @@ export function textProp(comp: Component, name: string): string | undefined {
 }
 
 /**
- * Set a text property; undefined or `''` removes it. A CRLF or a bare CR is
- * stored as LF: ical.js escapes LF in a TEXT value but writes a CR raw, and a
- * raw CR is a line break to a parser that splits on it.
+ * Set a text property; undefined or `''` removes it. A CRLF, a bare CR and a
+ * U+2028 / U+2029 separator are stored as LF: ical.js escapes LF in a TEXT
+ * value but writes the others raw, and each is a line break to some parser
+ * that splits on it.
  */
 export function setTextProp(comp: Component, name: string, value: string | undefined): void {
   if (value === undefined || value === '') comp.removeAllProperties(name);
-  else comp.updatePropertyWithValue(name, value.replace(/\r\n?/g, '\n'));
+  else comp.updatePropertyWithValue(name, value.replace(/\r\n?|[\u2028\u2029]/g, '\n'));
 }
 
 /** Bump SEQUENCE and restamp DTSTAMP / LAST-MODIFIED — what calendar clients do on every change. */
@@ -711,10 +712,14 @@ export function serializeForWrite(vcal: Component): string {
     }
   }
   if (!intact) {
+    // "Or already stored": an update rewrites the whole event, so a stray CR that another app left inside one of
+    // its values trips this too — and the caller cannot remove it by changing their request.
     throw new InvalidArgumentError(
-      'calendar: a value in this request contains a line break or control character that would change the event\'s structure ' +
-        '(it would add properties — such as an ATTENDEE, whom iCloud would email — or break the event). Nothing was written.',
-      'Remove line breaks and control characters from title, location, url and attendee names.',
+      'calendar: a value in this request, or one already stored in the event, contains a line break or control character ' +
+        'that would change the event\'s structure (it would add properties — such as an ATTENDEE, whom iCloud would ' +
+        'email — or break the event). Nothing was written.',
+      'Remove line breaks and control characters from title, location, url and attendee names. If the request has none, ' +
+        'the stored event already holds one (written by another app): change that event in Apple Calendar instead.',
     );
   }
   return text;

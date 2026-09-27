@@ -113,11 +113,14 @@ describe('input schemas', () => {
         expect(ok(tool, { ...b, [field]: `Lunch${INJECT}` }), field).toBe(false);
         expect(ok(tool, { ...b, [field]: 'Lunch\rx' }), field).toBe(false);
         expect(ok(tool, { ...b, [field]: 'Lunch\tx' }), field).toBe(false);
+        // C1 controls (U+0085 NEXT LINE among them) and the Unicode line / paragraph separators are line breaks to some parsers.
+        for (const sep of ['\u0085', '\u0080', '\u009f', '\u2028', '\u2029']) expect(ok(tool, { ...b, [field]: `Lunch${sep}x` }), `${field} ${JSON.stringify(sep)}`).toBe(false);
         expect(ok(tool, { ...b, [field]: 'Lunch — Café ☕' }), field).toBe(true);
       }
-      expect(ok(tool, { ...b, notes: 'Line one\r\nLine two\n\tindented\rthree' })).toBe(true);
-      for (const bad of ['a\u0000b', 'a\u0007b', 'a\u000bb', 'a\u000cb', 'a\u001bb', 'a\u007fb']) expect(ok(tool, { ...b, notes: bad }), JSON.stringify(bad)).toBe(false);
+      expect(ok(tool, { ...b, notes: 'Line one\r\nLine two\n\tindented\rthree\u2028four\u2029five' })).toBe(true);
+      for (const bad of ['a\u0000b', 'a\u0007b', 'a\u000bb', 'a\u000cb', 'a\u001bb', 'a\u007fb', 'a\u0085b', 'a\u009fb']) expect(ok(tool, { ...b, notes: bad }), JSON.stringify(bad)).toBe(false);
       expect(ok(tool, { ...b, attendees: [{ email: 'a@x.com', name: 'Ann\r\nATTENDEE:mailto:v@x.com' }] })).toBe(false);
+      expect(ok(tool, { ...b, attendees: [{ email: 'a@x.com', name: 'Ann\u2028ATTENDEE:mailto:v@x.com' }] })).toBe(false);
       expect(ok(tool, { ...b, attendees: [{ email: 'a@x.com', name: 'Ann B.' }] })).toBe(true);
     }
   });

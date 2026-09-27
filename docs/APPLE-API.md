@@ -32,6 +32,9 @@ build environment had no Apple credentials. The first live run is the real verif
   playlists, remove or reorder tracks, or remove library items; a playlist `DELETE` returns 401
   there. [Apple staff, forums/107807; forums/813068, Jan 2026; 3P measurement 2026-09-21]
 - Apple-curated and collaborative playlists have `canEdit: false`; appending to them fails. [Apple DTS, Oct 2025]
+- The health probe calls `GET /v1/test`, Apple's documented connectivity endpoint (200 with a valid developer
+  token). It replaced a catalog-song read: the song id first chosen does not exist (404), which made every
+  working setup report as failing. [DOC; LIVE with the web-player token, 2026-09-27]
 
 **Web-player API (opt-in, unofficial)** — `https://amp-api.music.apple.com/v1`
 
@@ -66,6 +69,9 @@ build environment had no Apple credentials. The first live run is the real verif
 - A PUT with ATTENDEE properties makes iCloud email invitations (`calendar-auto-schedule`) —
   which is why those writes are confirm-gated. [DOC: DAV header LIVE; behaviour 3P]
 - MKCALENDAR is not offered (not in `Allow`); VJOURNAL and free-busy REPORT are unsupported.
+- Calendars the account shares out are detected from `CS:shared-owner` in the resourcetype; calendars shared
+  WITH the account from missing write privileges. [UNVERIFIED on iCloud — used to keep additive mode out of
+  shared calendars]
 - **Reminders are not reachable over CalDAV** for any account migrated to the iOS 13+ Reminders
   (BusyCal, 2Do, DAVx5, python-caldav all agree). Only the private CloudKit web API reaches
   them, which needs the full Apple ID password and 2FA — deliberately not implemented.

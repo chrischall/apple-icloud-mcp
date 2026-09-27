@@ -98,19 +98,36 @@ export function registerHealthcheckTool(server: McpServer, probes: readonly Heal
 }
 
 /**
- * Every probe, each under its own timeout, results in `probes` order: the
- * iCloud ones in sequence (see ICLOUD_SERVICES), everything else alongside
- * them in parallel.
+ * Every probe, each under its own timeout, results in `probes` order.
+ * Everything but the iCloud probes runs in parallel. The iCloud probes run
+ * one at a time for as long as "does iCloud accept this pair?" is still open
+ * (see ICLOUD_SERVICES) — a rejection latches it, so the next ones are refused
+ * locally at no cost. Once one of them settles the question the other way,
+ * the rest run together:
+ *  - it answered ok: the pair works, so there is nothing left to protect;
+ *  - it timed out: no verdict is coming within this healthcheck, and waiting
+ *    for each in turn would only stack the timeouts. Strictly in sequence, an
+ *    unreachable iCloud took 3 × PROBE_TIMEOUT_MS (60 s — the default MCP
+ *    client request timeout, so the whole report was lost exactly when it
+ *    was needed); this way the worst case is 2 ×.
  */
 async function runProbes(probes: readonly HealthProbe[]): Promise<ServiceHealth[]> {
   const results: ServiceHealth[] = new Array<ServiceHealth>(probes.length);
+  const run = async (i: number): Promise<void> => {
+    results[i] = await runWithTimeout(probes[i]!);
+  };
   const icloud = probes.flatMap((p, i) => (ICLOUD_SERVICES.has(p.service) ? [i] : []));
   const sequential = (async () => {
-    for (const i of icloud) results[i] = await runWithTimeout(probes[i]!);
+    for (const [k, i] of icloud.entries()) {
+      await run(i);
+      const r = results[i]!;
+      if (r.ok === true || r.error?.code === 'TIMEOUT') {
+        await Promise.all(icloud.slice(k + 1).map(run));
+        return;
+      }
+    }
   })();
-  const parallel = probes.map(async (p, i) => {
-    if (!ICLOUD_SERVICES.has(p.service)) results[i] = await runWithTimeout(p);
-  });
+  const parallel = probes.flatMap((p, i) => (ICLOUD_SERVICES.has(p.service) ? [] : [run(i)]));
   await Promise.all([sequential, ...parallel]);
   return results;
 }
