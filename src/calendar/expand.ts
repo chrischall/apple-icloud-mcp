@@ -117,9 +117,43 @@ function guarded<T>(step: () => T): T {
  */
 export function seriesWalker(master: Component): () => Time | null {
   refuseUnwalkable(master);
-  const it = guarded(() => new ICAL.RecurExpansion({ component: master, dtstart: startTimeOf(master) }));
+  const dtstart = startTimeOf(master);
+  const component = master.hasProperty('rdate') ? rdateView(master, dtstart) : master;
+  const it = guarded(() => new ICAL.RecurExpansion({ component, dtstart }));
   // ical.js answers `undefined` (not null) once the set is exhausted.
   return () => guarded(() => (it.next() as Time | undefined) ?? null);
+}
+
+/**
+ * The master as ical.js's RecurExpansion should see its RDATEs (it reads the
+ * component through `hasProperty`/`getAllProperties`, once, as it starts):
+ *  - a PERIOD value comes back from ical.js as an ICAL.Period, whose
+ *    `compare` means "overlaps" and which is no Time — the walk crashed on
+ *    it — so each becomes its start (its end: `SeriesShape.periodEnds`);
+ *  - ical.js yields DTSTART only through an RRULE's iterator, so a series of
+ *    RDATEs alone never listed its first instance, which RFC 5545 §3.8.5.3
+ *    makes DTSTART whatever else the set holds: without an RRULE, DTSTART
+ *    joins the dates (an EXDATE still removes it).
+ */
+function rdateView(master: Component, dtstart: Time): Component {
+  const dates = rdateValues(master).map((v) => (v instanceof ICAL.Period ? v.start : v));
+  if (!master.hasProperty('rrule') && !dates.some((t) => t.compare(dtstart) === 0)) dates.push(dtstart);
+  const rdate = [{ getValues: () => dates }];
+  return {
+    hasProperty: (name: string) => master.hasProperty(name),
+    getAllProperties: (name: string) => (name === 'rdate' ? rdate : master.getAllProperties(name)),
+  } as unknown as Component;
+}
+
+type Period = InstanceType<typeof ICAL.Period>;
+
+function rdateValues(master: Component): Array<Time | Period> {
+  return master.getAllProperties('rdate').flatMap((p) => p.getValues() as Array<Time | Period>);
+}
+
+/** Whether the master lists some instances as periods (RDATE;VALUE=PERIOD), each with a length of its own. */
+export function hasPeriodDates(master: Component): boolean {
+  return rdateValues(master).some((v) => v instanceof ICAL.Period);
 }
 
 /**
@@ -208,19 +242,35 @@ function overrideOccurrence(ovr: Component, master: Component | undefined, key: 
   };
 }
 
-/** Shape of every natural instance of a series: the master's own length. */
+/** Shape of every natural instance of a series: the master's own length, or a PERIOD RDATE's. */
 interface SeriesShape {
   allDay: boolean;
   days: number;
   durationMs: number;
+  /** A timed instance's end instant (ms) by its `#occ=` key, for an instance an RDATE PERIOD gives its own length. */
+  periodEnds: Map<string, number>;
+  /** The longest any instance lasts (ms). */
+  longestMs: number;
 }
 
 function seriesShape(master: Component, zone: string): SeriesShape {
   const s = componentSpan(master, zone);
+  const durationMs = s.end.getTime() - s.start.getTime();
+  const periodEnds = new Map<string, number>();
+  let longestMs = durationMs;
+  for (const v of rdateValues(master)) {
+    if (!(v instanceof ICAL.Period) || s.allDay) continue;
+    const start = instantOf(v.start, zone).getTime();
+    const end = Math.max(start, instantOf(v.getEnd(), zone).getTime());
+    periodEnds.set(occKey(v.start, zone), end);
+    longestMs = Math.max(longestMs, end - start);
+  }
   return {
     allDay: s.allDay,
     days: s.allDay ? daysBetween(s.startYmd as string, s.endYmd as string) + 1 : 0,
-    durationMs: s.end.getTime() - s.start.getTime(),
+    durationMs,
+    periodEnds,
+    longestMs,
   };
 }
 
@@ -229,7 +279,7 @@ function naturalOccurrence(master: Component, t: Time, key: string, shape: Serie
   if (shape.allDay) span = allDaySpan(ymdOf(t), shape.days, zone);
   else {
     const start = instantOf(t, zone);
-    span = { allDay: false, start, end: new Date(start.getTime() + shape.durationMs) };
+    span = { allDay: false, start, end: new Date(shape.periodEnds.get(key) ?? start.getTime() + shape.durationMs) };
   }
   return { comp: master, master, ...span, occ: key, recurrenceTime: t, isOverride: false, recurring: true };
 }
@@ -296,7 +346,7 @@ export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResu
   if (master) {
     const shape = seriesShape(master, zone);
     // An instance starting before this cannot reach the window (see roughStartMs).
-    const skipBelow = from.getTime() - shape.durationMs - ROUGH_MARGIN_MS;
+    const skipBelow = from.getTime() - shape.longestMs - ROUGH_MARGIN_MS;
     const consider = (t: Time): 'next' | 'stop' => {
       const key = occKey(t, zone);
       const natural = naturalOccurrence(master, t, key, shape, zone);

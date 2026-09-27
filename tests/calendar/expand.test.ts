@@ -4,12 +4,14 @@ import {
   UnexpandableRuleError,
   expandSeries,
   findOccurrence,
+  hasPeriodDates,
   isRecurringResource,
   overlaps,
   rulePosition,
   ruleProblem,
   seriesWalker,
   singleOccurrence,
+  type Occurrence,
 } from '../../src/calendar/expand.js';
 import { ICAL } from '../../src/calendar/ics.js';
 import { eventParts, parseCalendar, textProp, type Component, type EventParts } from '../../src/calendar/ics.js';
@@ -118,6 +120,77 @@ describe('expandSeries', () => {
     expect(isRecurringResource(parts(...vevent('UID:x', 'DTSTART:20261020T130000Z')))).toBe(false);
     expect(isRecurringResource(parts(...vevent('UID:i', 'RECURRENCE-ID:20261020T130000Z', 'DTSTART:20261020T150000Z')))).toBe(true);
     expect(isRecurringResource({ overrides: [] })).toBe(false);
+  });
+});
+
+describe('RDATE values', () => {
+  const window = { from: d('2026-09-01T00:00:00Z'), to: d('2027-01-01T00:00:00Z'), zone: NY };
+  const keys = (p: EventParts) => expandSeries(p, window).occurrences.map((o) => o.occ);
+
+  it('lists DTSTART first in a series of RDATEs only (RFC 5545), once, unless an EXDATE removes it', () => {
+    const timed = ['DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000'];
+    expect(keys(parts(...NY_TZ, ...vevent('UID:r', ...timed, 'RDATE;TZID=America/New_York:20261007T090000,20261009T090000')))).toEqual([
+      '2026-10-05T13:00:00Z',
+      '2026-10-07T13:00:00Z',
+      '2026-10-09T13:00:00Z',
+    ]);
+    expect(keys(parts(...vevent('UID:a', 'DTSTART;VALUE=DATE:20261005', 'DTEND;VALUE=DATE:20261006', 'RDATE;VALUE=DATE:20261007,20261009')))).toEqual([
+      '2026-10-05',
+      '2026-10-07',
+      '2026-10-09',
+    ]);
+    // Already among the RDATEs (as a split's continuation writes it): listed once.
+    expect(keys(parts(...vevent('UID:b', 'DTSTART:20261005T130000Z', 'RDATE:20261005T130000Z,20261007T130000Z')))).toEqual(['2026-10-05T13:00:00Z', '2026-10-07T13:00:00Z']);
+    // Removed by an EXDATE, as any other instance.
+    expect(keys(parts(...vevent('UID:c', 'DTSTART:20261005T130000Z', 'RDATE:20261007T130000Z', 'EXDATE:20261005T130000Z')))).toEqual(['2026-10-07T13:00:00Z']);
+    // An RDATE before DTSTART keeps its place in start order.
+    expect(keys(parts(...vevent('UID:e', 'DTSTART:20261005T130000Z', 'RDATE:20261003T130000Z,20261007T130000Z')))).toEqual([
+      '2026-10-03T13:00:00Z',
+      '2026-10-05T13:00:00Z',
+      '2026-10-07T13:00:00Z',
+    ]);
+    const first = findOccurrence(parts(...vevent('UID:f', 'DTSTART:20261005T130000Z', 'DTEND:20261005T140000Z', 'RDATE:20261007T130000Z')), '2026-10-05T13:00:00Z', NY);
+    expect(first?.end.toISOString()).toBe('2026-10-05T14:00:00.000Z');
+  });
+
+  it('reads an RDATE PERIOD as an instance with its own length, in start order among the others', () => {
+    const p = parts(
+      ...NY_TZ,
+      ...vevent(
+        'UID:p',
+        'DTSTART;TZID=America/New_York:20261005T090000',
+        'DTEND;TZID=America/New_York:20261005T100000',
+        'RRULE:FREQ=WEEKLY;COUNT=3',
+        'RDATE;VALUE=PERIOD:20261016T130000Z/PT30M,20261014T130000Z/20261014T150000Z',
+        'RDATE;VALUE=PERIOD;TZID=America/New_York:20261021T090000/PT2H',
+        'RDATE:20261022T130000Z',
+      ),
+    );
+    expect(hasPeriodDates(p.master as Component)).toBe(true);
+    expect(expandSeries(p, window).occurrences.map((o) => [o.occ, o.start.toISOString(), o.end.toISOString()])).toEqual([
+      ['2026-10-05T13:00:00Z', '2026-10-05T13:00:00.000Z', '2026-10-05T14:00:00.000Z'],
+      ['2026-10-12T13:00:00Z', '2026-10-12T13:00:00.000Z', '2026-10-12T14:00:00.000Z'],
+      ['2026-10-14T13:00:00Z', '2026-10-14T13:00:00.000Z', '2026-10-14T15:00:00.000Z'],
+      ['2026-10-16T13:00:00Z', '2026-10-16T13:00:00.000Z', '2026-10-16T13:30:00.000Z'],
+      ['2026-10-19T13:00:00Z', '2026-10-19T13:00:00.000Z', '2026-10-19T14:00:00.000Z'],
+      ['2026-10-21T13:00:00Z', '2026-10-21T13:00:00.000Z', '2026-10-21T15:00:00.000Z'],
+      ['2026-10-22T13:00:00Z', '2026-10-22T13:00:00.000Z', '2026-10-22T14:00:00.000Z'],
+    ]);
+    const found = findOccurrence(p, '2026-10-14T13:00:00Z', NY) as Occurrence;
+    expect([found.start.toISOString(), found.end.toISOString()]).toEqual(['2026-10-14T13:00:00.000Z', '2026-10-14T15:00:00.000Z']);
+    expect(hasPeriodDates(parts(...vevent('UID:n', 'DTSTART:20261005T130000Z', 'RDATE:20261007T130000Z')).master as Component)).toBe(false);
+  });
+
+  it('finds a long PERIOD instance that started well before the window, and ignores PERIOD lengths on an all-day series', () => {
+    const long = parts(...vevent('UID:l', 'DTSTART:20260901T130000Z', 'DTEND:20260901T140000Z', 'RDATE;VALUE=PERIOD:20261001T000000Z/P20D'));
+    const r = expandSeries(long, { from: d('2026-10-15T00:00:00Z'), to: d('2026-10-16T00:00:00Z'), zone: NY });
+    expect(r.occurrences.map((o) => [o.occ, o.end.toISOString()])).toEqual([['2026-10-01T00:00:00Z', '2026-10-21T00:00:00.000Z']]);
+    const allDay = parts(...vevent('UID:d', 'DTSTART;VALUE=DATE:20261005', 'DTEND;VALUE=DATE:20261006', 'RDATE;VALUE=PERIOD:20261008T130000Z/PT5H'));
+    expect(expandSeries(allDay, window).occurrences.map((o) => [o.occ, o.startYmd, o.endYmd])).toEqual([
+      ['2026-10-05', '2026-10-05', '2026-10-05'],
+      // A date-time value on an all-day series keys by its instant, as a plain DATE-TIME RDATE there does; it lasts the series' one day.
+      ['2026-10-08T13:00:00Z', '2026-10-08', '2026-10-08'],
+    ]);
   });
 });
 

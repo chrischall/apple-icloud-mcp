@@ -1,6 +1,6 @@
 import { AppleToolError, InvalidArgumentError } from '../errors.js';
 import { parseDateInput, startOfDay, ymdInZone } from '../time.js';
-import { rulePosition, seriesWalker, type Occurrence } from './expand.js';
+import { hasPeriodDates, rulePosition, seriesWalker, type Occurrence } from './expand.js';
 import {
   ICAL,
   WEEKDAYS,
@@ -311,6 +311,22 @@ function cannotShift(rule: Recur, why: string): AppleToolError {
 }
 
 /**
+ * Refuse to move, split or cut short a series that lists some instances as
+ * periods (RDATE;VALUE=PERIOD, each with a length of its own): those values
+ * are read, but not rewritten here, and keeping them as they were would
+ * leave them behind a move or on the wrong side of a split. Nothing is
+ * changed.
+ */
+function refusePeriodDates(master: Component): void {
+  if (!hasPeriodDates(master)) return;
+  throw new AppleToolError(
+    'UNSUPPORTED',
+    'calendar: this series lists some occurrences as time periods (RDATE;VALUE=PERIOD), which this server can read but cannot move, split or cut short. Nothing was changed.',
+    { hint: 'Change or delete one occurrence (span "thisEvent"), change the whole series without moving it, or make this change in Apple Calendar.' },
+  );
+}
+
+/**
  * The series' rule after its occurrences move by `dayShift` calendar days
  * (and, when `timeShifted`, to another time of day). An RRULE is not anchored
  * to DTSTART alone: `BYDAY=MO,WE` keeps generating Mondays and Wednesdays
@@ -438,6 +454,7 @@ export function editSeries(e: SeriesEdit): string | undefined {
   const touched = new Set<Component>([master]);
 
   if (times) {
+    refusePeriodDates(master);
     // The instances before the change, to check the rewritten series against (see checkShifted).
     const sample = leadingInstances(master, SHIFT_CHECK_INSTANCES, addDaysYmd(ymdOf(mStart), SHIFT_CHECK_DAYS));
     const oldWz = zoneOfTime(mStart, zone);
@@ -554,6 +571,7 @@ export function isFirstInstance(master: Component, occ: string, zone: string): b
  * `occ` on are removed. Returns the removed overrides.
  */
 export function truncateSeries(vcal: Component, master: Component, overrides: readonly Component[], occ: string, zone: string, now: Date): Component[] {
+  refusePeriodDates(master);
   const at = occInstant(occ, zone);
   const before = (t: Time) => instantOf(t, zone).getTime() < at.getTime();
   const rule = ruleOf(master);
@@ -592,6 +610,7 @@ export function continuationSeries(
   used: number,
   opts: { uid: string; now: Date; zone: string },
 ): { vcal: Component; master: Component; overrides: Component[] } {
+  refusePeriodDates(master);
   const { zone } = opts;
   const vcal = new ICAL.Component(['vcalendar', [], []]);
   for (const prop of source.getAllProperties()) vcal.addProperty(new ICAL.Property(JSON.parse(JSON.stringify(prop.toJSON()))));

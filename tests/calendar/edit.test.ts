@@ -218,6 +218,36 @@ describe('planUpdate', () => {
     expect(keysOf(split.puts[0]!.body)).not.toContain('2026-10-25T13:00:00Z');
   });
 
+  it('refuses to move, split or cut short a series with PERIOD RDATEs, and still edits one occurrence or its fields', async () => {
+    dav.put(
+      'home',
+      'per.ics',
+      ics(...NY_TZ, ...vevent('UID:per', 'DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000', 'RRULE:FREQ=WEEKLY;COUNT=3', 'RDATE;VALUE=PERIOD:20261014T130000Z/PT2H', 'SUMMARY:P')),
+    );
+    const refusal = /some occurrences as time periods \(RDATE;VALUE=PERIOD\).*cannot move, split or cut short\. Nothing was changed\./;
+    await expect(update('home/per.ics#occ=2026-10-12T13:00:00Z', { span: 'allEvents', startDate: '2026-10-12T10:00' })).rejects.toThrow(refusal);
+    await expect(update('home/per.ics#occ=2026-10-12T13:00:00Z', { span: 'futureEvents', title: 'T' })).rejects.toThrow(refusal);
+    const loaded = await load('home/per.ics#occ=2026-10-12T13:00:00Z');
+    expect(() => planDelete(loaded, 'futureEvents', env)).toThrow(refusal);
+    // One occurrence (the period's own, with its two hours), or every occurrence's details, is fine.
+    const one = await update('home/per.ics#occ=2026-10-14T13:00:00Z', { title: 'Long one' });
+    expect(one.puts[0]!.body).toContain('RECURRENCE-ID;TZID=America/New_York:20261014T090000');
+    expect(one.puts[0]!.body).toContain('DTEND;TZID=America/New_York:20261014T110000');
+    const all = await update('home/per.ics#occ=2026-10-12T13:00:00Z', { span: 'allEvents', title: 'Renamed' });
+    expect(all.puts[0]!.body).toContain('RDATE;VALUE=PERIOD:20261014T130000Z/PT2H');
+    expect(planDelete(await load('home/per.ics#occ=2026-10-14T13:00:00Z'), 'thisEvent', env).op).toMatchObject({ kind: 'put' });
+  });
+
+  it('cuts a series of RDATEs only short after its DTSTART, not deleting it whole from its first RDATE', async () => {
+    dav.put('home', 'ro.ics', ics(...vevent('UID:ro', 'DTSTART:20261019T130000Z', 'DTEND:20261019T140000Z', 'RDATE:20261022T130000Z,20261025T130000Z', 'SUMMARY:R')));
+    const future = planDelete(await load('home/ro.ics#occ=2026-10-22T13:00:00Z'), 'futureEvents', env);
+    expect(future.scope).toBe('this and all following occurrences');
+    // What is left is its first occurrence, DTSTART, as a single event.
+    const body = (future.op as { body: string }).body;
+    expect(body).toContain('DTSTART:20261019T130000Z');
+    expect(body).not.toContain('RDATE');
+  });
+
   it('plans a single event: fields, times, a move, and a move alone', async () => {
     const p = await update('home/one.ics', { title: 'Uno', startDate: '2026-10-21T10:00' });
     expect(p).toMatchObject({ span: 'single', scope: 'this event', notifiesAttendees: false, result: { eventId: 'home/one.ics' } });

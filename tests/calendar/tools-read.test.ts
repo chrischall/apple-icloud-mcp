@@ -85,6 +85,19 @@ describe('apple_calendar_list_calendars', () => {
 });
 
 describe('apple_calendar_list_events', () => {
+  it('lists an RDATE PERIOD occurrence with its own end, and the first occurrence of a series of RDATEs only', async () => {
+    h.dav.addCalendar({ id: 'x', name: 'Extra', order: 2 });
+    h.dav.put('x', 'per.ics', ics(...vevent('UID:per', 'DTSTART:20261006T130000Z', 'DTEND:20261006T140000Z', 'RRULE:FREQ=WEEKLY;COUNT=2', 'RDATE;VALUE=PERIOD:20261021T170000Z/PT3H', 'SUMMARY:Workshop')));
+    h.dav.put('x', 'rd.ics', ics(...vevent('UID:rd', 'DTSTART:20261022T170000Z', 'DTEND:20261022T173000Z', 'RDATE:20261029T170000Z', 'SUMMARY:Checkup')));
+    const r = await h.call('apple_calendar_list_events', { daysAhead: 5, calendars: ['Extra'], view: 'full' });
+    expect(r.json).toMatchObject({ total: 2, complete: true });
+    expect(r.json.notes ?? []).not.toContainEqual(expect.stringMatching(/could not be read/));
+    expect(r.json.events.map((e: { id: string; start: string; end: string }) => [e.id, e.start, e.end])).toEqual([
+      ['x/per.ics#occ=2026-10-21T17:00:00Z', '2026-10-21T13:00:00-04:00', '2026-10-21T16:00:00-04:00'],
+      ['x/rd.ics#occ=2026-10-22T17:00:00Z', '2026-10-22T13:00:00-04:00', '2026-10-22T13:30:00-04:00'],
+    ]);
+  });
+
   it('expands, sorts and pages with the window and paging facts before the data', async () => {
     const r = await h.call('apple_calendar_list_events', { daysAhead: 5, limit: 2 });
     expect(r.isError).toBe(false);
