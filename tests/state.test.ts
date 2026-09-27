@@ -29,7 +29,7 @@ describe('isStateCacheEnabled', () => {
 });
 
 describe('stateCache', () => {
-  it('round-trips a record under $MCP_DATA_DIR/.aws-mcp/, 0600, bound to the credential (never written)', () => {
+  it('round-trips a record under $MCP_DATA_DIR/.apple-cloud-mcp/, 0600, bound to the credential (never written)', () => {
     const cache = stateCache<Rec>('rt.json', 'credential-value-1', validate);
     expect(cache.load()).toBeNull();
     expect(cache.save({ token: 't1', exp: 5 })).toBe(true);
@@ -60,7 +60,7 @@ describe('stateCache', () => {
   });
 
   it('reports a failed write on stderr and never throws', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aws-mcp-state-'));
+    const dir = mkdtempSync(join(tmpdir(), 'apple-cloud-mcp-state-'));
     try {
       const notADir = join(dir, 'file');
       writeFileSync(notADir, 'x');
@@ -72,7 +72,7 @@ describe('stateCache', () => {
       }).not.toThrow();
       expect(wrote).toBe(false); // the caller can tell it was NOT written
       expect(err).toHaveBeenCalledTimes(1);
-      expect(String(err.mock.calls[0]![0])).toMatch(/^\[aws-mcp\] WARNING: could not write cache fail\.json: /);
+      expect(String(err.mock.calls[0]![0])).toMatch(/^\[apple-cloud-mcp\] WARNING: could not write cache fail\.json: /);
       expect(cache.load()).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });

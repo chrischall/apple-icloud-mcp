@@ -12,7 +12,7 @@ try {
   // no .env — nothing to load
 }
 
-// `npx @chrischall/aws-mcp music-auth` — the one-time browser sign-in that
+// `npx apple-cloud-mcp music-auth` — the one-time browser sign-in that
 // mints an Apple Music user token. A CLI, not the MCP server: it prints the
 // token on stdout and exits.
 if (process.argv[2] === 'music-auth') {
@@ -23,8 +23,8 @@ if (process.argv[2] === 'music-auth') {
 const { REGISTRARS } = await import('./registry.js');
 
 await runMcp({
-  name: 'aws-mcp',
+  name: 'apple-cloud-mcp',
   version: VERSION,
   tools: [...REGISTRARS],
-  banner: '[aws-mcp] This project was developed and is maintained by AI (Claude Code). Use at your own discretion.',
+  banner: '[apple-cloud-mcp] This project was developed and is maintained by AI (Claude Code). Use at your own discretion.',
 });

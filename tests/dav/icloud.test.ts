@@ -79,7 +79,7 @@ const calendarDiscovery = (): Step[] => [
   },
 ];
 
-const stateDir = () => join(process.env.MCP_DATA_DIR as string, '.aws-mcp');
+const stateDir = () => join(process.env.MCP_DATA_DIR as string, '.apple-cloud-mcp');
 const stateFile = (kind: string) => join(stateDir(), `dav-${kind}.json`);
 
 function setCreds(user = USER, pass = PASS) {

@@ -30,7 +30,7 @@ export type Property = InstanceType<typeof ICAL.Property>;
 export type Recur = InstanceType<typeof ICAL.Recur>;
 export type Duration = InstanceType<typeof ICAL.Duration>;
 
-export const PRODID = '-//chrischall//aws-mcp//EN';
+export const PRODID = '-//chrischall//apple-cloud-mcp//EN';
 
 // ---------------------------------------------------------------------------
 // Parsing
@@ -54,7 +54,7 @@ export function parseCalendar(ics: string, what: string): Component {
   for (const tz of root.getAllSubcomponents('vtimezone')) {
     if (boundedTimezone(tz)) continue;
     console.error(
-      `[aws-mcp] WARNING: calendar: ${what} defines time zone "${String(tz.getFirstPropertyValue('tzid'))}" with a rule that cannot ` +
+      `[apple-cloud-mcp] WARNING: calendar: ${what} defines time zone "${String(tz.getFirstPropertyValue('tzid'))}" with a rule that cannot ` +
         'be evaluated safely; the standard definition of that zone is used instead (or none, if it is not a known zone).',
     );
     root.removeSubcomponent(tz);

@@ -78,7 +78,7 @@ export async function collectOccurrences(
         // Inside the try: one resource that cannot be expanded must not take the whole answer down with it.
         expanded = expandSeries(parts, { from: win.from, to: win.to, zone: win.zone });
       } catch (err) {
-        console.error(`[aws-mcp] WARNING: calendar: an event in "${calendar.name}" could not be read: ${errorMessage(err)}`);
+        console.error(`[apple-cloud-mcp] WARNING: calendar: an event in "${calendar.name}" could not be read: ${errorMessage(err)}`);
         unreadable += 1;
         continue;
       }

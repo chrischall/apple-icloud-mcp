@@ -169,7 +169,7 @@ export function setSleepForTests(fn: (ms: number) => Promise<void>): void {
 }
 
 function debug(line: string): void {
-  if (isDebugLog()) console.error(`[aws-mcp] ${scrub(line)}`);
+  if (isDebugLog()) console.error(`[apple-cloud-mcp] ${scrub(line)}`);
 }
 
 /** Pull a readable message out of an error body (Apple's JSON:API `errors[]`, `{error:{message}}`, or text). */

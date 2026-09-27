@@ -5,21 +5,21 @@
     "email": "chris.c.hall@gmail.com"
   },
   "metadata": {
-    "description": "Apple Web Services tools for Claude Code",
+    "description": "Unofficial Apple Music, iCloud, Apple Maps and WeatherKit tools for Claude Code",
     "version": "0.0.0"
   },
   "plugins": [
     {
-      "name": "apple-web-services",
-      "displayName": "Apple Web Services",
+      "name": "apple-cloud",
+      "displayName": "Apple Cloud",
       "source": "./",
-      "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search for Claude via MCP — runs anywhere, no Mac required",
+      "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search for Claude via MCP — runs anywhere, no Mac required. Unofficial; not affiliated with Apple.",
       "version": "0.0.0",
       "author": {
         "name": "Chris Chall"
       },
-      "homepage": "https://github.com/chrischall/aws-mcp",
-      "repository": "https://github.com/chrischall/aws-mcp",
+      "homepage": "https://github.com/chrischall/apple-cloud-mcp",
+      "repository": "https://github.com/chrischall/apple-cloud-mcp",
       "license": "MIT",
       "keywords": [
         "apple",
