@@ -266,39 +266,72 @@ export function timeAt(instant: Date, wz: WriteZone): Time {
   return ICAL.Time.fromData({ year: p.year, month: p.month, day: p.day, hour: p.hour, minute: p.minute, second: p.second, isDate: false });
 }
 
+/** One of a zone's changes as ical.js keeps them: the UTC instant it happens, and the offsets (seconds) either side. */
+interface ZoneChange {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  utcOffset: number;
+  prevUtcOffset: number;
+}
+
 /**
- * `utc` as a wall-clock time in `tz`. Not ical.js's `convertToZone`: that
- * reads the zone's offset at the UTC wall clock as though it were local
- * time, so for the hours next to a DST change — half a day of them in a zone
- * far from UTC — it wrote an event an hour off and read it back "verified".
- *
- * The offset in force is one that, read at the local time it gives, gives
- * itself back; the candidates are those in force around the instant (two
- * hours either side covers any change). ical.js reads a wall time a change
- * SKIPS with the later, larger offset, so a skipped time can pass that test
- * too — of two, the smaller offset is the real one. The first pass of an
- * hour a change REPEATS passes with none (ical.js reads the second pass): it
- * gets its true wall time, from the offset in force before the change.
+ * The UTC offset (seconds) in force in `tz` at an instant, from the zone's
+ * own list of changes — ical.js expands a VTIMEZONE's observances into UTC
+ * instants. Not `tz.utcOffset`, which is keyed by a LOCAL time, so it cannot
+ * say which pass of a repeated hour an instant is (or what a skipped time is).
+ */
+function offsetAt(tz: Timezone, unixSeconds: number): number {
+  const year = new Date(unixSeconds * 1000).getUTCFullYear();
+  tz._ensureCoverage(year + 1);
+  const changes = tz.changes as ZoneChange[];
+  if (changes.length === 0) return 0; // as ical.js: a zone without observances
+  const instant = (c: ZoneChange) => Date.UTC(c.year, c.month - 1, c.day, c.hour, c.minute, c.second) / 1000;
+  // The last change at or before the instant (they are sorted).
+  let lo = 0;
+  let hi = changes.length - 1;
+  if (instant(changes[0] as ZoneChange) > unixSeconds) return (changes[0] as ZoneChange).prevUtcOffset;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (instant(changes[mid] as ZoneChange) <= unixSeconds) lo = mid;
+    else hi = mid - 1;
+  }
+  return (changes[lo] as ZoneChange).utcOffset;
+}
+
+/**
+ * `utc` as a wall-clock time in `tz`: its fields plus the offset in force at
+ * that instant. Not ical.js's `convertToZone`, which reads the offset at the
+ * UTC wall clock as though it were local time — an hour off for the hours
+ * next to a DST change (half a day of them in a zone far from UTC).
  */
 function zoneTime(utc: Time, tz: Timezone): Time {
-  const local = (offset: number, earlier = 0): Time => {
-    const t = ICAL.Time.fromData({ year: utc.year, month: utc.month, day: utc.day, hour: utc.hour, minute: utc.minute, second: utc.second, isDate: false }, tz);
-    t.adjust(0, 0, 0, offset - earlier);
-    return t;
-  };
-  /** The offset in force `earlier` seconds before the instant, settled from the UTC-wall-clock guess. */
-  const offsetNear = (earlier: number): number => {
-    let offset = tz.utcOffset(local(0, earlier));
-    for (let i = 0; i < 3; i++) {
-      const next = tz.utcOffset(local(offset, earlier));
-      if (next === offset) break;
-      offset = next;
-    }
-    return offset;
-  };
-  const candidates = [...new Set([offsetNear(0), offsetNear(7200), offsetNear(-7200)])].sort((a, b) => a - b);
-  const real = candidates.find((offset) => tz.utcOffset(local(offset)) === offset);
-  return local(real ?? offsetNear(7200));
+  const t = ICAL.Time.fromData({ year: utc.year, month: utc.month, day: utc.day, hour: utc.hour, minute: utc.minute, second: utc.second, isDate: false }, tz);
+  t.adjust(0, 0, 0, offsetAt(tz, utc.toUnixTime()));
+  return t;
+}
+
+/**
+ * DTSTART/DTEND values for [start, end) in the write zone. A wall time names
+ * one instant, except in an hour a DST change repeats: there ical.js (and so
+ * this server) reads it as one pass, and the other pass has no wall time of
+ * its own. A single event writes such an instant in UTC. A series keeps its
+ * wall time (its repeats follow DTSTART's wall clock), and every event takes
+ * its end from its start as read, so its length survives either way. (A
+ * floating value has no UTC form and is kept as it is.)
+ */
+export function eventTimes(start: Date, end: Date, wz: WriteZone, series: boolean): { start: Time; end: Time } {
+  const readAs = (t: Time) => instantOf(t, wz.kind === 'floating' ? wz.zone : 'UTC').getTime();
+  const utc = (at: Date) => (wz.kind === 'tz' ? timeAt(at, { kind: 'utc' }) : undefined);
+  let s = timeAt(start, wz);
+  if (!series && readAs(s) !== start.getTime()) s = utc(start) ?? s;
+  const endAt = new Date(readAs(s) + end.getTime() - start.getTime());
+  let e = timeAt(endAt, wz);
+  if (readAs(e) !== endAt.getTime()) e = utc(endAt) ?? e;
+  return { start: s, end: e };
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   endTimeOf,
   ensureOrganizer,
   eventParts,
+  eventTimes,
   injectMissingTimezones,
   instantOf,
   isRecurringMaster,
@@ -46,6 +47,7 @@ import {
   zoneOfTime,
   type Component,
   type Time,
+  type Timezone,
 } from '../../src/calendar/ics.js';
 import { zonedParts } from '../../src/time.js';
 import { NY_TZ, ics, vevent } from './fake-caldav.js';
@@ -210,7 +212,8 @@ describe('time zones', () => {
 
   it('writes the true wall time next to every DST change, which reads back as the same instant', () => {
     // ical.js's own conversion took the offset at the UTC wall clock: an hour off for up to half a day around a change.
-    for (const zone of ['America/New_York', 'Australia/Sydney', 'Europe/Berlin', 'America/Santiago', 'Australia/Lord_Howe', 'Asia/Kolkata']) {
+    // Dublin keeps winter as its "daylight" time (a negative DST), so ical.js reads its repeated hour the other way.
+    for (const zone of ['America/New_York', 'Australia/Sydney', 'Europe/Berlin', 'Europe/Dublin', 'America/Santiago', 'Australia/Lord_Howe', 'America/Havana', 'Asia/Kolkata']) {
       const wz = zoneForWrite(newCalendar(), zone);
       const offsetAt = (ms: number) => {
         const p = zonedParts(new Date(ms), zone);
@@ -226,13 +229,44 @@ describe('time zones', () => {
           const p = zonedParts(new Date(ms), zone);
           expect([t.year, t.month, t.day, t.hour, t.minute].map((n) => n + 0), `${zone} ${new Date(ms).toISOString()}`).toEqual([p.year, p.month, p.day, p.hour, p.minute]);
           const back = instantOf(t, zone).getTime();
-          // The one exception: the first pass of an hour a change repeats, which ical.js reads as the second pass.
-          if (back !== ms) expect(back - ms, `${zone} ${new Date(ms).toISOString()}`).toBe(-change);
+          // The one exception: the pass of an hour a change repeats that ical.js does not read that wall time as.
+          if (back !== ms) expect(Math.abs(back - ms), `${zone} ${new Date(ms).toISOString()}`).toBe(Math.abs(change));
           checked++;
         }
       }
       expect(checked, zone).toBeGreaterThan(zone === 'Asia/Kolkata' ? -1 : 200);
     }
+  });
+
+  it('takes the offset from the zone\'s own changes, also before its first one and for a zone without any', () => {
+    const zoneOf = (vtimezone: string[]) => {
+      const vcal = parseCalendar(['BEGIN:VCALENDAR', 'VERSION:2.0', ...vtimezone, 'BEGIN:VEVENT', 'UID:x', 'DTSTART;TZID=X/Test:20260101T000000', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n'), 't');
+      return { kind: 'tz' as const, tz: (vcal.getFirstSubcomponent('vevent')!.getFirstPropertyValue('dtstart') as Time).zone as Timezone };
+    };
+    // Its only observance starts in 2000 at +03:00, coming from +02:00: 1990 is at +02:00.
+    const late = zoneOf(['BEGIN:VTIMEZONE', 'TZID:X/Test', 'BEGIN:STANDARD', 'DTSTART:20000101T000000', 'TZOFFSETFROM:+0200', 'TZOFFSETTO:+0300', 'END:STANDARD', 'END:VTIMEZONE']);
+    expect(timeAt(new Date('1990-06-01T12:00:00Z'), late).toString()).toBe('1990-06-01T14:00:00');
+    expect(timeAt(new Date('2026-06-01T12:00:00Z'), late).toString()).toBe('2026-06-01T15:00:00');
+    const none = zoneOf(['BEGIN:VTIMEZONE', 'TZID:X/Test', 'END:VTIMEZONE']);
+    expect(timeAt(new Date('2026-06-01T12:00:00Z'), none).toString()).toBe('2026-06-01T12:00:00');
+  });
+
+  it('builds event times: the true wall time, in UTC for a single event when ical.js would read it as another instant', () => {
+    const vcal = newCalendar();
+    const ny = zoneForWrite(vcal, NY);
+    // 01:30 EDT on the fall-back day (ical.js reads the wall time 01:30 as EST): a single event gets UTC, a series the wall.
+    const single = eventTimes(new Date('2026-11-01T05:30:00Z'), new Date('2026-11-01T06:30:00Z'), ny, false);
+    expect([single.start.toString(), single.end.toString()]).toEqual(['2026-11-01T05:30:00Z', '2026-11-01T01:30:00']);
+    const series = eventTimes(new Date('2026-11-01T05:30:00Z'), new Date('2026-11-01T06:30:00Z'), ny, true);
+    // The series' end follows its start as read (06:30Z), so it keeps its hour.
+    expect([series.start.toString(), series.end.toString()]).toEqual(['2026-11-01T01:30:00', '2026-11-01T02:30:00']);
+    // Floating values have no UTC form: they stay wall times.
+    const floating = eventTimes(new Date('2026-11-01T05:30:00Z'), new Date('2026-11-01T06:30:00Z'), { kind: 'floating', zone: NY }, false);
+    expect(floating.start.zone).toBe(ICAL.Timezone.localTimezone);
+    expect(floating.end.zone).toBe(ICAL.Timezone.localTimezone);
+    const second = eventTimes(new Date('2026-11-01T06:30:00Z'), new Date('2026-11-01T07:30:00Z'), { kind: 'floating', zone: NY }, false);
+    expect(second.start.toString()).toBe('2026-11-01T01:30:00');
+    expect(eventTimes(new Date('2026-10-20T13:00:00Z'), new Date('2026-10-20T14:00:00Z'), ny, false).start.toString()).toBe('2026-10-20T09:00:00');
   });
 
   it('collects TZIDs from nested components', () => {

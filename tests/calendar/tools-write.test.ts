@@ -105,6 +105,19 @@ describe('apple_calendar_create_event', () => {
     expect(unfold(h.dav.get('work', 'UID-3.ics')!.ics)).toContain('DTSTART;TZID=Australia/Sydney:20270404T100000');
   });
 
+  it('writes an instant no wall time names (a repeated hour ical.js reads the other way) in UTC, keeping the length', async () => {
+    // 01:30 EDT on the day New York falls back: the wall time 01:30 reads as 01:30 EST.
+    const first = await h.call('apple_calendar_create_event', { title: 'Early', startDate: '2026-11-01T01:30:00-04:00' });
+    expect(first.json).toMatchObject({ verified: true, event: { start: '2026-11-01T01:30:00-04:00', end: '2026-11-01T01:30:00-05:00' } });
+    const stored = unfold(h.dav.get('work', 'UID-1.ics')!.ics);
+    expect(stored).toContain('DTSTART:20261101T053000Z');
+    expect(stored).toContain('DTEND;TZID=America/New_York:20261101T013000');
+    // Dublin's is the other way round: its SECOND pass has no wall time ical.js reads as it.
+    const dublin = await h.call('apple_calendar_create_event', { title: 'Late', startDate: '2026-10-25T01:30:00+00:00', timeZone: 'Europe/Dublin' });
+    expect(dublin.json).toMatchObject({ verified: true, event: { start: expect.stringMatching(/^2026-10-25T01:30:00(\+00:00|Z)$/) } });
+    expect(unfold(h.dav.get('work', 'UID-2.ics')!.ics)).toContain('DTSTART:20261025T013000Z');
+  });
+
   it('with attendees: asks first (iCloud emails invitations), then writes ORGANIZER + ATTENDEEs', async () => {
     const args = { title: 'Party', startDate: '2026-10-24T18:00', location: '', attendees: [{ email: 'ann@x.com', name: 'Ann' }, { email: 'bob@x.com' }] };
     const preview = await callPreview(gated('apple_calendar_create_event'), args);

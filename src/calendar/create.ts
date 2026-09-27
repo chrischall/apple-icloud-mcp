@@ -5,6 +5,7 @@ import {
   buildRule,
   dateValue,
   ensureOrganizer,
+  eventTimes,
   newCalendar,
   newEvent,
   setAlarms,
@@ -135,9 +136,9 @@ export function buildNewEvent(
     setTimeProp(ev, 'dtstart', dateValue(times.startYmd as string));
     setTimeProp(ev, 'dtend', dateValue(addDaysYmd(times.endYmd as string, 1)));
   } else {
-    const wz = zoneForWrite(vcal, zone);
-    setTimeProp(ev, 'dtstart', timeAt(times.start, wz));
-    setTimeProp(ev, 'dtend', timeAt(times.end, wz));
+    const t = eventTimes(times.start, times.end, zoneForWrite(vcal, zone), input.recurrence !== undefined);
+    setTimeProp(ev, 'dtstart', t.start);
+    setTimeProp(ev, 'dtend', t.end);
   }
   setTextProp(ev, 'location', input.location);
   setTextProp(ev, 'description', input.notes);

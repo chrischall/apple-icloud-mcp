@@ -132,16 +132,24 @@ end). A bare id on a recurring series is refused for single-occurrence edits; ne
 occurrence. Recurrences are expanded client-side with ical.js (iCloud's server `expand` breaks all-day
 events). ical.js has NO loop limits: VTIMEZONE rules that aren't plain yearly are swapped for the standard
 zone (an invitation-controlled TZ once hung the server), and rules it would spin on are refused before it
-sees them (`ruleProblem`; `sparseProblem` walks a DAILY/WEEKLY rule's day filters over one 400-year cycle, since
-ical.js steps those day by day in ONE call and `FREQ=DAILY;INTERVAL=7;BYDAY=TU` from a Monday never returns) —
-keep those guards. Never ical.js's `convertToZone`: it takes a zone's offset at the UTC wall clock as if it were local
-time, an hour off next to a DST change (half a day of it in Sydney); `timeAt` settles the offset (`zoneTime`). `seriesWalker` doesn't trust ical.js's RecurExpansion with the whole set: it hands it
-a view (RDATE PERIODs as their starts, DTSTART among the RDATEs when there is no RRULE — RFC 5545 makes it the first
-instance — and no EXDATE), skips an instant it just gave (an RDATE on a rule instance came out twice) and applies
-EXDATEs itself (ical.js's one-pass pointer let an excluded instance through after an EXDATE that matched nothing). A
-PERIOD instance keeps its own end; a series holding one is never moved, split or cut short (refused). Without an
-RRULE, DTSTART is cut like an RDATE (one can precede it) and a split carries it over. API all-day end dates are
-INCLUSIVE; iCalendar DTEND is exclusive. Query
+sees them (`ruleProblem`, incl. a negative BYMONTHDAY with DAILY, which ical.js never matches; `sparseProblem`
+walks a DAILY/WEEKLY rule's day filters over one 400-year cycle — ical.js steps those day by day in ONE call, and
+`FREQ=DAILY;INTERVAL=7;BYDAY=TU` from a Monday never returned) — keep those guards. `seriesWalker` doesn't trust
+ical.js's RecurExpansion with the whole set: it hands it a view (RDATE PERIODs as their starts, DTSTART among the
+RDATEs when there is no RRULE — RFC 5545 makes it the first instance — and no EXDATE), skips an instant already given
+(per kind by rough value; across kinds only near an RDATE written another way than DTSTART), applies EXDATEs itself
+(ical.js's one-pass pointer let excluded instances through), and gives up after `MAX_SKIPPED` skips per walk. Its
+`exact` says whether it comes in start order: ical.js orders floating/DATE values as if UTC, so a series mixing them
+with fixed ones can stray by a zone offset — callers keep looking a margin past a target or window. A PERIOD
+instance keeps its own end; a series holding one is never retimed, split or cut short (refused). Without an RRULE,
+DTSTART is cut like an RDATE (one can precede it) and a split carries it over. Never ical.js's `convertToZone` (it
+takes the offset at the UTC wall clock as if local, an hour off next to DST changes): `timeAt` takes the offset in
+force from the zone's own UTC change list. And never rebuild a value already written in the series' zone through its
+instant: ical.js reads a time a change skips (02:30 on spring-forward day) as an instant whose true wall time is
+01:30, so `recurrenceValue`, overrides and series shifts keep such a value's own fields. ical.js reads a repeated
+hour's wall time as one pass (the second; the first where DST is negative, as in Dublin): `eventTimes` writes an
+instant on the other pass in UTC for a single event, and every event's end from its start as read. API all-day end
+dates are INCLUSIVE; iCalendar DTEND is exclusive. Query
 windows are widened a day each side (iCloud evaluates all-day events in its own zone) then filtered exactly.
 `futureEvents` splits the series (UNTIL on the old, new UID for the new, COUNT adjusted; restore on failure) —
 only at an occurrence the RRULE produces (an RDATE one is refused; a series of RDATEs only splits at any of them), and
@@ -149,12 +157,13 @@ ending a series never rewrites a rule that
 already ends earlier (COUNT→UNTIL would EXTEND it). An unknown outcome on the split's first PUT says the new
 series was NOT created; a restore of a series with attendees carries a SEQUENCE above the shortened one they were
 sent (RFC 5546), and never claims "nothing was changed". `allEvents` time changes shift DTSTART,
-EXDATE/RDATE/UNTIL, overrides AND plain BYDAY weekdays by wall clock — every value by the SERIES' day shift,
-whatever its own DATE/DATE-TIME type; every-Nth-week rules turn WKST with the days, every-Nth-month/year ones on
-named days are refused; then `checkShifted` compares the old and new series day by day and refuses (nothing
-written) any move that would gain, drop or re-day an instance — over their first 400 instances or ten years,
-whichever ends first, up to the instance that stopped that walk (unbounded, a sparse rule like Feb 29 on a Monday
-walked for millennia). PUT with If-Match; 412 → "changed since
+EXDATE/RDATE/UNTIL, overrides AND plain BYDAY weekdays by wall clock — DATE values (and the rule's days) by the
+calendar days DTSTART moves, whatever occurrence the call named (an RDATE at another time can cross midnight when
+DTSTART does not); every-Nth-week rules turn WKST with the days, every-Nth-month/year ones on named days are
+refused; then `checkShifted` compares the days of the old and new series' natural instances (not times of day, not
+overrides) and refuses (nothing written) a move that would gain, drop or re-day one — over the first 400 instances
+or ten years, whichever ends first, up to the day of the instance that stopped that walk (two days short of it
+when a walk can stray; unbounded, a sparse rule like Feb 29 on a Monday walked for millennia). PUT with If-Match; 412 → "changed since
 read". **Every write goes through `serializeForWrite`** (delete's EXDATE/truncation PUT too), which
 re-parses the ICS and refuses it if any line break slipped into a value or the ATTENDEE/ORGANIZER/UID set differs
 from what was built — a CR/LF in a `url` once injected an ATTENDEE past the confirm gate. Schemas refuse control

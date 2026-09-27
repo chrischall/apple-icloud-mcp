@@ -1,6 +1,6 @@
 import { AppleToolError, InvalidArgumentError } from '../errors.js';
 import { parseDateInput, startOfDay, ymdInZone } from '../time.js';
-import { hasPeriodDates, rulePosition, seriesWalker, type Occurrence } from './expand.js';
+import { firstInstance, hasPeriodDates, rulePosition, seriesWalker, type Occurrence } from './expand.js';
 import {
   ICAL,
   WEEKDAYS,
@@ -11,7 +11,9 @@ import {
   daysBetween,
   endTimeOf,
   ensureOrganizer,
+  eventTimes,
   instantOf,
+  isRecurringMaster,
   occKey,
   ruleOf,
   setAlarms,
@@ -21,7 +23,9 @@ import {
   startTimeOf,
   textProp,
   timeAt,
+  timeValues,
   touch,
+  tzidOf,
   wallTime,
   ymdOf,
   zoneForWrite,
@@ -214,8 +218,9 @@ export function writeTimes(comp: Component, plan: TimePlan, wz: WriteZone): void
     setTimeProp(comp, 'dtstart', dateValue(plan.startYmd as string));
     setTimeProp(comp, 'dtend', dateValue(addDaysYmd(plan.endYmd as string, 1)));
   } else {
-    setTimeProp(comp, 'dtstart', timeAt(plan.start, wz));
-    setTimeProp(comp, 'dtend', timeAt(plan.end, wz));
+    const t = eventTimes(plan.start, plan.end, wz, isRecurringMaster(comp));
+    setTimeProp(comp, 'dtstart', t.start);
+    setTimeProp(comp, 'dtend', t.end);
   }
 }
 
@@ -252,20 +257,41 @@ export function recurrenceValue(master: Component, target: Occurrence, zone: str
   const rid = target.recurrenceTime as Time;
   const start = startTimeOf(master);
   if (start.isDate) return dateValue(ymdOf(rid));
-  return timeAt(instantOf(rid, zone), zoneOfTime(start, zone));
+  const wz = zoneOfTime(start, zone);
+  // The instance's own value when it is already written in that zone — never rebuilt through its instant: a time a
+  // DST change skips (02:30 on the spring-forward day) reads as an instant whose true wall time is another (01:30).
+  return writtenIn(rid, wz) ? rid.clone() : timeAt(instantOf(rid, zone), wz);
+}
+
+/** Whether a date-time value is written in the write zone itself (so its own fields are its wall clock there). */
+function writtenIn(t: Time, wz: WriteZone): boolean {
+  if (t.isDate) return false;
+  if (wz.kind === 'utc') return t.zone === ICAL.Timezone.utcTimezone;
+  if (wz.kind === 'floating') return t.zone === ICAL.Timezone.localTimezone;
+  return tzidOf(t) === wz.tz.tzid;
+}
+
+/** A value's wall clock in the write zone, in seconds: its own fields when it is written there, else its instant's. */
+function wallOf(t: Time, wz: WriteZone, zone: string): number {
+  if (writtenIn(t, wz)) return Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute, t.second) / 1000;
+  return wallSeconds(instantOf(t, zone), wz);
 }
 
 /** An override component for a natural occurrence, added to `vcal` (a copy of the master, pinned to that one instance). */
 export function createOverride(vcal: Component, master: Component, target: Occurrence, zone: string): Component {
   const ovr = cloneComponent(master);
   for (const name of ['rrule', 'rdate', 'exdate', 'exrule', 'duration']) ovr.removeAllProperties(name);
-  setTimeProp(ovr, 'recurrence-id', recurrenceValue(master, target, zone));
+  const rid = recurrenceValue(master, target, zone);
+  setTimeProp(ovr, 'recurrence-id', rid);
   const wz = zoneOfTime(startTimeOf(master), zone);
-  writeTimes(
-    ovr,
-    { allDay: target.allDay, start: target.start, end: target.end, ...(target.allDay ? { startYmd: target.startYmd, endYmd: target.endYmd } : {}), endGiven: false },
-    wz,
-  );
+  if (target.allDay) {
+    writeTimes(ovr, { allDay: true, start: target.start, end: target.end, startYmd: target.startYmd, endYmd: target.endYmd, endGiven: false }, wz);
+  } else {
+    // It starts where the instance does, written the same way (see recurrenceValue), and keeps its length.
+    ovr.removeAllProperties('duration');
+    setTimeProp(ovr, 'dtstart', rid.clone());
+    setTimeProp(ovr, 'dtend', eventTimes(instantOf(rid, zone), new Date(instantOf(rid, zone).getTime() + target.end.getTime() - target.start.getTime()), wz, false).end);
+  }
   vcal.addSubcomponent(ovr);
   return ovr;
 }
@@ -311,18 +337,18 @@ function cannotShift(rule: Recur, why: string): AppleToolError {
 }
 
 /**
- * Refuse to move, split or cut short a series that lists some instances as
- * periods (RDATE;VALUE=PERIOD, each with a length of its own): those values
- * are read, but not rewritten here, and keeping them as they were would
- * leave them behind a move or on the wrong side of a split. Nothing is
- * changed.
+ * Refuse to retime, split or cut short a series that lists some instances
+ * as periods (RDATE;VALUE=PERIOD, each with a start and length of its own):
+ * those values are read, but not rewritten here, and keeping them as they
+ * were would leave them behind a move, out of a new length, or on the wrong
+ * side of a split. Nothing is changed.
  */
 function refusePeriodDates(master: Component): void {
   if (!hasPeriodDates(master)) return;
   throw new AppleToolError(
     'UNSUPPORTED',
-    'calendar: this series lists some occurrences as time periods (RDATE;VALUE=PERIOD), which this server can read but cannot move, split or cut short. Nothing was changed.',
-    { hint: 'Change or delete one occurrence (span "thisEvent"), change the whole series without moving it, or make this change in Apple Calendar.' },
+    'calendar: this series lists some occurrences as time periods (RDATE;VALUE=PERIOD), each with its own start and length, which this server can read but cannot retime, split or cut short. Nothing was changed.',
+    { hint: 'Change or delete one occurrence (span "thisEvent"), change the whole series\' details other than its times, or make this change in Apple Calendar.' },
   );
 }
 
@@ -375,57 +401,59 @@ export const SHIFT_CHECK_DAYS = 3653;
 
 /**
  * A series' first instances — at most `max`, none on or after the day
- * `horizon` (YYYY-MM-DD) — and the instance that stopped the walk there
- * (`stop`; absent when the series ended first). Bounded by days as well as by
- * count because ical.js has no loop limits: a sparse rule a listing walks
- * happily (Feb 29 when it is a Monday) walked to 400 instances runs through
- * millennia of calendar in one synchronous call. The walk stops at the first
- * instance past a bound, so it costs at most one of the rule's own gaps.
+ * `horizon` (YYYY-MM-DD) — the instance that stopped the walk there (`stop`;
+ * absent when the series ended first), and whether the walk came in exact
+ * order (see SeriesWalk). Bounded by days as well as by count because ical.js
+ * has no loop limits: a sparse rule a listing walks happily (Feb 29 when it
+ * is a Monday) walked to 400 instances runs through millennia of calendar in
+ * one synchronous call. The walk stops at the first instance past a bound, so
+ * it costs at most one of the rule's own gaps.
  */
-function leadingInstances(master: Component, zone: string, max: number, horizon: string): { instances: Time[]; stop?: Time } {
+function leadingInstances(master: Component, zone: string, max: number, horizon: string): { instances: Time[]; stop?: Time; exact: boolean } {
   const next = seriesWalker(master, zone);
   const instances: Time[] = [];
   for (let t = next(); t; t = next()) {
-    if (instances.length >= max || ymdOf(t) >= horizon) return { instances, stop: t };
+    if (instances.length >= max || ymdOf(t) >= horizon) return { instances, stop: t, exact: next.exact };
     instances.push(t);
   }
-  return { instances };
+  return { instances, exact: next.exact };
 }
 
 /**
- * Days of slack at a cut: ical.js orders a DATE or floating value as if it
- * were UTC, so in a series that mixes them with fixed values the walk's
- * order can stray from the days' by up to a day.
+ * Days of slack at a cut when a walk's order can stray (see SeriesWalk):
+ * ical.js orders a DATE or floating value as if it were UTC, up to a day off.
  */
 const CUT_SLACK_DAYS = 2;
 
 /**
  * `checkShifted` over a bounded sample: `sample` is the old series' leading
  * instances and `shift` how each one moves. Every instance the walk did not
- * read comes after `sample.stop`, so it moves to that one's day or later
- * (less the slack): the days before that are compared, as sorted lists, with
- * the rewritten series' days before it — read to a day past it, so a stray
- * one is not missed. The rewritten series is walked only until it has shown
- * one day more than expected.
+ * read comes after `sample.stop`, so it moves to that one's day or later:
+ * the days of natural instances before that (less CUT_SLACK_DAYS when either
+ * series' walk can stray) are compared, as sorted lists, with the rewritten
+ * series' — read to the stop's day, so a stray one is not missed. Only days:
+ * not times of day, and not overrides. The rewritten series is walked only
+ * until it has shown one day more than expected.
  */
 function checkShiftedSample(
-  sample: { instances: Time[]; stop?: Time },
+  sample: { instances: Time[]; stop?: Time; exact: boolean },
   shift: (t: Time) => Time,
   master: Component,
   rule: Recur | undefined,
   zone: string,
 ): void {
-  const moved = sample.instances.map((t) => ymdOf(shift(t))).sort();
-  const before = sample.stop && addDaysYmd(ymdOf(shift(sample.stop)), -CUT_SLACK_DAYS);
-  const expected = before === undefined ? moved : moved.filter((day) => day < before);
   const next = seriesWalker(master, zone);
+  const slack = sample.exact && next.exact ? 0 : CUT_SLACK_DAYS;
+  const moved = sample.instances.map((t) => ymdOf(shift(t))).sort();
+  const before = sample.stop && addDaysYmd(ymdOf(shift(sample.stop)), -slack);
+  const expected = before === undefined ? moved : moved.filter((day) => day < before);
   const actual: string[] = [];
   while (actual.length <= expected.length) {
     const t = next();
     if (!t) break;
     const day = ymdOf(t);
     if (before === undefined || day < before) actual.push(day);
-    else if (day >= addDaysYmd(before, CUT_SLACK_DAYS)) break;
+    else if (day >= addDaysYmd(before, slack)) break;
   }
   checkShifted(expected, actual.sort(), rule);
 }
@@ -474,8 +502,7 @@ export function editSeries(e: SeriesEdit): string | undefined {
   const touched = new Set<Component>([master]);
 
   if (times) {
-    // A new length alone leaves every instance where it was (a PERIOD keeps its own length); a new start or zone moves them.
-    if (e.timeInput.startDate !== undefined || e.timeInput.timeZone !== undefined) refusePeriodDates(master);
+    refusePeriodDates(master);
     // The instances before the change, to check the rewritten series against (see checkShifted).
     const sample = leadingInstances(master, zone, SHIFT_CHECK_INSTANCES, addDaysYmd(ymdOf(mStart), SHIFT_CHECK_DAYS));
     const oldWz = zoneOfTime(mStart, zone);
@@ -484,12 +511,15 @@ export function editSeries(e: SeriesEdit): string | undefined {
     const moved = e.timeInput.startDate !== undefined;
     const ref = target.recurrenceTime;
     const refYmd = ref ? ymdOf(ref) : (target.startYmd as string);
-    const refStart = ref ? instantOf(ref, zone) : target.start;
     const deltaDays = moved && allDay ? daysBetween(refYmd, times.startYmd as string) : 0;
-    const refWall = allDay ? 0 : wallSeconds(refStart, oldWz);
-    const deltaWall = allDay ? 0 : wallSeconds(moved ? times.start : refStart, newWz) - refWall;
-    // Every instance has the same time of day, so the shift moves each one by the same number of calendar days.
-    const dayShift = allDay ? deltaDays : Math.floor((refWall + deltaWall) / 86_400) - Math.floor(refWall / 86_400);
+    // Wall clocks from the values' own fields where they are written in the zone (see recurrenceValue).
+    const wallIn = (wz: WriteZone) => (ref ? wallOf(ref, wz, zone) : wallSeconds(target.start, wz));
+    const refWall = allDay ? 0 : wallIn(oldWz);
+    const deltaWall = allDay ? 0 : (moved ? wallSeconds(times.start, newWz) : wallIn(newWz)) - refWall;
+    // The rule's instances share DTSTART's time of day, so they move by the calendar days DTSTART does — not by the
+    // target's, which (an RDATE at another time) can cross midnight when they do not.
+    const startWall = allDay ? 0 : wallOf(mStart, oldWz, zone);
+    const dayShift = allDay ? deltaDays : Math.floor((startWall + deltaWall) / 86_400) - Math.floor(startWall / 86_400);
     const rule = ruleOf(master);
     const shifted = rule ? shiftRule(rule, dayShift, deltaWall % 86_400 !== 0) : undefined;
     if (shifted?.note) e.notes?.push(shifted.note);
@@ -502,7 +532,7 @@ export function editSeries(e: SeriesEdit): string | undefined {
         c.adjust(allDay ? deltaDays : dayShift, 0, 0, 0);
         return c;
       }
-      return wallTime(new Date((wallSeconds(instantOf(t, zone), oldWz) + deltaWall) * 1000), newWz);
+      return wallTime(new Date((wallOf(t, oldWz, zone) + deltaWall) * 1000), newWz);
     };
     // Lengths: the series keeps its own unless endDate was given.
     const oldDays = allDay ? daysBetween(ymdOf(mStart), ymdOf(mEnd)) : 0;
@@ -582,7 +612,7 @@ export function occInstant(occ: string, zone: string): Date {
 
 /** Whether the series has no instance before the occurrence (so "this and following" means "all"). */
 export function isFirstInstance(master: Component, occ: string, zone: string): boolean {
-  const first = seriesWalker(master, zone)();
+  const first = firstInstance(master, zone);
   return !first || instantOf(first, zone).getTime() >= occInstant(occ, zone).getTime();
 }
 
@@ -672,8 +702,12 @@ export function continuationSeries(
   const from = (t: Time) => (instantOf(t, zone).getTime() >= at.getTime() ? t : undefined);
   rewriteDates(next, 'exdate', from);
   rewriteDates(next, 'rdate', from);
-  // Without an RRULE the old DTSTART is an instance like any RDATE (seriesWalker): one after the split goes with it.
-  if (!rule && instantOf(start, zone).getTime() > at.getTime()) addTimeProp(next, 'rdate', start.clone());
+  // Without an RRULE the old DTSTART is an instance like any RDATE (seriesWalker): one after the split goes with it —
+  // unless an RDATE already names it, which raw ical.js (other clients) would list twice.
+  const key = occKey(start, zone);
+  if (!rule && instantOf(start, zone).getTime() > at.getTime() && !timeValues(next, 'rdate').some((t) => occKey(t, zone) === key)) {
+    addTimeProp(next, 'rdate', start.clone());
+  }
   const overrides = carried.map((ovr) => {
     const c = cloneComponent(ovr);
     c.updatePropertyWithValue('uid', opts.uid);
