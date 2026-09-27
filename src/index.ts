@@ -20,6 +20,13 @@ if (process.argv[2] === 'music-auth') {
   process.exit(await runMusicAuthCli(process.argv.slice(3)));
 }
 
+// `npx apple-icloud-mcp doctor` — the apple_healthcheck report in a
+// terminal: which services are configured and whether Apple accepts them.
+if (process.argv[2] === 'doctor') {
+  const [{ runDoctor }, { HEALTH_PROBES }] = await Promise.all([import('./doctor.js'), import('./registry.js')]);
+  process.exit(await runDoctor(process.argv.slice(3), HEALTH_PROBES));
+}
+
 const { REGISTRARS } = await import('./registry.js');
 
 await runMcp({

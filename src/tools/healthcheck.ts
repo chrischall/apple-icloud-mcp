@@ -52,50 +52,59 @@ export function registerHealthcheckTool(server: McpServer, probes: readonly Heal
         .describe('Only check these services (default: every enabled service).'),
     }),
     annotations: { ...ANNOTATIONS.read, idempotentHint: true },
-    handler: async (args) => {
-      const { enabled, unknown } = getEnabledServices();
-      const wanted = new Set<ServiceName>(args.services ?? SERVICES);
-      const selected = probes.filter((p) => wanted.has(p.service) && enabled.has(p.service));
-      const results = await runProbes(selected);
-      const disabled = [...wanted].filter((s) => !enabled.has(s));
-      // An enabled service with no probe wired in must not vanish from the
-      // report: a missing line reads as "nothing to check", not "not checked".
-      const unchecked = [...wanted].filter((s) => enabled.has(s) && !selected.some((p) => p.service === s));
-      const ok = results.every((r) => !r.configured || r.ok === true);
-      const tzRaw = readEnvVar('DISPLAY_TZ');
-      const zone = getDisplayTimeZone();
-      // Validity, not equality: getDisplayTimeZone returns the CANONICAL
-      // spelling, so `america/new_york` is honoured as `America/New_York`.
-      const tzFromEnv = tzRaw !== undefined && isValidTimeZone(tzRaw);
-      return jsonResponse({
-        ok,
-        version: VERSION,
-        summary: {
-          working: results.filter((r) => r.ok === true).map((r) => r.service),
-          failing: results.filter((r) => r.configured && r.ok !== true).map((r) => r.service),
-          notConfigured: results.filter((r) => !r.configured).map((r) => r.service),
-          ...(disabled.length ? { disabled } : {}),
-          ...(unchecked.length ? { unchecked } : {}),
-        },
-        config: {
-          writeMode: getWriteMode(),
-          displayTimeZone: zone,
-          displayTimeZoneSource: tzFromEnv ? 'DISPLAY_TZ' : 'system',
-          // A DISPLAY_TZ that was set but refused must say so: otherwise every
-          // time is quietly rendered in the system zone (UTC on a hosted child).
-          ...(tzRaw !== undefined && !tzFromEnv
-            ? {
-                displayTimeZoneWarning:
-                  `DISPLAY_TZ "${tzRaw}" is not an IANA time zone name (e.g. America/New_York); using the system zone ${zone} instead.`,
-              }
-            : {}),
-          ...(unknown.length ? { unknownServicesInAPPLE_SERVICES: unknown } : {}),
-        },
-        services: results,
-      });
-    },
+    handler: async (args) => jsonResponse(await healthReport(probes, args.services)),
   });
 }
+
+/**
+ * The healthcheck report: every wanted, enabled service probed (see
+ * `runProbes`), plus the configuration facts that change what the tools do.
+ * Shared by `apple_healthcheck` and the `doctor` CLI, so both always agree.
+ */
+export async function healthReport(probes: readonly HealthProbe[], services?: readonly ServiceName[]) {
+  const { enabled, unknown } = getEnabledServices();
+  const wanted = new Set<ServiceName>(services ?? SERVICES);
+  const selected = probes.filter((p) => wanted.has(p.service) && enabled.has(p.service));
+  const results = await runProbes(selected);
+  const disabled = [...wanted].filter((s) => !enabled.has(s));
+  // An enabled service with no probe wired in must not vanish from the
+  // report: a missing line reads as "nothing to check", not "not checked".
+  const unchecked = [...wanted].filter((s) => enabled.has(s) && !selected.some((p) => p.service === s));
+  const ok = results.every((r) => !r.configured || r.ok === true);
+  const tzRaw = readEnvVar('DISPLAY_TZ');
+  const zone = getDisplayTimeZone();
+  // Validity, not equality: getDisplayTimeZone returns the CANONICAL
+  // spelling, so `america/new_york` is honoured as `America/New_York`.
+  const tzFromEnv = tzRaw !== undefined && isValidTimeZone(tzRaw);
+  return {
+    ok,
+    version: VERSION,
+    summary: {
+      working: results.filter((r) => r.ok === true).map((r) => r.service),
+      failing: results.filter((r) => r.configured && r.ok !== true).map((r) => r.service),
+      notConfigured: results.filter((r) => !r.configured).map((r) => r.service),
+      ...(disabled.length ? { disabled } : {}),
+      ...(unchecked.length ? { unchecked } : {}),
+    },
+    config: {
+      writeMode: getWriteMode(),
+      displayTimeZone: zone,
+      displayTimeZoneSource: tzFromEnv ? 'DISPLAY_TZ' : 'system',
+      // A DISPLAY_TZ that was set but refused must say so: otherwise every
+      // time is quietly rendered in the system zone (UTC on a hosted child).
+      ...(tzRaw !== undefined && !tzFromEnv
+        ? {
+            displayTimeZoneWarning:
+              `DISPLAY_TZ "${tzRaw}" is not an IANA time zone name (e.g. America/New_York); using the system zone ${zone} instead.`,
+          }
+        : {}),
+      ...(unknown.length ? { unknownServicesInAPPLE_SERVICES: unknown } : {}),
+    },
+    services: results,
+  };
+}
+
+export type HealthReport = Awaited<ReturnType<typeof healthReport>>;
 
 /**
  * Every probe, each under its own timeout, results in `probes` order.
