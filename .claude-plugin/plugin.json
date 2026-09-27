@@ -1,7 +1,7 @@
 {
   "name": "apple-web-services",
   "displayName": "Apple Web Services",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search for Claude via MCP — runs anywhere, no Mac required",
   "author": {
     "name": "Chris Chall"

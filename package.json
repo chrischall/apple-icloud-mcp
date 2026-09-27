@@ -1,6 +1,6 @@
 {
   "name": "@chrischall/aws-mcp",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "mcpName": "io.github.chrischall/aws-mcp",
   "description": "Apple Web Services MCP server for Claude — Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search — developed and maintained by AI (Claude Code)",

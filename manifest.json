@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "aws-mcp",
   "display_name": "Apple Web Services",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search — through Apple's web services, so it runs anywhere",
   "author": {
     "name": "Chris Chall",
