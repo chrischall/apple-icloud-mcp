@@ -387,20 +387,33 @@ export function findOccurrence(parts: EventParts, occ: string, zone: string, max
   throw tooLong(`occurrence ${occ}`, maxSteps);
 }
 
+/** Where an instant falls among a series' RRULE instances (RDATE and EXDATE aside). */
+export interface RulePosition {
+  /** How many rule instances come before it — what a COUNT-bounded rule has used up when it is split there. */
+  before: number;
+  /** The first rule instance at or after it; undefined when the rule (or its COUNT/UNTIL) ends before it. */
+  next?: Date;
+}
+
 /**
- * How many RRULE instances fall before `before` — what a COUNT-bounded rule
- * has used up when it is split there. RDATE/EXDATE do not change COUNT.
+ * Where `at` falls among the RRULE's own instances. RDATE/EXDATE do not
+ * change COUNT, and an RDATE is not a rule instance: a series cannot be
+ * split at one, and ending the series before one must not extend a rule that
+ * already ends earlier.
  */
-export function countRuleInstancesBefore(master: Component, before: Date, zone: string, maxSteps: number = MAX_EXPANSION_STEPS): number {
+export function rulePosition(master: Component, at: Date, zone: string, maxSteps: number = MAX_EXPANSION_STEPS): RulePosition {
   const rule = ruleOf(master);
-  if (!rule) return 0;
+  if (!rule) return { before: 0 };
   refuseUnwalkable(master);
   const it = guarded(() => rule.iterator(startTimeOf(master)));
   let n = 0;
   for (let steps = 0; steps < maxSteps; steps++) {
     const t = guarded(() => it.next() as Time | null);
-    if (!t) return n;
-    if (roughStartMs(t) >= before.getTime() - ROUGH_MARGIN_MS && instantOf(t, zone).getTime() >= before.getTime()) return n;
+    if (!t) return { before: n };
+    if (roughStartMs(t) >= at.getTime() - ROUGH_MARGIN_MS) {
+      const instant = instantOf(t, zone);
+      if (instant.getTime() >= at.getTime()) return { before: n, next: instant };
+    }
     n += 1;
   }
   throw tooLong('the split point', maxSteps);

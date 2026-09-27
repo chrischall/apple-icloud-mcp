@@ -465,6 +465,72 @@ describe('apple_calendar_update_event', () => {
     expect(unknown.json.error).toMatchObject({ code: 'UNCONFIRMED_WRITE', message: expect.stringMatching(/may or may not have succeeded/) });
   });
 
+  it('says the new series was NOT created when the first write of a split has an unknown outcome', async () => {
+    // The truncating PUT lands on iCloud, but the reply is lost (503): the continuation is never attempted.
+    h.dav.hooks.push((m, url, body) => {
+      if (m === 'PUT' && url.endsWith('/s.ics') && body.includes('UNTIL=')) {
+        h.dav.put('work', 's.ics', body);
+        return { status: 503 };
+      }
+      return undefined;
+    });
+    const r = await h.call('apple_calendar_update_event', { eventId: 'work/s.ics#occ=2026-10-23T13:00:00Z', span: 'futureEvents', title: 'Later' });
+    expect(r.json.error).toMatchObject({
+      code: 'UNCONFIRMED_WRITE',
+      message: expect.stringMatching(
+        /^Ending the original series before this occurrence may or may not have happened, and the new series \(this occurrence and the ones after it\) was NOT created\. If the series now ends before this occurrence, those occurrences are gone and must be created again: /,
+      ),
+    });
+    expect(h.dav.requests.filter((q) => q.method === 'PUT' && q.url.includes('UID-'))).toEqual([]);
+
+    // A definite refusal of that write changed nothing, and says only that.
+    h.dav.hooks = [(m, url) => (m === 'PUT' && url.endsWith('/s.ics') ? { status: 403, body: '<error xmlns="DAV:"><need-privileges/></error>' } : undefined)];
+    const refused = await h.call('apple_calendar_update_event', { eventId: 'work/s.ics#occ=2026-10-20T13:00:00Z', span: 'futureEvents', title: 'Later' });
+    expect(refused.json.error.message).not.toMatch(/new series/);
+    expect(h.dav.requests.filter((q) => q.method === 'PUT' && q.url.includes('UID-'))).toEqual([]);
+  });
+
+  it('restores a split series with attendees at a SEQUENCE above the shortened one they were sent, and says they were emailed', async () => {
+    h.dav.put(
+      'work',
+      'team.ics',
+      ics(
+        ...NY_TZ,
+        ...vevent(
+          'UID:team',
+          'SEQUENCE:3',
+          'DTSTART;TZID=America/New_York:20261019T090000',
+          'DTEND;TZID=America/New_York:20261019T091500',
+          'RRULE:FREQ=DAILY;COUNT=10',
+          'SUMMARY:Standup',
+          'ORGANIZER:mailto:me@icloud.com',
+          'ATTENDEE;CN=Ann;PARTSTAT=ACCEPTED:mailto:ann@x.com',
+        ),
+        ...vevent('UID:team', 'SEQUENCE:7', 'RECURRENCE-ID;TZID=America/New_York:20261020T090000', 'DTSTART;TZID=America/New_York:20261020T100000', 'DTEND;TZID=America/New_York:20261020T101500', 'SUMMARY:Standup', 'ORGANIZER:mailto:me@icloud.com', 'ATTENDEE;CN=Ann;PARTSTAT=ACCEPTED:mailto:ann@x.com'),
+        ...vevent('UID:team', 'RECURRENCE-ID;TZID=America/New_York:20261025T090000', 'DTSTART;TZID=America/New_York:20261025T100000', 'DTEND;TZID=America/New_York:20261025T101500', 'SUMMARY:Standup', 'ORGANIZER:mailto:me@icloud.com', 'ATTENDEE;CN=Ann;PARTSTAT=ACCEPTED:mailto:ann@x.com'),
+      ),
+    );
+    h.dav.hooks.push((m, url) => (m === 'PUT' && url.includes('UID-') ? { status: 403, body: '<error xmlns="DAV:"><need-privileges/></error>' } : undefined));
+    const args = { eventId: 'work/team.ics#occ=2026-10-23T13:00:00Z', span: 'futureEvents', title: 'Later' };
+    const r = json(await callConfirmed(gated('apple_calendar_update_event'), args));
+    expect(r.error.message).toMatch(
+      /^The original series was restored, but iCloud had already emailed its attendees the shortened series, so they were sent that and then the restored one: creating the new series failed:/,
+    );
+    const puts = h.dav.requests.filter((q) => q.method === 'PUT' && q.url.endsWith('/team.ics'));
+    expect(puts).toHaveLength(2);
+    const [shortened, restore] = puts as [{ body: string }, { body: string }];
+    const sequences = (body: string) => eventParts(parseCalendar(body, 't')).overrides.concat(eventParts(parseCalendar(body, 't')).master!).map((c) => Number(c.getFirstPropertyValue('sequence')));
+    expect(shortened.body).toContain('UNTIL=');
+    // Every component of the restore is above the highest SEQUENCE the shortened series (or the original) carried.
+    expect(Math.max(...sequences(shortened.body))).toBe(7);
+    expect(sequences(restore.body)).toEqual([8, 8, 8]);
+    // Otherwise it is the original series: the rule, both overrides and the attendees are back.
+    const stored = eventParts(parseCalendar(h.dav.get('work', 'team.ics')!.ics, 't'));
+    expect(String(stored.master!.getFirstPropertyValue('rrule'))).toBe('FREQ=DAILY;COUNT=10');
+    expect(stored.overrides).toHaveLength(2);
+    expect(stored.master!.getAllProperties('attendee')).toHaveLength(1);
+  });
+
   it('moves an event with WebDAV MOVE, then applies the other changes at the new place', async () => {
     const r = await h.call('apple_calendar_update_event', { eventId: 'home/one.ics', calendar: 'Work', notes: 'moved' });
     expect(r.json).toMatchObject({ eventId: 'work/one.ics', verified: true, changes: { calendar: { before: 'Home', after: 'Work' }, notes: { before: null, after: 'moved' } } });
@@ -483,6 +549,24 @@ describe('apple_calendar_update_event', () => {
     const r = await h.call('apple_calendar_update_event', { eventId: 'home/one.ics', calendar: 'Work', title: 'x' });
     expect(r.json.error.message).toMatch(/^The event was moved to "Work", but applying the other changes failed:/);
     expect(h.dav.requests.find((q) => q.method === 'MOVE')!.headers['if-match']).toBe('*');
+  });
+
+  it('says the other changes were NOT applied when a MOVE has an unknown outcome', async () => {
+    h.dav.hooks.push((m) => (m === 'MOVE' ? { status: 504 } : undefined));
+    const r = await h.call('apple_calendar_update_event', { eventId: 'home/one.ics', calendar: 'Work', title: 'x' });
+    expect(r.json.error).toMatchObject({
+      code: 'UNCONFIRMED_WRITE',
+      message: expect.stringMatching(/^Moving the event to "Work" may or may not have happened, and the other changes were NOT applied: /),
+    });
+    expect(h.dav.requests.filter((q) => q.method === 'PUT')).toEqual([]);
+    // A move alone: the MOVE's own error says it all.
+    const alone = await h.call('apple_calendar_update_event', { eventId: 'home/one.ics', calendar: 'Work' });
+    expect(alone.json.error.code).toBe('UNCONFIRMED_WRITE');
+    expect(alone.json.error.message).not.toMatch(/other changes/);
+    // A definite refusal changed nothing.
+    h.dav.hooks = [(m) => (m === 'MOVE' ? { status: 403 } : undefined)];
+    const refused = await h.call('apple_calendar_update_event', { eventId: 'home/one.ics', calendar: 'Work', title: 'x' });
+    expect(refused.json.error.message).not.toMatch(/other changes/);
   });
 
   it('reports a concurrent change as "changed since read"', async () => {
@@ -578,6 +662,25 @@ describe('apple_calendar_delete_event', () => {
     const done = json(await callConfirmed(gated('apple_calendar_delete_event'), { eventId: 'home/one.ics' }));
     expect(done).toEqual({ deleted: true, verified: true, eventId: 'home/one.ics', applied: 'this event', title: 'One', when: expect.any(String), calendar: 'Home' });
     expect(h.dav.requests.find((q) => q.method === 'DELETE')!.headers['if-match']).toBe('"e1"');
+  });
+
+  it('refuses to rewrite an event that ALREADY holds a raw CR when deleting one or later occurrences', async () => {
+    // Stored by another app: a bare CR inside DESCRIPTION that a lenient parser would read as an ATTENDEE line — which
+    // the confirmation preview (built from the parsed event) never shows.
+    h.dav.put(
+      'work',
+      'cr.ics',
+      ics(
+        ...NY_TZ,
+        ...vevent('UID:cr', 'DTSTART;TZID=America/New_York:20261019T090000', 'DTEND;TZID=America/New_York:20261019T091500', 'RRULE:FREQ=DAILY;COUNT=10', 'SUMMARY:Standup', 'DESCRIPTION:hello\rATTENDEE:mailto:evil@example.com'),
+      ),
+    );
+    for (const span of ['thisEvent', 'futureEvents'] as const) {
+      // Refused before any preview or token: there is nothing it could confirm.
+      const r = await h.call('apple_calendar_delete_event', { eventId: 'work/cr.ics#occ=2026-10-22T13:00:00Z', span }, NO_ELICIT_CTX);
+      expect(r.json.error).toMatchObject({ code: 'INVALID_ARGUMENT', hint: expect.stringMatching(/the stored event already holds one/) });
+    }
+    expect(h.dav.writes()).toEqual([]);
   });
 
   it('deletes one occurrence with an EXDATE and checks it no longer exists', async () => {

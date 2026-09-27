@@ -16,6 +16,7 @@ import {
 import {
   applyField,
   changedFields,
+  checkShifted,
   continuationSeries,
   createOverride,
   editSeries,
@@ -316,6 +317,19 @@ describe('shiftRule', () => {
     expect(shiftRule(rule('FREQ=WEEKLY;BYDAY=MO,WE'), 1, false).rule.toString()).toBe('FREQ=WEEKLY;BYDAY=TU,TH');
     expect(shiftRule(rule('FREQ=WEEKLY;BYDAY=SU,MO'), -1, false).rule.toString()).toBe('FREQ=WEEKLY;BYDAY=SA,SU');
     expect(shiftRule(rule('FREQ=DAILY;BYDAY=FR'), 10, false).rule.toString()).toBe('FREQ=DAILY;BYDAY=MO');
+    expect(shiftRule(rule('FREQ=MONTHLY;BYDAY=MO'), 1, false).rule.toString()).toBe('FREQ=MONTHLY;BYDAY=TU');
+  });
+
+  it('turns the week start with the days of an every-Nth-week rule, so no day changes week', () => {
+    const moved = shiftRule(rule('FREQ=WEEKLY;INTERVAL=2;BYDAY=SA,SU'), 1, false);
+    expect(moved.rule.toString()).toBe('FREQ=WEEKLY;INTERVAL=2;BYDAY=SU,MO;WKST=TU');
+    expect(moved.note).toBe('The repeat days moved with it: SA,SU → SU,MO. Its weeks now start on TU instead of MO (WKST), so it keeps the same weeks.');
+    expect(shiftRule(rule('FREQ=WEEKLY;INTERVAL=3;BYDAY=MO;WKST=SU'), -1, false).rule.toString()).toBe('FREQ=WEEKLY;INTERVAL=3;BYDAY=SU;WKST=SA');
+    // Back to Monday, the default week start.
+    expect(shiftRule(rule('FREQ=WEEKLY;INTERVAL=2;BYDAY=SA;WKST=SU'), 1, false).rule.toString()).toBe('FREQ=WEEKLY;INTERVAL=2;BYDAY=SU');
+    // Every week, or every other day: the week start plays no part and is left alone.
+    expect(shiftRule(rule('FREQ=WEEKLY;BYDAY=SA'), 1, false).rule.toString()).toBe('FREQ=WEEKLY;BYDAY=SU');
+    expect(shiftRule(rule('FREQ=DAILY;INTERVAL=2;BYDAY=SA'), 1, false).rule.toString()).toBe('FREQ=DAILY;INTERVAL=2;BYDAY=SU');
   });
 
   it('leaves a rule alone when nothing it pins moves', () => {
@@ -334,6 +348,8 @@ describe('shiftRule', () => {
       ['FREQ=YEARLY;BYMONTH=10;BYDAY=-1FR', 7, false, /\(BYMONTH, a numbered BYDAY\)/],
       ['FREQ=MONTHLY;BYDAY=MO,TU;BYSETPOS=-1', -1, false, /\(BYSETPOS\)/],
       ['FREQ=DAILY;BYHOUR=9,17', 0, true, /fixes the time of day \(BYHOUR\)/],
+      ['FREQ=MONTHLY;INTERVAL=2;BYDAY=MO', 1, false, /repeats on named days every 2 months/],
+      ['FREQ=YEARLY;INTERVAL=3;BYDAY=FR', -1, false, /repeats on named days every 3 years/],
     ];
     for (const [text, days, timeShifted, message] of cases) {
       expect(() => shiftRule(rule(text), days, timeShifted), text).toThrow(message);
@@ -413,6 +429,64 @@ describe('editSeries and the repeat rule', () => {
     expect(serialize(l.vcal)).toContain('UNTIL=20270712T130000Z');
     const occs = expandSeries(eventParts(l.vcal), { from: new Date('2027-07-01T00:00:00Z'), to: new Date('2027-07-20T00:00:00Z'), zone: NY }).occurrences;
     expect(occs.map((o) => o.occ)).toEqual(['2027-07-05T13:00:00Z', '2027-07-12T13:00:00Z']);
+  });
+});
+
+describe('editSeries and values of the other type', () => {
+  const keys = (vcal: Component) =>
+    expandSeries(eventParts(parseCalendar(serialize(vcal), 't')), { from: new Date('2026-09-01T00:00:00Z'), to: new Date('2027-03-01T00:00:00Z'), zone: NY }).occurrences.map(
+      (o) => o.startYmd ?? o.start.toISOString(),
+    );
+  const moveAll = (l: { vcal: Component; parts: EventParts }, occ: string, startDate: string) => {
+    const target = findOccurrence(l.parts, occ, NY) as Occurrence;
+    const input = { startDate };
+    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: l.parts.overrides, target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, now: NOW });
+  };
+
+  it('moves a DATE-TIME UNTIL of an all-day series by whole days, keeping the final occurrence', () => {
+    const l = load(...vevent('UID:a', 'DTSTART;VALUE=DATE:20261005', 'DTEND;VALUE=DATE:20261006', 'RRULE:FREQ=WEEKLY;UNTIL=20261026T035959Z'));
+    expect(keys(l.vcal)).toEqual(['2026-10-05', '2026-10-12', '2026-10-19', '2026-10-26']);
+    moveAll(l, '2026-10-05', '2026-10-07');
+    expect(serialize(l.vcal)).toContain('UNTIL=20261028T035959Z');
+    expect(keys(l.vcal)).toEqual(['2026-10-07', '2026-10-14', '2026-10-21', '2026-10-28']);
+  });
+
+  it('moves a DATE UNTIL or EXDATE of a timed series by the days its occurrences move', () => {
+    const u = load(
+      ...NY_TZ,
+      ...vevent('UID:t', 'DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000', 'RRULE:FREQ=WEEKLY;UNTIL=20261020'),
+    );
+    expect(keys(u.vcal)).toEqual(['2026-10-05T13:00:00.000Z', '2026-10-12T13:00:00.000Z', '2026-10-19T13:00:00.000Z']);
+    moveAll(u, '2026-10-05T13:00:00Z', '2026-10-06T09:00');
+    expect(keys(u.vcal)).toEqual(['2026-10-06T13:00:00.000Z', '2026-10-13T13:00:00.000Z', '2026-10-20T13:00:00.000Z']);
+
+    const x = load(
+      ...NY_TZ,
+      ...vevent('UID:x', 'DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000', 'RRULE:FREQ=WEEKLY;COUNT=4', 'EXDATE;VALUE=DATE:20261012'),
+    );
+    expect(keys(x.vcal)).toEqual(['2026-10-05T13:00:00.000Z', '2026-10-19T13:00:00.000Z', '2026-10-26T13:00:00.000Z']);
+    moveAll(x, '2026-10-05T13:00:00Z', '2026-10-06T09:00');
+    expect(serialize(x.vcal)).toContain('EXDATE;VALUE=DATE:20261013');
+    expect(keys(x.vcal)).toEqual(['2026-10-06T13:00:00.000Z', '2026-10-20T13:00:00.000Z', '2026-10-27T13:00:00.000Z']);
+  });
+});
+
+describe('checkShifted', () => {
+  const rule = ICAL.Recur.fromString('FREQ=MONTHLY');
+
+  it('accepts a series whose every instance moved by the shift', () => {
+    expect(() => checkShifted(['2026-10-31', '2026-12-31'], ['2026-10-31', '2026-12-31'], rule)).not.toThrow();
+    expect(() => checkShifted([], [], undefined)).not.toThrow();
+  });
+
+  it('refuses one that gains, drops or re-days an occurrence, naming the first', () => {
+    expect(() => checkShifted(['2026-10-31'], ['2026-10-31', '2026-11-30'], rule)).toThrow(
+      'occurrence 2 should become no occurrence, but the rewritten series would have one on 2026-11-30',
+    );
+    expect(() => checkShifted(['2026-10-31', '2026-12-01'], ['2026-10-31'], undefined)).toThrow(
+      'calendar: this series cannot be moved by moving its start: occurrence 2 should become an occurrence on 2026-12-01, but the rewritten series would have none',
+    );
+    expect(() => checkShifted(['2026-10-31'], ['2026-11-01'], rule)).toThrow(AppleToolError);
   });
 });
 

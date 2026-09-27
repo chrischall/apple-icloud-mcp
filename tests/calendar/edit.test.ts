@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { AppleToolError, InvalidArgumentError } from '../../src/errors.js';
 import { occurrenceFor, planDelete, planUpdate, type UpdateInput } from '../../src/calendar/edit.js';
 import { loadEvent } from '../../src/calendar/events.js';
+import { expandSeries } from '../../src/calendar/expand.js';
 import { eventParts, parseCalendar, textProp } from '../../src/calendar/ics.js';
 import { FakeCalDav, HOME, NOW, NY_TZ, ics, vevent } from './fake-caldav.js';
 
@@ -35,6 +36,9 @@ beforeEach(() => {
 
 const load = (id: string) => loadEvent(dav.context(), id, NY);
 const update = async (id: string, input: Partial<UpdateInput>) => planUpdate(await load(id), { span: 'thisEvent', ...input }, env);
+/** The `#occ=` keys a written body expands to between two dates. */
+const keysOf = (body: string, from = '2026-09-01', to = '2027-06-01') =>
+  expandSeries(eventParts(parseCalendar(body, 't')), { from: new Date(`${from}T00:00:00Z`), to: new Date(`${to}T00:00:00Z`), zone: NY }).occurrences.map((o) => o.occ);
 
 describe('planUpdate', () => {
   it('refuses requests that change nothing or misuse timeZone, and read-only calendars', async () => {
@@ -57,8 +61,9 @@ describe('planUpdate', () => {
     expect(p.puts[0]!.body).toContain('RRULE:FREQ=WEEKLY;BYDAY=TU,TH');
   });
 
-  it('refuses, before writing, an edit that would leave the occurrence off the series\' rule', async () => {
-    // Every other week, Monday and Sunday (weeks start Monday): moving the Sunday a day later lands it in an off week.
+  it('moves an every-other-week series across the week boundary by turning WKST with its days', async () => {
+    // Every other week, Monday and Sunday (weeks start Monday): moving the Sunday a day later puts it on a Monday, which
+    // with WKST=MO would start the NEXT (skipped) week. The week start turns with the days, so every week is kept.
     dav.put(
       'home',
       'alt.ics',
@@ -67,10 +72,108 @@ describe('planUpdate', () => {
         ...vevent('UID:a', 'DTSTART;TZID=America/New_York:20261019T090000', 'DTEND;TZID=America/New_York:20261019T100000', 'RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,SU;WKST=MO', 'SUMMARY:Alt'),
       ),
     );
-    await expect(update('home/alt.ics#occ=2026-10-25T13:00:00Z', { span: 'allEvents', startDate: '2026-10-26T09:00' })).rejects.toThrow(
+    const p = await update('home/alt.ics#occ=2026-10-25T13:00:00Z', { span: 'allEvents', startDate: '2026-10-26T09:00' });
+    expect(p.result.eventId).toBe('home/alt.ics#occ=2026-10-26T13:00:00Z');
+    expect(p.notes).toEqual(['The repeat days moved with it: MO,SU → TU,MO. Its weeks now start on TU instead of MO (WKST), so it keeps the same weeks.']);
+    expect(p.puts[0]!.body).toContain('RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,MO;WKST=TU');
+    expect(keysOf(p.puts[0]!.body, '2026-10-01', '2026-11-20')).toEqual([
+      '2026-10-20T13:00:00Z',
+      '2026-10-26T13:00:00Z',
+      '2026-11-03T14:00:00Z',
+      '2026-11-09T14:00:00Z',
+      '2026-11-17T14:00:00Z',
+    ]);
+  });
+
+  it('moves an every-other-weekend series a day later without orphaning its exclusion', async () => {
+    dav.put(
+      'home',
+      'wk.ics',
+      ics(
+        ...NY_TZ,
+        ...vevent(
+          'UID:wk',
+          'DTSTART;TZID=America/New_York:20261003T100000',
+          'DTEND;TZID=America/New_York:20261003T110000',
+          'RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=SA,SU',
+          'EXDATE;TZID=America/New_York:20261018T100000',
+          'SUMMARY:Weekend',
+        ),
+      ),
+    );
+    expect(keysOf(dav.get('home', 'wk.ics')!.ics, '2026-10-01', '2026-11-20')).toEqual([
+      '2026-10-03T14:00:00Z',
+      '2026-10-04T14:00:00Z',
+      '2026-10-17T14:00:00Z',
+      '2026-10-31T14:00:00Z',
+      '2026-11-01T15:00:00Z',
+      '2026-11-14T15:00:00Z',
+      '2026-11-15T15:00:00Z',
+    ]);
+    const p = await update('home/wk.ics#occ=2026-10-03T14:00:00Z', { span: 'allEvents', startDate: '2026-10-04T10:00' });
+    expect(p.puts[0]!.body).toContain('EXDATE;TZID=America/New_York:20261019T100000');
+    // Every occurrence one wall-clock day later; the excluded Sunday Oct 18 is now the excluded Monday Oct 19.
+    expect(keysOf(p.puts[0]!.body, '2026-10-01', '2026-11-20')).toEqual([
+      '2026-10-04T14:00:00Z',
+      '2026-10-05T14:00:00Z',
+      '2026-10-18T14:00:00Z',
+      '2026-11-01T15:00:00Z',
+      '2026-11-02T15:00:00Z',
+      '2026-11-15T15:00:00Z',
+      '2026-11-16T15:00:00Z',
+    ]);
+  });
+
+  it('refuses, before writing, a series move that would leave the occurrence off the rule or change the others', async () => {
+    // Monthly on the 30th (no February): moved a day later it would repeat on the 31st, which most months lack.
+    dav.put('home', 'm30.ics', ics(...NY_TZ, ...vevent('UID:m', 'DTSTART;TZID=America/New_York:20261030T090000', 'DTEND;TZID=America/New_York:20261030T100000', 'RRULE:FREQ=MONTHLY', 'SUMMARY:Rent')));
+    // Nov 30 → Dec 1: the rewritten series (from Oct 31, monthly) has no Dec 1 at all.
+    await expect(update('home/m30.ics#occ=2026-11-30T14:00:00Z', { span: 'allEvents', startDate: '2026-12-01T09:00' })).rejects.toThrow(
       /would no longer fall on the series' repeat rule.*Nothing was changed/,
     );
-    await expect(update('home/alt.ics#occ=2026-10-25T13:00:00Z', { span: 'allEvents', startDate: '2026-10-26T09:00' })).rejects.toThrow(AppleToolError);
+    // Oct 30 → Oct 31: the occurrence itself lands, but Nov 30 would become Dec 31 instead of Dec 1.
+    const moved = update('home/m30.ics#occ=2026-10-30T13:00:00Z', { span: 'allEvents', startDate: '2026-10-31T09:00' });
+    await expect(moved).rejects.toThrow(AppleToolError);
+    await expect(moved).rejects.toThrow(
+      'calendar: this series (FREQ=MONTHLY) cannot be moved by moving its start: occurrence 2 should become an occurrence on 2026-12-01, ' +
+        'but the rewritten series would have one on 2026-12-31, so occurrences would be gained or lost. Nothing was changed.',
+    );
+    // Only the time of day: every occurrence keeps its day.
+    const later = await update('home/m30.ics#occ=2026-10-30T13:00:00Z', { span: 'allEvents', startDate: '2026-10-30T11:00' });
+    expect(later.result.eventId).toBe('home/m30.ics#occ=2026-10-30T15:00:00Z');
+  });
+
+  it('refuses to split a series at an occurrence its rule does not produce (an RDATE)', async () => {
+    // A Monday series with an extra Wednesday, and one with an extra occurrence past its COUNT.
+    dav.put(
+      'home',
+      'm.ics',
+      ics(...NY_TZ, ...vevent('UID:m', 'DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000', 'RRULE:FREQ=WEEKLY;COUNT=6', 'RDATE;TZID=America/New_York:20261014T090000', 'SUMMARY:M')),
+    );
+    dav.put(
+      'home',
+      'c.ics',
+      ics(...NY_TZ, ...vevent('UID:c', 'DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000', 'RRULE:FREQ=WEEKLY;COUNT=3', 'RDATE;TZID=America/New_York:20261104T090000', 'SUMMARY:C')),
+    );
+    for (const id of ['home/m.ics#occ=2026-10-14T13:00:00Z', 'home/c.ics#occ=2026-11-04T14:00:00Z']) {
+      const refused = update(id, { span: 'futureEvents', title: 'T' });
+      await expect(refused).rejects.toThrow(AppleToolError);
+      await expect(refused).rejects.toThrow(/added to the series individually \(an RDATE\).*cannot be split at it\. Nothing was changed\./);
+      // One occurrence, or the whole series, is still fine.
+      expect((await update(id, { title: 'T' })).span).toBe('thisEvent');
+    }
+    // A rule occurrence after the RDATE still splits, and the RDATE stays with the earlier half.
+    const split = await update('home/m.ics#occ=2026-10-19T13:00:00Z', { span: 'futureEvents', title: 'T' });
+    expect(keysOf(split.puts[0]!.body)).toEqual(['2026-10-05T13:00:00Z', '2026-10-12T13:00:00Z', '2026-10-14T13:00:00Z']);
+    expect(keysOf(split.puts[1]!.body)).toEqual(['2026-10-19T13:00:00Z', '2026-10-26T13:00:00Z', '2026-11-02T14:00:00Z', '2026-11-09T14:00:00Z']);
+  });
+
+  it('splits a series of RDATEs only, listing the split occurrence once', async () => {
+    dav.put('home', 'r.ics', ics(...vevent('UID:r', 'DTSTART:20261019T130000Z', 'DTEND:20261019T140000Z', 'RDATE:20261022T130000Z,20261025T130000Z,20261028T130000Z', 'SUMMARY:R')));
+    const split = await update('home/r.ics#occ=2026-10-25T13:00:00Z', { span: 'futureEvents', title: 'T' });
+    expect(split.span).toBe('futureEvents');
+    expect(keysOf(split.puts[1]!.body)).toEqual(['2026-10-25T13:00:00Z', '2026-10-28T13:00:00Z']);
+    expect(keysOf(split.puts[0]!.body)).not.toContain('2026-10-25T13:00:00Z');
   });
 
   it('plans a single event: fields, times, a move, and a move alone', async () => {
@@ -182,6 +285,42 @@ describe('planDelete', () => {
     const future = planDelete(await load('work/s.ics#occ=2026-10-22T13:00:00Z'), 'futureEvents', env);
     expect(future.scope).toBe('this and all following occurrences');
     expect((future.op as { body: string }).body).toContain('UNTIL=20261022T125959Z');
+  });
+
+  it('futureEvents at an RDATE ends the series there without extending its rule', async () => {
+    // Weekly COUNT=3 (Oct 5, 12, 19) plus an RDATE on Wed Nov 4: rewriting COUNT as an UNTIL before Nov 4 would ADD
+    // Oct 26 and Nov 2 to a series being cut short.
+    dav.put(
+      'home',
+      'r.ics',
+      ics(...NY_TZ, ...vevent('UID:r', 'DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000', 'RRULE:FREQ=WEEKLY;COUNT=3', 'RDATE;TZID=America/New_York:20261104T090000', 'SUMMARY:R')),
+    );
+    const past = planDelete(await load('home/r.ics#occ=2026-11-04T14:00:00Z'), 'futureEvents', env);
+    expect((past.op as { body: string }).body).toContain('RRULE:FREQ=WEEKLY;COUNT=3');
+    expect(keysOf((past.op as { body: string }).body)).toEqual(['2026-10-05T13:00:00Z', '2026-10-12T13:00:00Z', '2026-10-19T13:00:00Z']);
+    // An RDATE among rule occurrences: the rule ends before it, so the later ones go too.
+    dav.put(
+      'home',
+      'm.ics',
+      ics(...NY_TZ, ...vevent('UID:m', 'DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000', 'RRULE:FREQ=WEEKLY;COUNT=6', 'RDATE;TZID=America/New_York:20261014T090000', 'SUMMARY:M')),
+    );
+    const mid = planDelete(await load('home/m.ics#occ=2026-10-14T13:00:00Z'), 'futureEvents', env);
+    expect(keysOf((mid.op as { body: string }).body)).toEqual(['2026-10-05T13:00:00Z', '2026-10-12T13:00:00Z']);
+  });
+
+  it('refuses to rewrite an event that already holds a raw CR (thisEvent / futureEvents), writing nothing', async () => {
+    dav.put(
+      'work',
+      'cr.ics',
+      ics(...NY_TZ, ...vevent('UID:cr', 'DTSTART;TZID=America/New_York:20261019T090000', 'DTEND;TZID=America/New_York:20261019T091500', 'RRULE:FREQ=DAILY;COUNT=10', 'SUMMARY:Standup\rATTENDEE:mailto:victim@x.com')),
+    );
+    for (const span of ['thisEvent', 'futureEvents'] as const) {
+      const loaded = await load('work/cr.ics#occ=2026-10-22T13:00:00Z');
+      expect(() => planDelete(loaded, span, env)).toThrow(InvalidArgumentError);
+      expect(() => planDelete(loaded, span, env)).toThrow(/already stored in the event/);
+    }
+    // The whole series is a plain DELETE, with no body to check.
+    expect(planDelete(await load('work/cr.ics'), 'allEvents', env).op.kind).toBe('delete');
   });
 
   it('master-less resources: removes overrides, and the resource when none is left', async () => {

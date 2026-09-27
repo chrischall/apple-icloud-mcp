@@ -384,6 +384,22 @@ describe('apple_calendar_find_free_time', () => {
     expect(late.json.notes).toContain('1 day(s) are not listed because their working hours fall outside the window or have passed.');
   });
 
+  it('with includeAllDay, blocks all-day events marked free too (Apple Calendar marks them free by default)', async () => {
+    h.dav.put('home', 'vacation.ics', ics(...vevent('UID:v', 'DTSTART;VALUE=DATE:20261027', 'DTEND;VALUE=DATE:20261029', 'TRANSP:TRANSPARENT', 'SUMMARY:Vacation')));
+    const args = { fromDate: '2026-10-26', daysAhead: 4, calendars: ['Home'] };
+    const blocked = await h.call('apple_calendar_find_free_time', { ...args, includeAllDay: true });
+    expect(blocked.json.days.map((d: { date: string; free: unknown[] }) => [d.date, d.free.length])).toEqual([
+      ['2026-10-26', 1],
+      ['2026-10-27', 0],
+      ['2026-10-28', 0],
+      ['2026-10-29', 1],
+    ]);
+    expect(blocked.json.notes).toContain('Busy = events not marked free (transparent), not cancelled and not declined by you; all-day events block their whole day, even ones marked free.');
+    // Without it, all-day events never block (marked free or not); a timed event marked free still never does.
+    const open = await h.call('apple_calendar_find_free_time', args);
+    expect(open.json.days.map((d: { date: string; free: unknown[] }) => d.free.length)).toEqual([1, 1, 1, 1]);
+  });
+
   it('refuses inverted hours, over-long windows and partial data', async () => {
     const hours = await h.call('apple_calendar_find_free_time', { workdayStart: '17:00', workdayEnd: '09:00' });
     expect(hours.json.error.message).toMatch(/workdayEnd must be later than workdayStart/);

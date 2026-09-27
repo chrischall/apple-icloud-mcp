@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { AppleToolError } from '../../src/errors.js';
 import {
   UnexpandableRuleError,
-  countRuleInstancesBefore,
   expandSeries,
   findOccurrence,
   isRecurringResource,
   overlaps,
+  rulePosition,
   ruleProblem,
   seriesWalker,
   singleOccurrence,
@@ -156,15 +156,19 @@ describe('findOccurrence', () => {
   });
 });
 
-describe('countRuleInstancesBefore', () => {
-  it('counts rule instances (EXDATE included, as COUNT does)', () => {
+describe('rulePosition', () => {
+  it('counts rule instances (EXDATE included, as COUNT does) and finds the next one', () => {
     const p = parts(...STANDUP);
     const master = p.master as Component;
-    expect(countRuleInstancesBefore(master, d('2026-10-23T13:00:00Z'), NY)).toBe(4);
-    expect(countRuleInstancesBefore(master, d('2027-01-01T00:00:00Z'), NY)).toBe(10);
-    expect(countRuleInstancesBefore(parts(...vevent('UID:x', 'DTSTART:20261020T130000Z', 'RDATE:20261021T130000Z')).master as Component, d('2030-01-01T00:00:00Z'), NY)).toBe(0);
+    expect(rulePosition(master, d('2026-10-23T13:00:00Z'), NY)).toEqual({ before: 4, next: d('2026-10-23T13:00:00Z') });
+    expect(rulePosition(master, d('2026-10-23T12:00:00Z'), NY)).toEqual({ before: 4, next: d('2026-10-23T13:00:00Z') });
+    expect(rulePosition(master, d('2027-01-01T00:00:00Z'), NY)).toEqual({ before: 10 });
+    expect(rulePosition(parts(...vevent('UID:x', 'DTSTART:20261020T130000Z', 'RDATE:20261021T130000Z')).master as Component, d('2030-01-01T00:00:00Z'), NY)).toEqual({ before: 0 });
+    // An RDATE is not a rule instance: past a COUNT, the rule has none left.
+    const extra = parts(...vevent('UID:r', 'DTSTART:20261005T130000Z', 'RRULE:FREQ=WEEKLY;COUNT=3', 'RDATE:20261104T140000Z')).master as Component;
+    expect(rulePosition(extra, d('2026-11-04T14:00:00Z'), NY)).toEqual({ before: 3 });
     const old = parts(...vevent('UID:o', 'DTSTART:20000101T000000Z', 'RRULE:FREQ=DAILY')).master as Component;
-    expect(() => countRuleInstancesBefore(old, d('2026-10-20T00:00:00Z'), NY, 10)).toThrow(/the split point could not be located/);
+    expect(() => rulePosition(old, d('2026-10-20T00:00:00Z'), NY, 10)).toThrow(/the split point could not be located/);
   });
 });
 
@@ -209,7 +213,7 @@ describe('rules that cannot be walked', () => {
     expect(() => findOccurrence(p, '2026-10-21T13:00:00Z', NY)).toThrow(/repeat rule cannot be expanded \(BYMONTH and BYMONTHDAY/);
     // An override is found without walking the rule at all.
     expect(findOccurrence(p, '2026-10-22T13:00:00Z', NY)).toMatchObject({ isOverride: true });
-    expect(() => countRuleInstancesBefore(p.master as Component, d('2026-10-22T13:00:00Z'), NY)).toThrow(UnexpandableRuleError);
+    expect(() => rulePosition(p.master as Component, d('2026-10-22T13:00:00Z'), NY)).toThrow(UnexpandableRuleError);
   });
 
   it('turns an ical.js failure (at the start or mid-walk) into a reported stop, keeping what it found', () => {
@@ -218,7 +222,7 @@ describe('rules that cannot be walked', () => {
     const r1 = expandSeries(malformed, { from: d('2026-10-19T00:00:00Z'), to: d('2026-10-26T00:00:00Z'), zone: NY });
     expect(r1).toMatchObject({ truncated: 'rule', ruleProblem: expect.stringMatching(/Malformed values/) });
     expect(r1.occurrences).toHaveLength(1);
-    expect(() => countRuleInstancesBefore(malformed.master as Component, d('2026-10-22T13:00:00Z'), NY)).toThrow(/Malformed values/);
+    expect(() => rulePosition(malformed.master as Component, d('2026-10-22T13:00:00Z'), NY)).toThrow(/Malformed values/);
     // ical.js gives up after 500 excluded instances in a row.
     const exdates = Array.from({ length: 600 }, (_, i) => `EXDATE:${new Date(Date.UTC(2026, 9, 21 + i, 13)).toISOString().replace(/[-:]|\.000/g, '')}`);
     const holey = parts(...vevent('UID:e', 'DTSTART:20261020T130000Z', 'DTEND:20261020T140000Z', 'RRULE:FREQ=DAILY', ...exdates));
@@ -241,6 +245,6 @@ describe('rules that cannot be walked', () => {
       ['1995-06-01', '2026-10-21', 'Moved far'],
     ]);
     expect(findOccurrence(p, '2026-10-21', NY)).toMatchObject({ startYmd: '2026-10-21', isOverride: false });
-    expect(countRuleInstancesBefore(p.master as Component, d('2026-10-21T04:00:00Z'), NY)).toBe(13442);
+    expect(rulePosition(p.master as Component, d('2026-10-21T04:00:00Z'), NY).before).toBe(13442);
   });
 });

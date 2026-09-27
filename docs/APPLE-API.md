@@ -70,8 +70,15 @@ build environment had no Apple credentials. The first live run is the real verif
   which is why those writes are confirm-gated. [DOC: DAV header LIVE; behaviour 3P]
 - MKCALENDAR is not offered (not in `Allow`); VJOURNAL and free-busy REPORT are unsupported.
 - Calendars the account shares out are detected from `CS:shared-owner` in the resourcetype; calendars shared
-  WITH the account from missing write privileges. [UNVERIFIED on iCloud — used to keep additive mode out of
-  shared calendars]
+  WITH the account from `CS:shared` in the resourcetype (the sharee's view in Apple's CalendarServer sharing
+  extension). Privileges (`current-user-privilege-set`) only decide `writable`: a read-only shared calendar is
+  refused as read-only, but a read-write one that iCloud listed WITHOUT `CS:shared` would pass as private.
+  [UNVERIFIED on iCloud — used to keep additive mode out of shared calendars]
+- Apple Calendar stores all-day events as "free" (`TRANSP:TRANSPARENT`) by default, so `find_free_time` lets
+  `includeAllDay` override TRANSP for all-day events. [UNVERIFIED]
+- An attendee's client ignores an update whose SEQUENCE is not above the one it holds, so the restore after a
+  failed series split carries a higher SEQUENCE than the shortened series iCloud already emailed. [DOC: RFC 5546
+  §2.1.4; whether iCloud's auto-scheduling emails both writes: UNVERIFIED]
 - **Reminders are not reachable over CalDAV** for any account migrated to the iOS 13+ Reminders
   (BusyCal, 2Do, DAVx5, python-caldav all agree). Only the private CloudKit web API reaches
   them, which needs the full Apple ID password and 2FA — deliberately not implemented.

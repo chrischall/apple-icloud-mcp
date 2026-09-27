@@ -1,6 +1,6 @@
 import { AppleToolError, InvalidArgumentError } from '../errors.js';
 import { parseDateInput, startOfDay, ymdInZone } from '../time.js';
-import { seriesWalker, type Occurrence } from './expand.js';
+import { rulePosition, seriesWalker, type Occurrence } from './expand.js';
 import {
   ICAL,
   WEEKDAYS,
@@ -289,6 +289,8 @@ export interface SeriesEdit {
   now: Date;
   /** Where to say what else changed with the series (its repeat days). */
   notes?: string[];
+  /** Where to queue the check that the series moved as a whole (`checkShifted`), to run after the caller's own; run at once when absent. */
+  checks?: Array<() => void>;
 }
 
 /** Wall-clock seconds of an instant in a write zone (UTC fields for UTC, local fields otherwise). */
@@ -328,10 +330,59 @@ export function shiftRule(rule: Recur, dayShift: number, timeShifted: boolean): 
   if (days.some((d) => !/^[A-Z]{2}$/i.test(d))) pinned.push('a numbered BYDAY');
   if (pinned.length > 0) throw cannotShift(rule, `fixes which dates it falls on (${pinned.join(', ')})`);
   if (days.length === 0) return { rule };
+  const freq = String(rule.freq);
+  const interval = rule.interval;
+  if (interval > 1 && (freq === 'MONTHLY' || freq === 'YEARLY')) {
+    // Every Nth month/year counts whole months/years: a day moved across the end of one lands in a skipped one.
+    throw cannotShift(rule, `repeats on named days every ${interval} ${freq === 'MONTHLY' ? 'months' : 'years'} (a day moved past the end of one would land in a skipped one)`);
+  }
+  const turn = (d: string) => WEEKDAYS[((WEEKDAYS.indexOf(d.toUpperCase() as (typeof WEEKDAYS)[number]) + dayShift) % 7 + 7) % 7] as string;
   const r = rule.clone();
-  const moved = days.map((d) => WEEKDAYS[((WEEKDAYS.indexOf(d.toUpperCase() as (typeof WEEKDAYS)[number]) + dayShift) % 7 + 7) % 7] as string);
+  const moved = days.map(turn);
   r.setComponent('BYDAY', moved);
-  return { rule: r, note: `The repeat days moved with it: ${days.join(',')} → ${moved.join(',')}.` };
+  let note = `The repeat days moved with it: ${days.join(',')} → ${moved.join(',')}.`;
+  if (freq === 'WEEKLY' && interval > 1) {
+    // Every other week counts weeks from WKST (default Monday): a day moved across that boundary lands in a skipped
+    // week. Turning the week start with the days keeps every occurrence in the week it belonged to.
+    const wkst = WEEKDAYS[(rule.wkst + 5) % 7] as string;
+    const next = turn(wkst);
+    r.wkst = ICAL.Recur.icalDayToNumericDay(next);
+    note += ` Its weeks now start on ${next} instead of ${wkst} (WKST), so it keeps the same weeks.`;
+  }
+  return { rule: r, note };
+}
+
+/** How many of a series' first instances `checkShifted` compares. */
+export const SHIFT_CHECK_INSTANCES = 400;
+
+function leadingInstances(master: Component): Time[] {
+  const next = seriesWalker(master);
+  const out: Time[] = [];
+  for (let t = next(); t && out.length < SHIFT_CHECK_INSTANCES; t = next()) out.push(t);
+  return out;
+}
+
+/**
+ * Refuse a series move whose rewritten series does not put every instance
+ * on its old day moved by the shift: `expected` is the old instances' days
+ * moved, `actual` the new series' (both its first instances, by wall-clock
+ * day). A rule that repeats by a calendar position the move cannot carry —
+ * monthly on the 30th moved to the 31st, yearly on Feb 29 — or a value the
+ * move could not follow otherwise gains, drops or re-days occurrences while
+ * its exceptions stay on the old ones. Checked in memory: nothing is written.
+ */
+export function checkShifted(expected: readonly string[], actual: readonly string[], rule: Recur | undefined): void {
+  const i = expected.findIndex((day, k) => actual[k] !== day);
+  const at = i >= 0 ? i : expected.length < actual.length ? expected.length : -1;
+  if (at < 0) return;
+  const was = expected[at] === undefined ? 'no occurrence' : `an occurrence on ${expected[at]}`;
+  const is = actual[at] === undefined ? 'none' : `one on ${actual[at]}`;
+  throw new AppleToolError(
+    'UNSUPPORTED',
+    `calendar: this series${rule ? ` (${rule.toString()})` : ''} cannot be moved by moving its start: occurrence ${at + 1} should become ${was}, ` +
+      `but the rewritten series would have ${is}, so occurrences would be gained or lost. Nothing was changed.`,
+    { hint: 'Change only the time of day, edit one occurrence (span "thisEvent"), or delete the series and create it again.' },
+  );
 }
 
 /**
@@ -353,6 +404,8 @@ export function editSeries(e: SeriesEdit): string | undefined {
   const allDay = mStart.isDate;
   let shift: (t: Time) => Time = (t) => t;
   const touched = new Set<Component>([master]);
+  // The instances before the change, to check the rewritten series against (see checkShifted).
+  const sample = times ? leadingInstances(master) : [];
 
   if (times) {
     const oldWz = zoneOfTime(mStart, zone);
@@ -371,9 +424,12 @@ export function editSeries(e: SeriesEdit): string | undefined {
     const shifted = rule ? shiftRule(rule, dayShift, deltaWall % 86_400 !== 0) : undefined;
     if (shifted?.note) e.notes?.push(shifted.note);
     shift = (t) => {
-      if (t.isDate) {
+      // Every value moves by the SERIES' day shift, whatever its own type: an all-day series can carry a DATE-TIME
+      // UNTIL/EXDATE (some writers emit UTC ones), a timed one a DATE EXDATE/UNTIL. Moving those by the other kind's
+      // delta (always 0) left them behind — dropping the final occurrence, or bringing an excluded one back.
+      if (t.isDate || allDay) {
         const c = t.clone();
-        c.adjust(deltaDays, 0, 0, 0);
+        c.adjust(allDay ? deltaDays : dayShift, 0, 0, 0);
         return c;
       }
       return wallTime(new Date((wallSeconds(instantOf(t, zone), oldWz) + deltaWall) * 1000), newWz);
@@ -421,6 +477,9 @@ export function editSeries(e: SeriesEdit): string | undefined {
       }
       touched.add(ovr);
     }
+    const check = () => checkShifted(sample.map((t) => ymdOf(shift(t))), leadingInstances(master).map(ymdOf), rule);
+    if (e.checks) e.checks.push(check);
+    else check();
   }
 
   for (const field of changedFields(e.fields)) {
@@ -466,7 +525,9 @@ export function truncateSeries(vcal: Component, master: Component, overrides: re
   const at = occInstant(occ, zone);
   const before = (t: Time) => instantOf(t, zone).getTime() < at.getTime();
   const rule = ruleOf(master);
-  if (rule) {
+  // A rule whose COUNT/UNTIL already ends before `occ` (an occurrence added by RDATE) stays as it is: replacing its
+  // COUNT by an UNTIL just before `occ` would EXTEND it, adding occurrences to a series being cut short.
+  if (rule && rulePosition(master, at, zone).next !== undefined) {
     const r = rule.clone();
     r.count = null;
     r.until = untilBefore(master, at, occ, zone);
