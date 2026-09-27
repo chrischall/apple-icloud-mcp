@@ -17,6 +17,7 @@ interface LockEntry {
   license?: string;
   dev?: boolean;
   devOptional?: boolean;
+  optional?: boolean;
   link?: boolean;
 }
 
@@ -26,7 +27,7 @@ interface LockEntry {
  * `devOptional` (a dev tool that is only an OPTIONAL peer of a runtime
  * package, never installed for a user).
  */
-function productionPackages(): Array<{ name: string; version: string; license: string | undefined }> {
+function productionPackages(): Array<{ name: string; version: string; license: string | undefined; optional: boolean }> {
   const lock = JSON.parse(readFileSync(join(ROOT, 'package-lock.json'), 'utf8')) as { packages: Record<string, LockEntry> };
   return Object.entries(lock.packages)
     .filter(([path, e]) => path !== '' && !e.dev && !e.devOptional && !e.link)
@@ -34,6 +35,7 @@ function productionPackages(): Array<{ name: string; version: string; license: s
       name: e.name ?? path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length),
       version: e.version,
       license: e.license,
+      optional: e.optional === true,
     }));
 }
 
@@ -63,8 +65,16 @@ describe('THIRD_PARTY_NOTICES.md', () => {
       const body = section(p.name, p.version);
       if (p.license) expect(body, `${p.name} license`).toContain(`- License: ${p.license}\n`);
       expect(NOTICES, `${p.name} table row`).toContain(`| ${p.name} | ${p.version} |`);
-      // A license file's text in a fenced block, or an explicit note that the package ships none.
-      expect(/```+text\n[\s\S]*?\S[\s\S]*?\n```+/.test(body) || body.includes('ships no license file'), `${p.name} text`).toBe(true);
+      // A license file's text in a fenced block, or an explicit note that the package ships none — or,
+      // for a package the lockfile marks OPTIONAL only, the generator's note that it was not installed.
+      // The same lockfile installs differently by npm version: npm 11 (CI's Node 26) skips an optional
+      // PEER dependency such as @fetchproxy/* (optional peers of mcp-utils) that npm 10 installs. A
+      // required package that is not installed makes the generator throw, so it never reaches here.
+      const text =
+        /```+text\n[\s\S]*?\S[\s\S]*?\n```+/.test(body) ||
+        body.includes('ships no license file') ||
+        (p.optional && body.includes('_An optional dependency that was not installed where this file was generated'));
+      expect(text, `${p.name} text`).toBe(true);
     }
   });
 
