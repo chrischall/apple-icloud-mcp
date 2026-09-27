@@ -42,7 +42,7 @@ describe('doctor', () => {
     const text = c.out.join('');
     expect(text).toContain(`apple-icloud-mcp ${VERSION} — Apple service check`);
     expect(text).toContain('Write mode: none · Display time zone: America/New_York (from DISPLAY_TZ)');
-    expect(text).toContain('  ✓ itunes    working (none needed · GET /search · 42 ms)');
+    expect(text).toContain('  ✓ itunes    working (42 ms)\n              credential: none needed\n              checked: GET /search');
     expect(text).toContain('note: rate limited to ~20 calls a minute');
     expect(text).toContain('  · music     not configured — set APPLE_MUSIC_WEB_USER_TOKEN');
     expect(text).toContain('Every configured service works (itunes).');
@@ -64,6 +64,40 @@ describe('doctor', () => {
     expect(c.out.join('')).not.toContain('mail');
   });
 
+  it('exits 1 when a named service is not configured, or left out by APPLE_SERVICES', async () => {
+    const unconfigured = capture();
+    expect(await runDoctor(['music'], [musicMissing, itunesOk], unconfigured.io)).toBe(1);
+    expect(unconfigured.out.join('')).toContain('No service is configured yet');
+
+    process.env.APPLE_SERVICES = 'itunes';
+    const disabled = capture();
+    expect(await runDoctor(['calendar'], [itunesOk], disabled.io)).toBe(1);
+    const text = disabled.out.join('');
+    expect(text).toContain('  - calendar  disabled by APPLE_SERVICES');
+    expect(text).toContain('Nothing was checked: calendar is left out by APPLE_SERVICES. Add it there to check.');
+    expect(text).not.toContain('set the variables');
+  });
+
+  it('leaves out a credential source of "none"', async () => {
+    const c = capture();
+    await runDoctor([], [fixed({ service: 'itunes', configured: true, credential: { source: 'none' }, ok: true })], c.io);
+    expect(c.out.join('')).not.toContain('credential: none');
+  });
+
+  it('keeps --json parseable when a redaction shape would eat a closing quote', async () => {
+    const cookie = fixed({
+      service: 'music',
+      configured: true,
+      ok: false,
+      error: { code: 'UPSTREAM_ERROR', message: 'sent Cookie: media-user-token=abcdefghijklmnop' },
+    });
+    const c = capture();
+    await runDoctor(['--json'], [cookie], c.io);
+    const out = c.out.join('');
+    expect(() => JSON.parse(out)).not.toThrow();
+    expect(out).not.toContain('abcdefghijklmnop');
+  });
+
   it('prints the raw report with --json', async () => {
     const c = capture();
     expect(await runDoctor(['--json'], [itunesOk], c.io)).toBe(0);
@@ -72,12 +106,13 @@ describe('doctor', () => {
     expect(report.summary.working).toEqual(['itunes']);
   });
 
-  it('refuses an unknown argument with usage on stderr, exit 2, and probes nothing', async () => {
+  it('refuses an unknown argument without echoing it, with usage on stderr, exit 2, and probes nothing', async () => {
     const c = capture();
     let probed = false;
     const spy: HealthProbe = { service: 'itunes', check: async () => ((probed = true), await itunesOk.check()) };
-    expect(await runDoctor(['icloud-drive'], [spy], c.io)).toBe(2);
-    expect(c.err.join('')).toContain('Unknown argument "icloud-drive"');
+    expect(await runDoctor(['--json', 'abcd-efgh-ijkl-mnop'], [spy], c.io)).toBe(2);
+    expect(c.err.join('')).toContain('Argument 2 is not a service name or option.');
+    expect(c.err.join('')).not.toContain('abcd-efgh-ijkl-mnop');
     expect(c.err.join('')).toContain('Usage: apple-icloud-mcp doctor');
     expect(c.out).toEqual([]);
     expect(probed).toBe(false);
@@ -120,7 +155,7 @@ describe('doctor', () => {
       process.stderr.write = originalErr;
     }
     expect(writes.join('')).toContain('✓ itunes');
-    expect(writes.join('')).toContain('Unknown argument "nope"');
+    expect(writes.join('')).toContain('Argument 1 is not a service name or option.');
   });
 
   it('checks every registered service by default (iTunes needs no credentials)', async () => {
@@ -143,6 +178,20 @@ describe('formatReport edge cases', () => {
     version: VERSION,
     config: { writeMode: 'all' as const, displayTimeZone: 'UTC', displayTimeZoneSource: 'system' as const },
   };
+
+  it('says when nothing was checked at all', () => {
+    const text = formatReport({ ...base, summary: { working: [], failing: [], notConfigured: [] }, services: [] });
+    expect(text).toContain('Nothing was checked.\n');
+  });
+
+  it('names every left-out service when several are', () => {
+    const text = formatReport({
+      ...base,
+      summary: { working: [], failing: [], notConfigured: [], disabled: ['maps', 'weather'] },
+      services: [],
+    });
+    expect(text).toContain('Nothing was checked: maps, weather are left out by APPLE_SERVICES. Add them there to check.');
+  });
 
   it('says when nothing is configured', () => {
     const text = formatReport({
@@ -174,6 +223,7 @@ describe('formatReport edge cases', () => {
     expect(text).toContain('Warning: APPLE_SERVICES names unknown services: drive');
     expect(text).toContain('  ✗ maps      FAILING — failed');
     expect(text).toContain('  ✓ weather   working\n');
+    expect(text).not.toContain('credential:');
     expect(text).toContain('  ? itunes    enabled, but no check exists for it');
     expect(text).toContain('2 configured services are failing: maps, weather.');
   });

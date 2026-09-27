@@ -451,18 +451,21 @@ Run **`apple_healthcheck`** first. For each service it reports whether credentia
 variables to set if not), whether Apple accepted them just now, the active write mode and the display time zone.
 
 The same check runs from a terminal, with no MCP client involved — useful before wiring the server into Claude,
-or to tell a credential problem from a client problem:
+or to tell a credential problem from a client problem. It reads the shell environment only, not the `env` block
+of `.mcp.json`, Claude Desktop's config or the extension's settings, so export the same values first:
 
 ```bash
-read -rs ICLOUD_APP_PASSWORD && export ICLOUD_APP_PASSWORD   # typed without echo, kept out of shell history
-export ICLOUD_USERNAME=you@icloud.com
+printf 'App-specific password: '; read -rs ICLOUD_APP_PASSWORD; echo   # not echoed, kept out of shell history
+export ICLOUD_APP_PASSWORD ICLOUD_USERNAME=you@icloud.com
 npx -y apple-icloud-mcp doctor                  # every enabled service
 npx -y apple-icloud-mcp doctor calendar mail    # only these
-npx -y apple-icloud-mcp doctor --json           # the raw apple_healthcheck report
+npx -y apple-icloud-mcp doctor --json           # the apple_healthcheck report as JSON
 ```
 
-It exits 0 when every configured service works and 1 when one fails. It sends each configured service one
-read-only request (the iCloud ones one at a time, so a revoked password is sent once), and prints no secrets.
+It exits 0 when every configured service works (and every service named on the command line is configured,
+enabled and working), 1 otherwise, and 2 for a usage error. It sends each configured service one read-only
+request (the iCloud ones one at a time, so a revoked password is sent once), and prints no secrets. From a
+source checkout, `node dist/index.js doctor` also reads the repo's `.env`.
 
 | Symptom | Likely cause |
 |---|---|

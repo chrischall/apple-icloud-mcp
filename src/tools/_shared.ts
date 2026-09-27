@@ -89,7 +89,7 @@ export function jsonErrorResponse(data: unknown): CallToolResult {
   return { content: [{ type: 'text', text: isJson(scrubbed) ? scrubbed : block.text }], isError: true };
 }
 
-function isJson(text: string): boolean {
+export function isJson(text: string): boolean {
   try {
     JSON.parse(text);
     return true;
@@ -99,7 +99,7 @@ function isJson(text: string): boolean {
 }
 
 /** A copy of `value` with every string (at any depth) scrubbed; other values unchanged. */
-function scrubDeep(value: unknown): unknown {
+export function scrubDeep(value: unknown): unknown {
   if (typeof value === 'string') return scrub(value);
   if (Array.isArray(value)) return value.map(scrubDeep);
   const proto = value !== null && typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
