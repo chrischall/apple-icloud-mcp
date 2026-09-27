@@ -7,7 +7,8 @@ description: This skill should be used when the user asks about Apple Music, the
 
 MCP server that reaches Apple Music, iCloud Calendar/Contacts/Mail, Apple Maps, WeatherKit and the iTunes
 Search API over the network — no Mac needed. Unofficial; not affiliated with Apple. On a Mac, `apple-swift-mcp`
-is a native companion that adds Reminders, Notes, Photos and Messages.
+is a native companion that adds Reminders, Notes, Photos and Messages, and manages Music.app playlists locally
+(rename, delete, remove/reorder tracks) with no tokens.
 
 - **npm:** [apple-icloud-mcp](https://www.npmjs.com/package/apple-icloud-mcp)
 - **Source:** [github.com/chrischall/apple-icloud-mcp](https://github.com/chrischall/apple-icloud-mcp)
