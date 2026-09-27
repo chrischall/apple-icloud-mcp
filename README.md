@@ -12,8 +12,9 @@ It talks to Apple over the network through Apple's own web APIs and standard pro
 IMAP/SMTP), so — unlike Mac-only Apple integrations such as
 [apple-swift-mcp](https://github.com/chrischall/apple-swift-mcp) — it runs anywhere: Linux, Windows, a
 container, or hosted on [mcp-host](#running-on-mcp-host) as a claude.ai connector. The two complement each other:
-`apple-swift-mcp` drives the Mac's own apps (Calendar, Reminders, Contacts, Mail, Messages, Notes, Photos, Maps),
-while `apple-icloud-mcp` reaches Apple's web services from anywhere and adds Apple Music, WeatherKit and iTunes.
+`apple-swift-mcp` drives the Mac's own apps (Calendar, Reminders, Contacts, Mail, Messages, Notes, Photos, Maps,
+and Music.app playlists), while `apple-icloud-mcp` reaches Apple's web services from anywhere and adds the Apple
+Music catalog, WeatherKit and iTunes.
 
 > [!NOTE]
 > **Unofficial.** This project is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iCloud,
@@ -209,6 +210,12 @@ The web player's own developer token is read from music.apple.com automatically 
 works with **no** Apple Developer account. It is unsupported by Apple and may stop working without notice; the
 tools that need it say so in their descriptions, and their answers report which backend (`official` or `web`)
 served them.
+
+> [!TIP]
+> **On a Mac, you may not need web-player mode at all.** [apple-swift-mcp](https://github.com/chrischall/apple-swift-mcp)
+> makes the same playlist edits — rename, delete, remove, reorder, sort, dedupe, move into folders — in the local
+> Music.app library through Music's own scripting, with no tokens or developer account. It works on songs already in
+> your library, so a catalog song still needs adding first (`apple_music_add_to_library` here).
 
 ## Running on mcp-host
 
