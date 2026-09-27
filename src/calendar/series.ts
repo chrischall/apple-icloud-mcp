@@ -374,46 +374,60 @@ export const SHIFT_CHECK_INSTANCES = 400;
 export const SHIFT_CHECK_DAYS = 3653;
 
 /**
- * A series' first instances: at most `max`, none on or after the day `before`
- * (YYYY-MM-DD) when given, and whether the walk reached the series' end.
- * Bounded by days as well as by count because ical.js has no loop limits: a
- * sparse rule a listing walks happily (Feb 29 when it is a Monday) walked to
- * 400 instances runs through millennia of calendar in one synchronous call.
- * The walk stops at the first instance past a bound, so it costs at most one
- * of the rule's own gaps beyond it.
+ * A series' first instances — at most `max`, none on or after the day
+ * `horizon` (YYYY-MM-DD) — and the instance that stopped the walk there
+ * (`stop`; absent when the series ended first). Bounded by days as well as by
+ * count because ical.js has no loop limits: a sparse rule a listing walks
+ * happily (Feb 29 when it is a Monday) walked to 400 instances runs through
+ * millennia of calendar in one synchronous call. The walk stops at the first
+ * instance past a bound, so it costs at most one of the rule's own gaps.
  */
-function leadingInstances(master: Component, zone: string, max: number, before?: string): { instances: Time[]; ended: boolean } {
+function leadingInstances(master: Component, zone: string, max: number, horizon: string): { instances: Time[]; stop?: Time } {
   const next = seriesWalker(master, zone);
   const instances: Time[] = [];
-  while (instances.length < max) {
-    const t = next();
-    if (!t) return { instances, ended: true };
-    if (before !== undefined && ymdOf(t) >= before) break;
+  for (let t = next(); t; t = next()) {
+    if (instances.length >= max || ymdOf(t) >= horizon) return { instances, stop: t };
     instances.push(t);
   }
-  return { instances, ended: false };
+  return { instances };
 }
 
 /**
+ * Days of slack at a cut: ical.js orders a DATE or floating value as if it
+ * were UTC, so in a series that mixes them with fixed values the walk's
+ * order can stray from the days' by up to a day.
+ */
+const CUT_SLACK_DAYS = 2;
+
+/**
  * `checkShifted` over a bounded sample: `sample` is the old series' leading
- * instances and `shift` how each one moves. A cut sample is complete only
- * BEFORE the day its last instance lands on (that day's later instances, and
- * the ones after it, were not read): the days before it are compared. The
- * shift keeps order, so no unread instance can land before that day.
+ * instances and `shift` how each one moves. Every instance the walk did not
+ * read comes after `sample.stop`, so it moves to that one's day or later
+ * (less the slack): the days before that are compared, as sorted lists, with
+ * the rewritten series' days before it — read to a day past it, so a stray
+ * one is not missed. The rewritten series is walked only until it has shown
+ * one day more than expected.
  */
 function checkShiftedSample(
-  sample: { instances: Time[]; ended: boolean },
+  sample: { instances: Time[]; stop?: Time },
   shift: (t: Time) => Time,
   master: Component,
   rule: Recur | undefined,
   zone: string,
 ): void {
-  const moved = sample.instances.map((t) => ymdOf(shift(t)));
-  const before = sample.ended ? undefined : moved[moved.length - 1];
-  if (!sample.ended && before === undefined) return; // nothing read within the bounds, nothing to compare
+  const moved = sample.instances.map((t) => ymdOf(shift(t))).sort();
+  const before = sample.stop && addDaysYmd(ymdOf(shift(sample.stop)), -CUT_SLACK_DAYS);
   const expected = before === undefined ? moved : moved.filter((day) => day < before);
-  const actual = leadingInstances(master, zone, expected.length + 1, before).instances.map(ymdOf);
-  checkShifted(expected, actual, rule);
+  const next = seriesWalker(master, zone);
+  const actual: string[] = [];
+  while (actual.length <= expected.length) {
+    const t = next();
+    if (!t) break;
+    const day = ymdOf(t);
+    if (before === undefined || day < before) actual.push(day);
+    else if (day >= addDaysYmd(before, CUT_SLACK_DAYS)) break;
+  }
+  checkShifted(expected, actual.sort(), rule);
 }
 
 /**

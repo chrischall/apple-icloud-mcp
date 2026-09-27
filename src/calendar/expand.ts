@@ -1,5 +1,5 @@
 import { AppleToolError, errorMessage } from '../errors.js';
-import { startOfDay } from '../time.js';
+import { daysInMonth, startOfDay } from '../time.js';
 import {
   ICAL,
   addDaysYmd,
@@ -97,9 +97,103 @@ export function ruleProblem(recur: Recur): string | undefined {
 
 function refuseUnwalkable(master: Component): void {
   for (const prop of master.getAllProperties('rrule')) {
-    const problem = ruleProblem(prop.getFirstValue() as Recur);
+    const recur = prop.getFirstValue() as Recur;
+    const problem = ruleProblem(recur) ?? sparseProblem(recur, startTimeOf(master));
     if (problem) throw new UnexpandableRuleError(problem);
   }
+}
+
+/** 400 Gregorian years: dates and weekdays repeat exactly after it (it is a whole number of weeks). */
+const CYCLE_DAYS = 146_097;
+/**
+ * How much walking ical.js may do between two instances of a DAILY or WEEKLY
+ * rule with day filters, in days stepped over with each step counting 30
+ * more: measured at about 7.5 µs a step plus 0.25 µs a day, this is a
+ * quarter of a second. (A daily Feb 29 on a Monday, up to 40 years apart, is
+ * under half of it.)
+ */
+export const MAX_GAP_COST = 1_000_000;
+const STEP_COST = 30;
+const WEEKDAY_NUMBERS: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+
+/** Month, day, days in that month and weekday (0 = Sunday) of every day of one cycle, from 1970-01-01. */
+let cycleTable: { month: Uint8Array; day: Uint8Array; monthLength: Uint8Array; weekday: Uint8Array } | undefined;
+
+function calendarCycle(): NonNullable<typeof cycleTable> {
+  if (cycleTable) return cycleTable;
+  const t = { month: new Uint8Array(CYCLE_DAYS), day: new Uint8Array(CYCLE_DAYS), monthLength: new Uint8Array(CYCLE_DAYS), weekday: new Uint8Array(CYCLE_DAYS) };
+  let [y, m, d] = [1970, 1, 1];
+  let length = daysInMonth(y, m);
+  for (let i = 0; i < CYCLE_DAYS; i++) {
+    [t.month[i], t.day[i], t.monthLength[i], t.weekday[i]] = [m, d, length, (4 + i) % 7]; // 1970-01-01 was a Thursday
+    if (++d > length) {
+      [d, m, y] = m === 12 ? [1, 1, y + 1] : [1, m + 1, y];
+      length = daysInMonth(y, m);
+    }
+  }
+  return (cycleTable = t);
+}
+
+const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+const sparseCache = new Map<string, string | undefined>();
+
+/**
+ * Why a DAILY or WEEKLY rule with day filters cannot be walked, or undefined.
+ * ical.js gives up on a MONTHLY/YEARLY rule that stops matching, but walks
+ * the days of these one step at a time, in ONE call, until one matches: a
+ * rule that never matches again spins forever (`FREQ=DAILY;INTERVAL=7;
+ * BYDAY=TU` from a Monday lands on Mondays only; `FREQ=WEEKLY;INTERVAL=20871;
+ * BYMONTH=6` on one date every 400 years), and one whose matches are ages
+ * apart costs seconds per instance. The days such a rule steps on repeat
+ * within one 400-year cycle, so walking that cycle once (without ical.js)
+ * finds the costliest gap between its instances (`MAX_GAP_COST`). Cached per
+ * rule and start, as listings build walkers often.
+ */
+export function sparseProblem(recur: Recur, dtstart: Time): string | undefined {
+  const freq = String(recur.freq);
+  const months = recur.getComponent('BYMONTH').map(Number);
+  const monthDays = recur.getComponent('BYMONTHDAY').map(Number);
+  const days = recur.getComponent('BYDAY').map((v) => WEEKDAY_NUMBERS[String(v).toUpperCase()] as number);
+  // A WEEKLY rule's BYDAY picks days in each week; only its BYMONTH filters them (ruleProblem refuses BYMONTHDAY there).
+  const filtered = freq === 'DAILY' ? months.length + monthDays.length + days.length > 0 : freq === 'WEEKLY' && months.length > 0;
+  if (!filtered) return undefined;
+  const tooFar = `FREQ=${freq} with day filters that skip too many of the days it steps on`;
+  const step = (freq === 'WEEKLY' ? 7 : 1) * recur.interval;
+  if (step > MAX_GAP_COST) return tooFar;
+  const origin = ((Math.floor(Date.UTC(dtstart.year, dtstart.month - 1, dtstart.day) / 86_400_000) % CYCLE_DAYS) + CYCLE_DAYS) % CYCLE_DAYS;
+  const key = `${recur.toString()}@${origin}`;
+  if (sparseCache.has(key)) return sparseCache.get(key);
+  const t = calendarCycle();
+  // The candidate days of one step, as offsets from DTSTART: the BYDAY days of its week (from WKST) for WEEKLY.
+  const dow = t.weekday[origin] as number;
+  const wkst = recur.wkst - 1; // ical.js numbers weekdays from 1 = Sunday
+  const inWeek = (w: number) => (w - wkst + 7) % 7;
+  const offsets = freq === 'WEEKLY' ? (days.length > 0 ? days : [dow]).map((w) => inWeek(w) - inWeek(dow)).sort((a, b) => a - b) : [0];
+  const matches = (i: number): boolean =>
+    (months.length === 0 || months.includes(t.month[i] as number)) &&
+    (freq === 'WEEKLY' ||
+      ((monthDays.length === 0 || monthDays.some((md) => (md > 0 ? md : (t.monthLength[i] as number) + 1 + md) === t.day[i])) &&
+        (days.length === 0 || days.includes(t.weekday[i] as number))));
+  const steps = CYCLE_DAYS / gcd(step, CYCLE_DAYS);
+  let first: { k: number; at: number } | undefined;
+  let last = { k: 0, at: 0 };
+  let costliest = 0;
+  const cost = (from: { k: number; at: number }, to: { k: number; at: number }) => (to.k - from.k) * STEP_COST + (to.at - from.at);
+  for (let k = 0; k < steps; k++) {
+    for (const off of offsets) {
+      const at = k * step + off;
+      if (!matches((((origin + at) % CYCLE_DAYS) + CYCLE_DAYS) % CYCLE_DAYS)) continue;
+      if (first === undefined) first = { k, at };
+      else costliest = Math.max(costliest, cost(last, { k, at }));
+      last = { k, at };
+    }
+  }
+  let problem: string | undefined;
+  if (first === undefined) problem = `FREQ=${freq} whose day filters never match a day it steps on`;
+  else if (Math.max(costliest, cost(last, { k: first.k + steps, at: first.at + steps * step })) > MAX_GAP_COST) problem = tooFar;
+  if (sparseCache.size >= 1000) sparseCache.clear();
+  sparseCache.set(key, problem);
+  return problem;
 }
 
 /** Run an ical.js step, turning its errors into `UnexpandableRuleError`. */

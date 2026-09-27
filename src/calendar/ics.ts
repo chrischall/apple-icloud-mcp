@@ -261,9 +261,44 @@ export function occKey(t: Time, zone: string): string {
 export function timeAt(instant: Date, wz: WriteZone): Time {
   const utc = ICAL.Time.fromJSDate(new Date(Math.floor(instant.getTime() / 1000) * 1000), true);
   if (wz.kind === 'utc') return utc;
-  if (wz.kind === 'tz') return utc.convertToZone(wz.tz);
+  if (wz.kind === 'tz') return zoneTime(utc, wz.tz);
   const p = zonedParts(instant, wz.zone);
   return ICAL.Time.fromData({ year: p.year, month: p.month, day: p.day, hour: p.hour, minute: p.minute, second: p.second, isDate: false });
+}
+
+/**
+ * `utc` as a wall-clock time in `tz`. Not ical.js's `convertToZone`: that
+ * reads the zone's offset at the UTC wall clock as though it were local
+ * time, so for the hours next to a DST change — half a day of them in a zone
+ * far from UTC — it wrote an event an hour off and read it back "verified".
+ *
+ * The offset in force is one that, read at the local time it gives, gives
+ * itself back; the candidates are those in force around the instant (two
+ * hours either side covers any change). ical.js reads a wall time a change
+ * SKIPS with the later, larger offset, so a skipped time can pass that test
+ * too — of two, the smaller offset is the real one. The first pass of an
+ * hour a change REPEATS passes with none (ical.js reads the second pass): it
+ * gets its true wall time, from the offset in force before the change.
+ */
+function zoneTime(utc: Time, tz: Timezone): Time {
+  const local = (offset: number, earlier = 0): Time => {
+    const t = ICAL.Time.fromData({ year: utc.year, month: utc.month, day: utc.day, hour: utc.hour, minute: utc.minute, second: utc.second, isDate: false }, tz);
+    t.adjust(0, 0, 0, offset - earlier);
+    return t;
+  };
+  /** The offset in force `earlier` seconds before the instant, settled from the UTC-wall-clock guess. */
+  const offsetNear = (earlier: number): number => {
+    let offset = tz.utcOffset(local(0, earlier));
+    for (let i = 0; i < 3; i++) {
+      const next = tz.utcOffset(local(offset, earlier));
+      if (next === offset) break;
+      offset = next;
+    }
+    return offset;
+  };
+  const candidates = [...new Set([offsetNear(0), offsetNear(7200), offsetNear(-7200)])].sort((a, b) => a - b);
+  const real = candidates.find((offset) => tz.utcOffset(local(offset)) === offset);
+  return local(real ?? offsetNear(7200));
 }
 
 /**

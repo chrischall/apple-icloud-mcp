@@ -173,6 +173,49 @@ describe('planUpdate', () => {
     expect(far.result.eventId).toBe('home/far.ics#occ=2044-02-29T16:00:00Z');
   });
 
+  it('checks a sparse series up to the instance that stopped the sample, catching a move that loses or adds occurrences', async () => {
+    // Every five years on the 28th: moved onto the 29th it would keep only the leap years (2033/2038/2043 lost).
+    dav.put('home', 'm60.ics', ics(...NY_TZ, ...vevent('UID:m60', 'DTSTART;TZID=America/New_York:20280228T090000', 'DTEND;TZID=America/New_York:20280228T100000', 'RRULE:FREQ=MONTHLY;INTERVAL=60', 'SUMMARY:M')));
+    await expect(update('home/m60.ics', { span: 'allEvents', startDate: '2028-02-29T09:00' })).rejects.toThrow(
+      /occurrence 2 should become an occurrence on 2033-03-01, but the rewritten series would have none.*Nothing was changed/,
+    );
+    // And the other way: from the 29th (only leap years) onto the 28th would ADD 2033/2038/2043.
+    dav.put('home', 'p60.ics', ics(...NY_TZ, ...vevent('UID:p60', 'DTSTART;TZID=America/New_York:20280229T090000', 'DTEND;TZID=America/New_York:20280229T100000', 'RRULE:FREQ=MONTHLY;INTERVAL=60', 'SUMMARY:P')));
+    await expect(update('home/p60.ics', { span: 'allEvents', startDate: '2028-02-28T09:00' })).rejects.toThrow(/occurrence 2 should become no occurrence, but the rewritten series would have one on 2033-02-28/);
+  });
+
+  it('does not refuse a sound move of a timed series that also holds a DATE value at the sample cut', async () => {
+    // ical.js orders the DATE (midnight, read as UTC) before the previous evening's 21:00 New York instance.
+    dav.put(
+      'home',
+      'dr.ics',
+      ics(...NY_TZ, ...vevent('UID:dr', 'DTSTART;TZID=America/New_York:20261019T210000', 'DTEND;TZID=America/New_York:20261019T220000', 'RRULE:FREQ=DAILY', 'RDATE;VALUE=DATE:20271121', 'SUMMARY:D')),
+    );
+    const p = await update('home/dr.ics', { span: 'allEvents', startDate: '2026-10-19T21:30' });
+    expect(p.puts[0]!.body).toContain('DTSTART;TZID=America/New_York:20261019T213000');
+  });
+
+  it('moves a late-evening series across DST changes by wall clock, neither refusing nor re-daying it', async () => {
+    // A daily 23:30 moved to 23:15: every occurrence keeps its day, also the ones next to a DST change.
+    dav.put('home', 'late.ics', ics(...NY_TZ, ...vevent('UID:late', 'DTSTART;TZID=America/New_York:20261019T233000', 'DTEND;TZID=America/New_York:20261019T234500', 'RRULE:FREQ=DAILY', 'SUMMARY:L')));
+    const p = await update('home/late.ics', { span: 'allEvents', startDate: '2026-10-19T23:15' });
+    expect(p.puts[0]!.body).toContain('DTSTART;TZID=America/New_York:20261019T231500');
+    // Weekdays at 23:45 from a Saturday, moved to 00:45 the same Saturday: the same day, so the same weekdays.
+    dav.put(
+      'home',
+      'wd.ics',
+      ics(...NY_TZ, ...vevent('UID:wd', 'DTSTART;TZID=America/New_York:20270313T234500', 'DTEND;TZID=America/New_York:20270314T000000', 'RRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR', 'SUMMARY:W')),
+    );
+    const wd = await update('home/wd.ics', { span: 'allEvents', startDate: '2027-03-13T00:45' });
+    expect(wd.puts[0]!.body).toContain('DTSTART;TZID=America/New_York:20270313T004500');
+    expect(wd.puts[0]!.body).toContain('RRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR');
+  });
+
+  it('refuses, at once, to move a series whose rule would spin ical.js forever', async () => {
+    dav.put('home', 'spin.ics', ics(...NY_TZ, ...vevent('UID:spin', 'DTSTART;TZID=America/New_York:20261019T090000', 'DTEND;TZID=America/New_York:20261019T100000', 'RRULE:FREQ=DAILY;INTERVAL=7;BYDAY=TU', 'SUMMARY:S')));
+    await expect(update('home/spin.ics', { span: 'allEvents', startDate: '2026-10-19T10:00' })).rejects.toThrow(/day filters never match a day it steps on/);
+  });
+
   it('compares a sample cut in the middle of a day only up to that day, so it does not refuse a sound move', async () => {
     // Twice a day from a 17:00 start: the 400th instance is a 09:00, so the sample stops before that day's 17:00.
     dav.put(

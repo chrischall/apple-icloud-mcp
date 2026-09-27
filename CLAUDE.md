@@ -132,7 +132,10 @@ end). A bare id on a recurring series is refused for single-occurrence edits; ne
 occurrence. Recurrences are expanded client-side with ical.js (iCloud's server `expand` breaks all-day
 events). ical.js has NO loop limits: VTIMEZONE rules that aren't plain yearly are swapped for the standard
 zone (an invitation-controlled TZ once hung the server), and rules it would spin on are refused before it
-sees them — keep those guards. `seriesWalker` doesn't trust ical.js's RecurExpansion with the whole set: it hands it
+sees them (`ruleProblem`; `sparseProblem` walks a DAILY/WEEKLY rule's day filters over one 400-year cycle, since
+ical.js steps those day by day in ONE call and `FREQ=DAILY;INTERVAL=7;BYDAY=TU` from a Monday never returns) —
+keep those guards. Never ical.js's `convertToZone`: it takes a zone's offset at the UTC wall clock as if it were local
+time, an hour off next to a DST change (half a day of it in Sydney); `timeAt` settles the offset (`zoneTime`). `seriesWalker` doesn't trust ical.js's RecurExpansion with the whole set: it hands it
 a view (RDATE PERIODs as their starts, DTSTART among the RDATEs when there is no RRULE — RFC 5545 makes it the first
 instance — and no EXDATE), skips an instant it just gave (an RDATE on a rule instance came out twice) and applies
 EXDATEs itself (ical.js's one-pass pointer let an excluded instance through after an EXDATE that matched nothing). A
@@ -150,7 +153,8 @@ EXDATE/RDATE/UNTIL, overrides AND plain BYDAY weekdays by wall clock — every v
 whatever its own DATE/DATE-TIME type; every-Nth-week rules turn WKST with the days, every-Nth-month/year ones on
 named days are refused; then `checkShifted` compares the old and new series day by day and refuses (nothing
 written) any move that would gain, drop or re-day an instance — over their first 400 instances or ten years,
-whichever ends first (unbounded, a sparse rule like Feb 29 on a Monday walked for millennia). PUT with If-Match; 412 → "changed since
+whichever ends first, up to the instance that stopped that walk (unbounded, a sparse rule like Feb 29 on a Monday
+walked for millennia). PUT with If-Match; 412 → "changed since
 read". **Every write goes through `serializeForWrite`** (delete's EXDATE/truncation PUT too), which
 re-parses the ICS and refuses it if any line break slipped into a value or the ATTENDEE/ORGANIZER/UID set differs
 from what was built — a CR/LF in a `url` once injected an ATTENDEE past the confirm gate. Schemas refuse control

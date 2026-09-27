@@ -92,6 +92,19 @@ describe('apple_calendar_create_event', () => {
     expect(r.json).toMatchObject({ created: true, event: { start: '2026-10-21T22:00:00-04:00', recurrence: { rule: 'FREQ=WEEKLY;BYDAY=WE' } } });
   });
 
+  it('stores the hour asked for in the hours before a DST change (and reads it back as that hour)', async () => {
+    // 23:00 on the night before New York falls back, 22:30 the night before it springs forward.
+    const late = await h.call('apple_calendar_create_event', { title: 'Late', startDate: '2026-10-31T23:00' });
+    expect(late.json).toMatchObject({ verified: true, event: { start: '2026-10-31T23:00:00-04:00' } });
+    expect(unfold(h.dav.get('work', 'UID-1.ics')!.ics)).toContain('DTSTART;TZID=America/New_York:20261031T230000');
+    const spring = await h.call('apple_calendar_create_event', { title: 'Spring', startDate: '2027-03-13T22:30' });
+    expect(spring.json).toMatchObject({ verified: true, event: { start: '2027-03-13T22:30:00-05:00' } });
+    // Sydney: most of the Sunday morning of each change was an hour off.
+    const syd = await h.call('apple_calendar_create_event', { title: 'Brunch', startDate: '2027-04-04T10:00', timeZone: 'Australia/Sydney' });
+    expect(syd.json).toMatchObject({ verified: true, event: { start: '2027-04-04T10:00:00+10:00' } });
+    expect(unfold(h.dav.get('work', 'UID-3.ics')!.ics)).toContain('DTSTART;TZID=Australia/Sydney:20270404T100000');
+  });
+
   it('with attendees: asks first (iCloud emails invitations), then writes ORGANIZER + ATTENDEEs', async () => {
     const args = { title: 'Party', startDate: '2026-10-24T18:00', location: '', attendees: [{ email: 'ann@x.com', name: 'Ann' }, { email: 'bob@x.com' }] };
     const preview = await callPreview(gated('apple_calendar_create_event'), args);

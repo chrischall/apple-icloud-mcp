@@ -6,12 +6,14 @@ import {
   findOccurrence,
   hasPeriodDates,
   isRecurringResource,
+  MAX_GAP_COST,
   MAX_SKIPPED_IN_A_ROW,
   overlaps,
   rulePosition,
   ruleProblem,
   seriesWalker,
   singleOccurrence,
+  sparseProblem,
   type Occurrence,
 } from '../../src/calendar/expand.js';
 import { ICAL } from '../../src/calendar/ics.js';
@@ -336,6 +338,40 @@ describe('rules that cannot be walked', () => {
     ]) {
       expect(ruleProblem(rule(ok)), ok).toBeUndefined();
     }
+  });
+
+  it('refuses a DAILY or WEEKLY rule whose day filters never match again, or match too rarely to walk', () => {
+    const at = (ymd: string) => ICAL.Time.fromDateString(ymd);
+    const monday = at('2026-10-19');
+    // Every 7th day from a Monday is a Monday; every 20871 weeks is the same date again (400 years).
+    expect(sparseProblem(rule('FREQ=DAILY;INTERVAL=7;BYDAY=TU'), monday)).toBe('FREQ=DAILY whose day filters never match a day it steps on');
+    expect(sparseProblem(rule('FREQ=WEEKLY;INTERVAL=20871;BYMONTH=6'), monday)).toBe('FREQ=WEEKLY whose day filters never match a day it steps on');
+    // Feb 29 on a Monday every 7000 days: tens of thousands of years apart.
+    const tooFar = 'FREQ=DAILY with day filters that skip too many of the days it steps on';
+    expect(sparseProblem(rule('FREQ=DAILY;INTERVAL=7000;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO'), at('2016-02-29'))).toBe(tooFar);
+    expect(sparseProblem(rule(`FREQ=DAILY;INTERVAL=${MAX_GAP_COST + 1};BYMONTH=6`), monday)).toBe(tooFar);
+    expect(sparseProblem(rule('FREQ=DAILY;INTERVAL=7;BYDAY=TU'), monday)).toBe('FREQ=DAILY whose day filters never match a day it steps on'); // cached
+    for (const [ok, start] of [
+      ['FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO', '2028-02-29'], // up to 40 years apart, cheap steps
+      ['FREQ=DAILY;INTERVAL=2;BYMONTH=2;BYMONTHDAY=29', '2026-10-19'],
+      ['FREQ=DAILY;INTERVAL=14;BYDAY=MO,TU', '2026-10-19'],
+      ['FREQ=DAILY;BYMONTHDAY=-1', '2026-10-19'],
+      ['FREQ=WEEKLY;BYMONTH=6', '2026-10-19'],
+      ['FREQ=WEEKLY;INTERVAL=52;BYMONTH=6;BYDAY=MO,FR;WKST=SU', '2026-10-19'], // June again after ~90 years, in yearly steps
+      ['FREQ=DAILY', '2026-10-19'],
+      ['FREQ=MONTHLY;INTERVAL=7;BYMONTH=6', '2026-10-19'], // ical.js gives up on MONTHLY/YEARLY by itself
+    ] as const) {
+      expect(sparseProblem(rule(ok), at(start)), ok).toBeUndefined();
+    }
+    // The cache is bounded: a thousand distinct starts later it starts over, with the same answers.
+    const cheap = rule('FREQ=DAILY;INTERVAL=20871;BYMONTH=6'); // one date a week apart in the cycle, 7 steps round it
+    for (let i = 0; i <= 1000; i++) sparseProblem(cheap, ICAL.Time.fromData({ year: 2026, month: 1, day: 1 + i, isDate: true }));
+    expect(sparseProblem(rule('FREQ=DAILY;INTERVAL=7;BYDAY=TU'), monday)).toBe('FREQ=DAILY whose day filters never match a day it steps on');
+    // Refused before ical.js sees it: a listing gets DTSTART and a note instead of hanging.
+    const p = parts(...vevent('UID:h', 'DTSTART:20261019T130000Z', 'DTEND:20261019T140000Z', 'RRULE:FREQ=DAILY;INTERVAL=7;BYDAY=TU'));
+    const r = expandSeries(p, { from: d('2026-10-01T00:00:00Z'), to: d('2027-01-01T00:00:00Z'), zone: NY });
+    expect(r).toMatchObject({ truncated: 'rule', ruleProblem: 'FREQ=DAILY whose day filters never match a day it steps on' });
+    expect(r.occurrences.map((o) => o.occ)).toEqual(['2026-10-19T13:00:00Z']);
   });
 
   it('lists the first instance and the overrides of a rule it refuses to walk, and says why', () => {

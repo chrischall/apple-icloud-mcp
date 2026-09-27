@@ -47,6 +47,7 @@ import {
   type Component,
   type Time,
 } from '../../src/calendar/ics.js';
+import { zonedParts } from '../../src/time.js';
 import { NY_TZ, ics, vevent } from './fake-caldav.js';
 
 const NY = 'America/New_York';
@@ -205,6 +206,33 @@ describe('time zones', () => {
     expect(zoned.toString()).toBe('2026-10-20T09:00:00');
     expect(floating.toString()).toBe('2026-10-20T09:00:00');
     expect(utc.toString()).toBe('2026-10-20T13:00:00Z');
+  });
+
+  it('writes the true wall time next to every DST change, which reads back as the same instant', () => {
+    // ical.js's own conversion took the offset at the UTC wall clock: an hour off for up to half a day around a change.
+    for (const zone of ['America/New_York', 'Australia/Sydney', 'Europe/Berlin', 'America/Santiago', 'Australia/Lord_Howe', 'Asia/Kolkata']) {
+      const wz = zoneForWrite(newCalendar(), zone);
+      const offsetAt = (ms: number) => {
+        const p = zonedParts(new Date(ms), zone);
+        return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - ms;
+      };
+      let checked = 0;
+      for (let hour = Date.UTC(2026, 0, 1); hour < Date.UTC(2027, 0, 1); hour += 3_600_000) {
+        const change = offsetAt(hour + 3_600_000) - offsetAt(hour);
+        if (change === 0) continue;
+        // Every quarter hour for 14 hours either side of the change.
+        for (let ms = hour - 14 * 3_600_000; ms <= hour + 14 * 3_600_000; ms += 900_000) {
+          const t = timeAt(new Date(ms), wz);
+          const p = zonedParts(new Date(ms), zone);
+          expect([t.year, t.month, t.day, t.hour, t.minute].map((n) => n + 0), `${zone} ${new Date(ms).toISOString()}`).toEqual([p.year, p.month, p.day, p.hour, p.minute]);
+          const back = instantOf(t, zone).getTime();
+          // The one exception: the first pass of an hour a change repeats, which ical.js reads as the second pass.
+          if (back !== ms) expect(back - ms, `${zone} ${new Date(ms).toISOString()}`).toBe(-change);
+          checked++;
+        }
+      }
+      expect(checked, zone).toBeGreaterThan(zone === 'Asia/Kolkata' ? -1 : 200);
+    }
   });
 
   it('collects TZIDs from nested components', () => {
