@@ -31,6 +31,18 @@ export interface ZonedParts {
   weekday: number;
 }
 
+/**
+ * `Date.UTC` without its two-digit-year quirk: `Date.UTC(50, 0, 1)` is 1950, so
+ * every year 0001–0099 would silently become a date in the 1900s. Month and day
+ * overflow exactly as they do in `Date.UTC`.
+ */
+function utcMs(year: number, monthIndex: number, day: number, h: number, mi: number, s: number, ms: number): number {
+  const d = new Date(0);
+  d.setUTCFullYear(year, monthIndex, day);
+  d.setUTCHours(h, mi, s, ms);
+  return d.getTime();
+}
+
 const partsFormatters = new Map<string, Intl.DateTimeFormat>();
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -72,7 +84,7 @@ export function zonedParts(date: Date, zone: string): ZonedParts {
 export function zoneOffsetMs(instantMs: number, zone: string): number {
   const d = new Date(instantMs);
   const p = zonedParts(d, zone);
-  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  const asUtc = utcMs(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0);
   // Compare at whole-second precision: the formatter drops milliseconds.
   return asUtc - (instantMs - d.getUTCMilliseconds());
 }
@@ -99,7 +111,7 @@ export function zonedToInstant(wall: WallClock, zone: string): Date {
   const mi = wall.minute ?? 0;
   const s = wall.second ?? 0;
   const ms = wall.millisecond ?? 0;
-  const local = Date.UTC(wall.year, wall.month - 1, wall.day, h, mi, s, ms);
+  const local = utcMs(wall.year, wall.month - 1, wall.day, h, mi, s, ms);
   const DAY = 86_400_000;
   const offsets = [...new Set([zoneOffsetMs(local - DAY, zone), zoneOffsetMs(local, zone), zoneOffsetMs(local + DAY, zone)])];
   const matches: number[] = [];
@@ -183,10 +195,28 @@ const dateOnlyFormatter = new Intl.DateTimeFormat('en-US', {
   day: 'numeric',
 });
 
+const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * The parts of a real `YYYY-MM-DD` calendar date, or a thrown error naming the
+ * function and the value. These helpers take dates from upstream payloads as
+ * well as from `parseDateInput`, and `Date` arithmetic silently rolls a bad one
+ * over (`2026-02-30` → March 2; `--03-15`, a birthday without a year, → a date
+ * in 1 BC) — a label with the wrong weekday that nothing flags.
+ */
+function ymdParts(ymd: string, fn: string): [number, number, number] {
+  const m = YMD_RE.exec(ymd);
+  const [y, mo, d] = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 0];
+  if (!m || y < 1 || mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo)) {
+    throw new InvalidArgumentError(`${fn}: "${ymd}" is not a calendar date (YYYY-MM-DD).`);
+  }
+  return [y, mo, d];
+}
+
 /** `Mon, Jul 27, 2026` for a calendar date (`YYYY-MM-DD`), with no zone involved. */
 export function formatDateOnly(ymd: string): string {
-  const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
-  return dateOnlyFormatter.format(new Date(Date.UTC(y, m - 1, d)));
+  const [y, m, d] = ymdParts(ymd, 'formatDateOnly');
+  return dateOnlyFormatter.format(new Date(utcMs(y, m - 1, d, 0, 0, 0, 0)));
 }
 
 /** `YYYY-MM-DD` of `date` in `zone`. */
@@ -197,14 +227,14 @@ export function ymdInZone(date: Date, zone: string): string {
 
 /** Calendar arithmetic on a `YYYY-MM-DD` string (zone-free). */
 export function addDaysYmd(ymd: string, days: number): string {
-  const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
-  const t = new Date(Date.UTC(y, m - 1, d + days));
+  const [y, m, d] = ymdParts(ymd, 'addDaysYmd');
+  const t = new Date(utcMs(y, m - 1, d + days, 0, 0, 0, 0));
   return `${String(t.getUTCFullYear()).padStart(4, '0')}-${pad2(t.getUTCMonth() + 1)}-${pad2(t.getUTCDate())}`;
 }
 
 /** Midnight at the start of `ymd` in `zone`. */
 export function startOfDay(ymd: string, zone: string): Date {
-  const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
+  const [y, m, d] = ymdParts(ymd, 'startOfDay');
   return zonedToInstant({ year: y, month: m, day: d }, zone);
 }
 
@@ -223,7 +253,7 @@ const DATE_RE =
   /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|z|[+-]\d{2}(?::?\d{2})?)?)?$/;
 
 function daysInMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return new Date(utcMs(year, month, 0, 0, 0, 0, 0)).getUTCDate();
 }
 
 /**
@@ -247,6 +277,8 @@ export function parseDateInput(value: string, field: string, zone: string): Pars
   const year = Number(ys);
   const month = Number(mos);
   const day = Number(ds);
+  // Year 0000 (1 BC) has no faithful rendering: Intl prints it as year 1.
+  if (year < 1) return bad(`year ${ys} is out of range`);
   if (month < 1 || month > 12) return bad(`month ${mos} is out of range`);
   if (day < 1 || day > daysInMonth(year, month)) return bad(`day ${ds} does not exist in ${ys}-${mos}`);
   const ymdWritten = `${ys}-${mos}-${ds}`;
@@ -271,7 +303,7 @@ export function parseDateInput(value: string, field: string, zone: string): Pars
       if (oh > 18 || om > 59) return bad(`offset ${off} is out of range`);
       offsetMin = sign * (oh * 60 + om);
     }
-    instant = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond) - offsetMin * 60_000);
+    instant = new Date(utcMs(year, month - 1, day, hour, minute, second, millisecond) - offsetMin * 60_000);
   } else {
     instant = zonedToInstant({ year, month, day, hour, minute, second, millisecond }, zone);
   }

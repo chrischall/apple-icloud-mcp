@@ -76,8 +76,18 @@ export function confirmWrite(
 
 /**
  * A revision string for a record as just read, for `ConfirmWriteOptions.revision`
- * when the upstream offers no ETag. Any change to the value rotates it.
+ * when the upstream offers no ETag. Any change to the value rotates it; a
+ * change in the ORDER of an object's keys does not (array order still counts —
+ * a reordered playlist is a different playlist). Two reads of an unchanged
+ * record must agree, and an upstream is free to serialize keys in any order:
+ * a digest of raw `JSON.stringify` output would refuse a phase-2 confirm as
+ * DRAFT_CHANGED on nothing but that.
  */
 export function stateRevision(value: unknown): string {
-  return `s1:${createHash('sha256').update(JSON.stringify(value) ?? 'undefined').digest('base64url').slice(0, 22)}`;
+  const canonical = JSON.stringify(value, (_key, v: unknown) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, (v as Record<string, unknown>)[k]]))
+      : v,
+  );
+  return `s1:${createHash('sha256').update(canonical ?? 'undefined').digest('base64url').slice(0, 22)}`;
 }

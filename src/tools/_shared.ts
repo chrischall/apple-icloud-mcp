@@ -71,10 +71,44 @@ export function jsonResponse(data: unknown): CallToolResult {
   return minifiedResult(data);
 }
 
-/** A structured failure: the JSON payload plus `isError`, for refusals that carry recovery data. */
+/**
+ * A structured failure: the JSON payload plus `isError`, for refusals that
+ * carry recovery data. Scrubbed of every credential this process has used.
+ *
+ * Scrubbing happens on the VALUES first, then on the serialized text only if
+ * the result is still JSON. Some redaction shapes run to the next `;`, `,` or
+ * whitespace (a `Cookie:` value, for one), and minified JSON has none of those
+ * before its closing `"}}` — a text-only scrub could eat the braces and hand
+ * the client an error it cannot parse. The text pass still runs because some
+ * shapes (a `"token":"…"` pair) are only visible with their key.
+ */
 export function jsonErrorResponse(data: unknown): CallToolResult {
-  const r = minifiedResult(data);
-  return { ...r, content: r.content.map((c) => (c.type === 'text' ? { ...c, text: scrub(c.text) } : c)), isError: true };
+  // minifiedResult yields exactly one text block (JSON.stringify of `data`).
+  const [block] = minifiedResult(scrubDeep(data)).content as [{ type: 'text'; text: string }];
+  const scrubbed = scrub(block.text);
+  return { content: [{ type: 'text', text: isJson(scrubbed) ? scrubbed : block.text }], isError: true };
+}
+
+function isJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A copy of `value` with every string (at any depth) scrubbed; other values unchanged. */
+function scrubDeep(value: unknown): unknown {
+  if (typeof value === 'string') return scrub(value);
+  if (Array.isArray(value)) return value.map(scrubDeep);
+  const proto = value !== null && typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
+  if (proto === Object.prototype || proto === null) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = scrubDeep(v);
+    return out;
+  }
+  return value;
 }
 
 /** Convert any thrown value to a structured, scrubbed error result. */
@@ -165,15 +199,21 @@ export interface PageInfo {
  * Paging facts for a slice. When `total` is known it decides `hasMore`;
  * otherwise `hasMore` must be supplied (e.g. from an upstream `next` link) —
  * a full page with no total is NOT assumed to be the last.
+ *
+ * `nextOffset` always moves forward. An upstream that claims more items but
+ * returned none on this page would otherwise yield `nextOffset === offset`,
+ * and a caller following it would fetch the same empty page forever; such a
+ * page advances by `limit` (the window it covered) instead.
  */
 export function pageInfo(o: { offset: number; limit: number; returned: number; total?: number; hasMore?: boolean }): PageInfo {
-  const hasMore = o.total !== undefined ? o.offset + o.returned < o.total : (o.hasMore ?? false);
+  const step = o.returned > 0 ? o.returned : o.limit;
+  const hasMore = o.total !== undefined ? o.offset + step < o.total : (o.hasMore ?? false);
   return {
     returned: o.returned,
     ...(o.total !== undefined ? { total: o.total } : {}),
     offset: o.offset,
     limit: o.limit,
-    nextOffset: hasMore ? o.offset + o.returned : null,
+    nextOffset: hasMore ? o.offset + step : null,
     hasMore,
   };
 }

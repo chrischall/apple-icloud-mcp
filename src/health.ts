@@ -1,3 +1,4 @@
+import { readEnvVar } from '@chrischall/mcp-utils';
 import type { ServiceName } from './config.js';
 import { AppleToolError, ConfigError, CredentialsRejectedError, errorMessage } from './errors.js';
 
@@ -62,6 +63,20 @@ export function makeProbe(spec: ProbeSpec): HealthProbe {
       try {
         resolved = await spec.resolve();
       } catch (err) {
+        if (err instanceof ConfigError && isSetButUnusable(err)) {
+          // Every variable it names IS set — so the service is configured,
+          // just wrongly (an RSA key in APPLE_PRIVATE_KEY, an unreadable key
+          // file, an expired pre-minted token). Reporting that as "not
+          // configured" would let the overall `ok` stay true for a setup the
+          // user did make and that cannot work.
+          return {
+            service: spec.service,
+            configured: true,
+            ok: false,
+            error: { code: err.code, message: errorMessage(err) },
+            ...(err.hint ? { hint: err.hint } : {}),
+          };
+        }
         if (err instanceof ConfigError) {
           return {
             service: spec.service,
@@ -94,6 +109,11 @@ export function makeProbe(spec: ProbeSpec): HealthProbe {
   };
 }
 
+/** A ConfigError naming only plain variable names, every one of which is set in the environment. */
+function isSetButUnusable(err: ConfigError): boolean {
+  return err.missing.length > 0 && err.missing.every((name) => /^[A-Z][A-Z0-9_]*$/.test(name) && readEnvVar(name) !== undefined);
+}
+
 function failed(
   service: ServiceName,
   configured: boolean,
@@ -105,7 +125,8 @@ function failed(
     code: err instanceof AppleToolError ? err.code : 'INTERNAL_ERROR',
     message: errorMessage(err),
   };
-  const status = (err as { status?: unknown }).status;
+  // `throw undefined` / `Promise.reject()` are legal; reading `.status` off them is not.
+  const status = (err as { status?: unknown } | null | undefined)?.status;
   if (typeof status === 'number') error.status = status;
   let hint: string | undefined;
   if (err instanceof CredentialsRejectedError) hint = spec.rejectedHint ?? err.hint;

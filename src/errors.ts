@@ -147,12 +147,29 @@ export function rememberSecret(value: string | undefined): void {
   if (value && value.length >= 8) secretLiterals.add(value);
 }
 
+/**
+ * A PEM private-key block, in any armor (`PRIVATE KEY`, `EC PRIVATE KEY`, …)
+ * and with real newlines, escaped `\n`s or none. `redactSecrets` has no rule
+ * for one, and the developer key is remembered only in the form it arrived in
+ * — the normalized PEM `apple-keys.ts` derives from it is a different string.
+ * A block cut off before its END line (a truncated snippet) is redacted too:
+ * the armor and the base64 run that follows it.
+ */
+// The body scan may not cross another BEGIN/END marker: unbounded, every
+// BEGIN with no END after it re-scanned the rest of the text (quadratic on a
+// body of repeated armor lines).
+const PEM_PRIVATE_KEY_RE =
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?:(?:(?!-----(?:BEGIN|END) )[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY-----|(?:[A-Za-z0-9+/=\s]|\\[rn])*)/g;
+
 /** Shape-based redaction plus removal of every remembered literal secret. */
 export function scrub(text: string): string {
-  let out = text;
+  let out = text.replace(PEM_PRIVATE_KEY_RE, '[REDACTED PRIVATE KEY]');
   for (const secret of secretLiterals) {
     if (out.includes(secret)) out = out.split(secret).join('[REDACTED]');
-    // Basic auth carries the password base64-encoded inside `user:password`.
+    // A secret that travels base64-encoded on its own. (A Basic header encodes
+    // `user:password` as ONE unit, which this does not match — the DAV client
+    // remembers that whole token itself, and `redactSecrets` catches the
+    // `Authorization: Basic …` header shape.)
     const b64 = Buffer.from(secret).toString('base64');
     if (out.includes(b64)) out = out.split(b64).join('[REDACTED]');
   }

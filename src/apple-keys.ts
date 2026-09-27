@@ -49,23 +49,34 @@ export interface DeveloperKey {
  *  - the PEM verbatim (multi-line);
  *  - the PEM with literal `\n` escapes (a one-line secret field);
  *  - the whole PEM base64-encoded;
- *  - just the base64 body between the BEGIN/END lines.
+ *  - just the base64 body between the BEGIN/END lines;
+ *  - the PEM with its line breaks turned into spaces, or dropped entirely —
+ *    what a single-line form field does to a pasted multi-line value, and a
+ *    shape OpenSSL refuses to parse.
+ * Every PEM is re-armored canonically (64-column body, LF endings).
  * Returns a normalized PEM, or undefined when the value is none of those.
  */
 export function normalizePrivateKey(raw: string): string | undefined {
-  let value = raw.trim().replace(/\\n/g, '\n').replace(/\r\n/g, '\n');
+  let value = raw.trim().replace(/\\r/g, '').replace(/\\n/g, '\n');
   if (!value.includes('-----BEGIN')) {
     const compact = value.replace(/\s+/g, '');
     if (!/^[A-Za-z0-9+/=]+$/.test(compact)) return undefined;
     const decoded = Buffer.from(compact, 'base64').toString('utf8');
-    if (decoded.includes('-----BEGIN')) {
-      value = decoded.trim();
-    } else {
-      const lines = compact.match(/.{1,64}/g) ?? [];
-      value = ['-----BEGIN PRIVATE KEY-----', ...lines, '-----END PRIVATE KEY-----'].join('\n');
-    }
+    if (!decoded.includes('-----BEGIN')) return armor('PRIVATE KEY', compact);
+    value = decoded;
   }
-  return value.endsWith('\n') ? value : value + '\n';
+  const pem = PEM_BLOCK_RE.exec(value);
+  // An unrecognisable armor is passed through for `validateEcKey` to reject by name.
+  if (!pem) return value.trim().replace(/\r\n/g, '\n') + '\n';
+  return armor(pem[1]!, pem[2]!.replace(/\s+/g, ''));
+}
+
+/** `-----BEGIN <label>-----<body>-----END <label>-----`, whatever whitespace separates the parts. */
+const PEM_BLOCK_RE = /-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----/;
+
+function armor(label: string, body: string): string {
+  const lines = body.match(/.{1,64}/g) ?? [];
+  return [`-----BEGIN ${label}-----`, ...lines, `-----END ${label}-----`].join('\n') + '\n';
 }
 
 /** Validate that `pem` is an EC P-256 private key; returns an error string or undefined. */
@@ -74,7 +85,9 @@ export function validateEcKey(pem: string): string | undefined {
     const key = createPrivateKey(pem);
     if (key.asymmetricKeyType !== 'ec') return `it is a ${key.asymmetricKeyType ?? 'non-EC'} key, not an EC (ES256) key`;
     const curve = key.asymmetricKeyDetails?.namedCurve;
-    if (curve && curve !== 'prime256v1') return `it uses curve ${curve}, not P-256`;
+    // No name means explicit curve parameters OpenSSL could not match to a
+    // named curve — so not P-256. Accepting it would mint tokens Apple rejects.
+    if (curve !== 'prime256v1') return `it uses ${curve ? `curve ${curve}` : 'an unnamed curve'}, not P-256`;
     return undefined;
   } catch {
     return 'it could not be parsed as a private key';
@@ -119,6 +132,7 @@ export function resolveDeveloperKey(service: KeyedService, env: EnvSource = proc
   if (!teamId) missing.push('APPLE_TEAM_ID');
   if (!keyId) missing.push(`APPLE_KEY_ID (or ${prefix}_KEY_ID)`);
   if (rawKey === undefined) missing.push(`APPLE_PRIVATE_KEY (or ${prefix}_PRIVATE_KEY / APPLE_PRIVATE_KEY_PATH)`);
+  if (missing.length === 0) assertPairMatches(service, env);
   if (missing.length > 0) {
     throw new ConfigError(
       svcName,
@@ -144,6 +158,48 @@ export function resolveDeveloperKey(service: KeyedService, env: EnvSource = proc
     privateKeyPem: pem,
     source: `${ownKeyId ? `${prefix}_KEY_ID` : 'APPLE_KEY_ID'} + ${keyVar}`,
   };
+}
+
+/**
+ * A key id names exactly one private key, so the service-specific pair and
+ * the shared pair must not be crossed. When BOTH a shared key id and a shared
+ * private key are set, the shared id provably belongs to the shared key — so
+ * pairing it with `<SVC>_PRIVATE_KEY`, or pairing `<SVC>_KEY_ID` with the
+ * shared key, mints tokens Apple rejects with a bare 401 that names neither
+ * variable. Refuse that up front, by name. With only half of the shared pair
+ * set, crossing is the ordinary single-key setup (e.g. APPLE_MUSIC_KEY_ID +
+ * APPLE_PRIVATE_KEY for one Music key) and is allowed.
+ */
+function assertPairMatches(service: KeyedService, env: EnvSource): void {
+  const prefix = PREFIX[service];
+  const ownKeyId = readEnvVar(`${prefix}_KEY_ID`, { env });
+  const ownKey = readEnvVar(`${prefix}_PRIVATE_KEY`, { env });
+  const sharedKeyId = readEnvVar('APPLE_KEY_ID', { env });
+  const sharedKeyVar =
+    readEnvVar('APPLE_PRIVATE_KEY', { env }) !== undefined
+      ? 'APPLE_PRIVATE_KEY'
+      : readEnvVar('APPLE_PRIVATE_KEY_PATH', { env }) !== undefined
+        ? 'APPLE_PRIVATE_KEY_PATH'
+        : undefined;
+  if (sharedKeyId === undefined || sharedKeyVar === undefined) return;
+  if (ownKey !== undefined && ownKeyId === undefined) {
+    throw new ConfigError(
+      service,
+      `${prefix}_PRIVATE_KEY is set but ${prefix}_KEY_ID is not, and APPLE_KEY_ID belongs to the shared key in ${sharedKeyVar} — ` +
+        'a key id must name the key that signs the token.',
+      [`${prefix}_KEY_ID`],
+      `Set ${prefix}_KEY_ID to the Key ID of the key in ${prefix}_PRIVATE_KEY (Apple Developer portal → Keys), or unset ${prefix}_PRIVATE_KEY to use the shared key.`,
+    );
+  }
+  if (ownKeyId !== undefined && ownKey === undefined && ownKeyId !== sharedKeyId) {
+    throw new ConfigError(
+      service,
+      `${prefix}_KEY_ID is set but ${prefix}_PRIVATE_KEY is not, and the shared key in ${sharedKeyVar} belongs to APPLE_KEY_ID — ` +
+        'a key id must name the key that signs the token.',
+      [`${prefix}_PRIVATE_KEY`],
+      `Set ${prefix}_PRIVATE_KEY to the .p8 contents of key ${prefix}_KEY_ID, or unset ${prefix}_KEY_ID to use the shared key.`,
+    );
+  }
 }
 
 function serviceLabel(service: KeyedService): string {

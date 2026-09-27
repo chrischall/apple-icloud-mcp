@@ -1,7 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { readEnvVar } from '@chrischall/mcp-utils';
 import { z } from 'zod';
-import { SERVICES, getDisplayTimeZone, getEnabledServices, getWriteMode, type ServiceName } from '../config.js';
+import { SERVICES, getDisplayTimeZone, getEnabledServices, getWriteMode, isValidTimeZone, type ServiceName } from '../config.js';
+import { errorMessage } from '../errors.js';
 import type { HealthProbe, ServiceHealth } from '../health.js';
 import { VERSION } from '../version.js';
 import { ANNOTATIONS, defineTool, jsonResponse } from './_shared.js';
@@ -44,9 +45,15 @@ export function registerHealthcheckTool(server: McpServer, probes: readonly Heal
       const selected = probes.filter((p) => wanted.has(p.service) && enabled.has(p.service));
       const results = await Promise.all(selected.map((p) => runWithTimeout(p)));
       const disabled = [...wanted].filter((s) => !enabled.has(s));
+      // An enabled service with no probe wired in must not vanish from the
+      // report: a missing line reads as "nothing to check", not "not checked".
+      const unchecked = [...wanted].filter((s) => enabled.has(s) && !selected.some((p) => p.service === s));
       const ok = results.every((r) => !r.configured || r.ok === true);
       const tzRaw = readEnvVar('DISPLAY_TZ');
       const zone = getDisplayTimeZone();
+      // Validity, not equality: getDisplayTimeZone returns the CANONICAL
+      // spelling, so `america/new_york` is honoured as `America/New_York`.
+      const tzFromEnv = tzRaw !== undefined && isValidTimeZone(tzRaw);
       return jsonResponse({
         ok,
         version: VERSION,
@@ -55,11 +62,20 @@ export function registerHealthcheckTool(server: McpServer, probes: readonly Heal
           failing: results.filter((r) => r.configured && r.ok !== true).map((r) => r.service),
           notConfigured: results.filter((r) => !r.configured).map((r) => r.service),
           ...(disabled.length ? { disabled } : {}),
+          ...(unchecked.length ? { unchecked } : {}),
         },
         config: {
           writeMode: getWriteMode(),
           displayTimeZone: zone,
-          displayTimeZoneSource: tzRaw !== undefined && tzRaw === zone ? 'DISPLAY_TZ' : 'system',
+          displayTimeZoneSource: tzFromEnv ? 'DISPLAY_TZ' : 'system',
+          // A DISPLAY_TZ that was set but refused must say so: otherwise every
+          // time is quietly rendered in the system zone (UTC on a hosted child).
+          ...(tzRaw !== undefined && !tzFromEnv
+            ? {
+                displayTimeZoneWarning:
+                  `DISPLAY_TZ "${tzRaw}" is not an IANA time zone name (e.g. America/New_York); using the system zone ${zone} instead.`,
+              }
+            : {}),
           ...(unknown.length ? { unknownServicesInAPPLE_SERVICES: unknown } : {}),
         },
         services: results,
@@ -90,7 +106,7 @@ async function runWithTimeout(probe: HealthProbe): Promise<ServiceHealth> {
           service: probe.service,
           configured: true,
           ok: false,
-          error: { code: 'INTERNAL_ERROR', message: err instanceof Error ? err.message : String(err) },
+          error: { code: 'INTERNAL_ERROR', message: errorMessage(err) },
         }),
       ),
       timeout,

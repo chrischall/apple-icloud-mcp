@@ -106,13 +106,32 @@ export function accessAllowed(access: ToolAccess, env: EnvSource = process.env):
 // Time zone
 // ---------------------------------------------------------------------------
 
-/** Whether `zone` is an IANA time zone this runtime knows. */
+/**
+ * Whether `zone` is an IANA time zone this runtime knows.
+ *
+ * A bare UTC offset (`-04:00`, `+0530`) is refused even though current `Intl`
+ * accepts one: it is not an IANA zone and it has no DST, so `DISPLAY_TZ=-04:00`
+ * meant as "New York" would be an hour wrong from November to March — the exact
+ * failure the no-fixed-offsets rule exists to prevent. `Etc/GMT+5` (an IANA
+ * name for a fixed offset) stays valid for anyone who really means it.
+ */
 export function isValidTimeZone(zone: string): boolean {
+  return canonicalTimeZone(zone) !== undefined;
+}
+
+/**
+ * The runtime's canonical spelling of an IANA zone (`america/new_york` →
+ * `America/New_York`, `US/Eastern` → `America/New_York`), or undefined when
+ * `zone` is not one. The offset check runs on what `Intl` RESOLVED, not on the
+ * input: `Intl` also accepts `−04:00` spelled with U+2212 MINUS SIGN and
+ * reports it back as `-04:00`, which an ASCII-only input check waved through.
+ */
+export function canonicalTimeZone(zone: string): string | undefined {
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: zone });
-    return true;
+    const resolved = new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone;
+    return /^[+\-\u2212]/.test(resolved) ? undefined : resolved;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -132,7 +151,11 @@ let warnedTz: string | undefined;
 export function getDisplayTimeZone(env: EnvSource = process.env): string {
   const raw = readEnvVar('DISPLAY_TZ', { env });
   if (raw !== undefined) {
-    if (isValidTimeZone(raw)) return raw;
+    // The canonical spelling, not the one typed: the zone name travels on
+    // (an iCalendar TZID, a healthcheck report) where `america/new_york`
+    // is not the same identifier as `America/New_York`.
+    const canonical = canonicalTimeZone(raw);
+    if (canonical !== undefined) return canonical;
     if (warnedTz !== raw) {
       warnedTz = raw;
       console.error(`[aws-mcp] WARNING: DISPLAY_TZ "${raw}" is not a known IANA zone — using the system zone.`);
@@ -153,9 +176,22 @@ export function systemTimeZone(): string {
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
-/** Per-attempt request timeout (`APPLE_REQUEST_TIMEOUT_MS`, default 30 s, min 1 s). */
+/** Longest accepted APPLE_REQUEST_TIMEOUT_MS. A hosted child is idled out after 10 minutes anyway. */
+export const MAX_REQUEST_TIMEOUT_MS = 600_000;
+
+/**
+ * Per-attempt request timeout (`APPLE_REQUEST_TIMEOUT_MS`, default 30 s,
+ * 1 s – 10 min; anything else falls back to the default). The ceiling is not
+ * cosmetic: `setTimeout` treats a delay above 2^31-1 ms as 1 ms, so an
+ * unbounded value would time out every request instantly.
+ */
 export function getRequestTimeoutMs(env: EnvSource = process.env): number {
-  const v = readIntEnv('APPLE_REQUEST_TIMEOUT_MS', { env, default: DEFAULT_REQUEST_TIMEOUT_MS, min: 1000 });
+  const v = readIntEnv('APPLE_REQUEST_TIMEOUT_MS', {
+    env,
+    default: DEFAULT_REQUEST_TIMEOUT_MS,
+    min: 1000,
+    max: MAX_REQUEST_TIMEOUT_MS,
+  });
   /* v8 ignore next -- readIntEnv returns the default when unset or invalid */
   return v ?? DEFAULT_REQUEST_TIMEOUT_MS;
 }
