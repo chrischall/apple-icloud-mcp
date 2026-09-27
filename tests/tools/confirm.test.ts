@@ -200,6 +200,35 @@ describe('confirmWrite — real prompt (client with form elicitation)', () => {
     expect(other.resultType).toBe('input_required');
     expect(write).toHaveBeenCalledTimes(1);
   });
+
+  it('an acceptance is bound to the state the user was shown: a retry whose fresh read differs asks again', async () => {
+    const state = { title: 'Standup', etag: '"e1"' };
+    const { handler, write } = gatedTool(state);
+    const args = { eventId: 'home/abc.ics' };
+    const ask = (await handler(args, CAN_ASK_CTX)) as unknown as { requestState: string };
+    const accepted = {
+      mcpReq: {
+        ...CAN_ASK_CTX.mcpReq,
+        inputResponses: { confirmation: { action: 'accept', content: { confirmed: true } } },
+        requestState: () => ask.requestState,
+      },
+    };
+    // Same arguments, but the event changed while the prompt was open (a new ETag): asked again, nothing written.
+    state.etag = '"e2"';
+    const moved = (await handler(args, accepted)) as unknown as { resultType: string };
+    expect(moved.resultType).toBe('input_required');
+    // Same revision, different preview (what the user approved named another title): asked again too.
+    state.etag = '"e1"';
+    state.title = 'Retro';
+    const renamed = (await handler(args, accepted)) as unknown as { resultType: string; inputRequests: { confirmation: { params: { message: string } } } };
+    expect(renamed.resultType).toBe('input_required');
+    expect(renamed.inputRequests.confirmation.params.message).toContain('Retro');
+    expect(write).not.toHaveBeenCalled();
+    // Back to exactly what was shown: the acceptance counts. The confirmToken argument is never part of the binding.
+    state.title = 'Standup';
+    expect(body(await handler({ ...args, confirmToken: 'ignored-here' }, accepted))).toEqual({ deleted: true });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared across processes)', () => {

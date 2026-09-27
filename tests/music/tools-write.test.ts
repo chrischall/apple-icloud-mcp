@@ -251,6 +251,70 @@ describe('apple_music_add_playlist_tracks', () => {
   });
 });
 
+describe('apple_music_add_playlist_tracks while Apple\'s reads lag its writes', () => {
+  function lagging() {
+    useWeb();
+    const l = new FakeLibrary();
+    l.addPlaylist('p.A', { name: 'Mine', tracks: [track(1), track(2), track(3)] });
+    l.lag = true; // reads return the state from before the last write
+    installFetch(l.handler());
+    return { l, tools: captureTools() };
+  }
+
+  it('verifies by presence: a count that matches only because an earlier add showed up is not verified', async () => {
+    const { l, tools } = lagging();
+    const first = await callTool(tools, 'apple_music_add_playlist_tracks', { playlistId: 'p.A', tracks: ['777'] });
+    expect(first.data).toMatchObject({ verified: false, tracksNow: 3 });
+    const second = await callTool(tools, 'apple_music_add_playlist_tracks', { playlistId: 'p.A', tracks: ['888'], skipDuplicates: false });
+    expect(l.playlists.get('p.A')!.tracks.map((t) => t.catalogId)).toEqual(['1001', '1002', '1003', '777', '888']);
+    // Its read-back shows T1–T3 + 777: four tracks, as "expected" from the stale read — but not 888.
+    expect(second.data).toMatchObject({ added: 1, tracksBefore: 3, tracksNow: 4, verified: false });
+    expect(second.data.warnings).toContainEqual('Not showing in the playlist yet: 888 — Apple can take a while to show new tracks; re-read it later.');
+  });
+
+  it('a retry after "not verified yet" is refused instead of appending the same track again', async () => {
+    const { l, tools } = lagging();
+    const first = await callTool(tools, 'apple_music_add_playlist_tracks', { playlistId: 'p.A', tracks: ['777'] });
+    expect(first.data.verified).toBe(false);
+    const retry = await callTool(tools, 'apple_music_add_playlist_tracks', { playlistId: 'p.A', tracks: ['777'] });
+    expect(retry.isError).toBe(true);
+    expect(retry.data.error).toMatchObject({ code: 'PLAYLIST_CHANGED', playlistId: 'p.A' });
+    expect(l.playlists.get('p.A')!.tracks.filter((t) => t.catalogId === '777')).toHaveLength(1);
+    expect(l.writes).toEqual(['append p.A']);
+    // Once Apple shows it, the retry is a plain duplicate: skipped, nothing written.
+    l.lag = false;
+    const later = await callTool(tools, 'apple_music_add_playlist_tracks', { playlistId: 'p.A', tracks: ['777'] });
+    expect(later.data).toMatchObject({ added: 0, skippedCount: 1, verified: true });
+  });
+});
+
+describe('apple_music_create_playlist in APPLE_WRITE_MODE=additive', () => {
+  for (const [label, use] of [['web', useWeb], ['official', useOfficial]] as const) {
+    it(`${label}: refuses a public playlist (it would show to other people) and writes nothing`, async () => {
+      use();
+      process.env.APPLE_WRITE_MODE = 'additive';
+      const tools = captureTools();
+      expect(tools.has('apple_music_create_playlist')).toBe(true);
+      const { calls } = installFetch(new FakeLibrary().handler());
+      const r = await callTool(tools, 'apple_music_create_playlist', { name: 'Mine', isPublic: true });
+      expect(r.isError).toBe(true);
+      expect(r.data.error).toMatchObject({ code: 'UNSUPPORTED', hint: 'Create it private (leave out isPublic), or set APPLE_WRITE_MODE=all.' });
+      expect((r.data.error as { message: string }).message).toMatch(/APPLE_WRITE_MODE=additive never allows\. Nothing was created\.$/);
+      expect(calls).toEqual([]);
+    });
+  }
+
+  it('a private playlist is still created, and APPLE_WRITE_MODE=all allows a public one', async () => {
+    useWeb();
+    process.env.APPLE_WRITE_MODE = 'additive';
+    installFetch(new FakeLibrary().handler());
+    const tools = captureTools();
+    expect((await callTool(tools, 'apple_music_create_playlist', { name: 'Mine', isPublic: false })).data).toMatchObject({ created: true });
+    process.env.APPLE_WRITE_MODE = 'all';
+    expect((await callTool(tools, 'apple_music_create_playlist', { name: 'Shown', isPublic: true })).data).toMatchObject({ created: true });
+  });
+});
+
 describe('apple_music_create_folder', () => {
   it('creates at the root by default or inside an existing folder, and verifies', async () => {
     useWeb();
@@ -318,8 +382,15 @@ describe('apple_music_set_rating', () => {
     expect(put.path).toBe('/v1/me/ratings/songs/1');
     expect(put.body).toEqual({ type: 'rating', attributes: { value: 1 } });
     expect(r.data).toMatchObject({ backend: 'web', previous: 'none', rating: 'love', changed: true, verified: true });
+    // Already that rating as read: sent anyway (the read may lag), so `verified` is about THIS write.
     const same = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '1', rating: 'love' });
-    expect(same.data).toMatchObject({ previous: 'love', changed: false, verified: true });
+    expect(same.data).toMatchObject({
+      previous: 'love',
+      changed: false,
+      verified: true,
+      notes: ['Apple already read "love"; it was sent anyway, since a read can lag a change made moments ago.'],
+    });
+    expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(2);
     const dis = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '1', rating: 'dislike' });
     expect(dis.data).toMatchObject({ previous: 'love', rating: 'dislike', verified: true });
     const clear = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '1', rating: 'none' });
@@ -333,17 +404,45 @@ describe('apple_music_set_rating', () => {
     installFetch(
       route('GET', '/v1/me/ratings/library-songs/i.x', () => (++gets === 1 ? { status: 404, text: '' } : gets === 2 ? { json: { data: [{ id: 'i.x', type: 'ratings' }] } } : { json: { data: [] } })),
       route('PUT', '/v1/me/ratings/library-songs/i.x', { status: 204 }),
+      route('DELETE', '/v1/me/ratings/library-songs/i.x', { status: 204 }),
     );
     const tools = captureTools();
     const r = await callTool(tools, 'apple_music_set_rating', { type: 'library-songs', id: 'i.x', rating: 'love' });
     expect(r.data).toMatchObject({ changed: true, verified: false, warnings: ['Apple still reports "none" — the change may not be visible yet.'] });
+    // An empty ratings list reads as "none"; the undo is sent anyway.
     const again = await callTool(tools, 'apple_music_set_rating', { type: 'library-songs', id: 'i.x', rating: 'none' });
-    expect(again.data).toMatchObject({ previous: 'none', changed: false });
+    expect(again.data).toMatchObject({ previous: 'none', changed: false, verified: true });
     let g2 = 0;
     installFetch(route('GET', '/v1/me/ratings/songs/2', () => (++g2 === 1 ? { status: 404, text: '' } : { status: 500, text: '' })), route('PUT', '/v1/me/ratings/songs/2', { status: 204 }));
     const e = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '2', rating: 'dislike' });
     expect((e.data.warnings as string[])[0]).toMatch(/could not re-read the rating/);
     const bad = await callTool(tools, 'apple_music_set_rating', { type: 'stations', id: '12', rating: 'love' });
     expect((bad.data.error as { code: string }).code).toBe('INVALID_ARGUMENT');
+  });
+
+  it('an undo right after a love whose read has not caught up is still sent, and not claimed as verified', async () => {
+    useWeb();
+    // Apple holds the love, but its reads lag and keep answering 404 ("none").
+    let serverValue: 'none' | 'love' = 'none';
+    const { calls } = installFetch(
+      route('GET', '/v1/me/ratings/songs/123', () => ({ status: 404, text: '' })),
+      route('PUT', '/v1/me/ratings/songs/123', () => {
+        serverValue = 'love';
+        return { status: 204 };
+      }),
+      route('DELETE', '/v1/me/ratings/songs/123', () => {
+        serverValue = 'none';
+        return { status: 204 };
+      }),
+    );
+    const tools = captureTools();
+    const love = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '123', rating: 'love' });
+    expect(love.data).toMatchObject({ changed: true, verified: false });
+    expect(serverValue).toBe('love');
+    const undo = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '123', rating: 'none' });
+    expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1);
+    expect(serverValue).toBe('none');
+    expect(undo.data).toMatchObject({ previous: 'none', rating: 'none', changed: false, verified: true });
+    expect(undo.data.notes).toEqual(['Apple already read "none"; it was sent anyway, since a read can lag a change made moments ago.']);
   });
 });

@@ -80,11 +80,13 @@ A module exports `register<X>Tools(server, deps?)` from `src/<x>/tools.ts` and `
   ("may have landed — check before retrying"). Only 429 is ever retried on a non-idempotent request.
 - **Structural write gate:** `APPLE_WRITE_MODE` below a tool's access → the tool is NOT REGISTERED.
   `additive` = only adds to your own account; nothing modified, removed, or sent to another person
-  (calendar create refuses attendees in additive mode for that reason).
+  (calendar create refuses attendees, and music create refuses `isPublic: true`, in additive mode for that reason).
 - **Confirm gate** (`confirmWrite`) on sends, deletes, playlist track removal/rewrites, and events with
   attendees (calendar create/update say so conditionally — never end a conditionally gated tool's description
   with the unconditional `CONFIRM_NOTE`); called on EVERY invocation after reads, right before the write, with a human-readable preview and
-  a revision (ETag or `stateRevision`) so a stale token fails as DRAFT_CHANGED. Never a boolean `confirm` (CI lint).
+  a revision (ETag or `stateRevision`) so a stale token fails as DRAFT_CHANGED. A prompt's acceptance is bound to the
+  same target+revision+payload+preview (an explicit `binding` — mcp-utils' default binds the args only, so an accepted
+  "remove position 1" once removed whichever song sat there on the retry). Never a boolean `confirm` (CI lint).
 - **Annotate every tool** from `ANNOTATIONS` (an unannotated tool is published as destructive).
 - stdout is JSON-RPC: `console.error` only. imapflow's default logger writes to stdout — always `logger: false`.
 
@@ -103,9 +105,17 @@ Responses report `backend`. Track removal is `DELETE …/tracks?ids[library-song
 occurrence; `mode` mandatory; videos use the same key); reorders `PUT` the full list built from a fresh full
 read; `PATCH` sends name+description+isPublic together like the web player. Apple-curated/collaborative
 playlists are `canEdit:false`. `next` hrefs drop `limit` — always send explicit `offset`/`limit`.
-Apple's reads lag its writes: `write-log.ts` remembers (2 min) the order each create/add/remove/reorder
-replaced, and `playlistStateRefusal` refuses a rewrite whose fresh read still shows the old state, or whose
-`expectedRevision` doesn't match (`PLAYLIST_CHANGED`); every rewrite returns the new `revision`. The health
+Apple's reads lag its writes: `write-log.ts` keeps EVERY write of the last 2 min per playlist (keeping only the
+latest let a second quick write hide the first): a rewrite (remove/reorder) records the order it replaced, an
+add/create the copies of each track a read must show (never the add's own, possibly stale, read). A rewrite that
+lands supersedes the entries its read showed (`mark()` → `recordRewrite`); an unconfirmed one is kept alongside.
+`playlistStateRefusal` refuses a rewrite whose read doesn't show one of them, or whose `expectedRevision` doesn't
+match (`PLAYLIST_CHANGED`); every rewrite returns the new `revision`. add_playlist_tracks refuses the same way when
+its duplicate check would run on such a read (`skipDuplicates:false` appends with a warning) and verifies by
+PRESENCE, not count. `update_playlist` PATCHes the full attribute set, so `PlaylistAttributeLog` refuses one whose
+read doesn't show a name/description/visibility this process set in the last 2 min. A write whose read may lag is
+never skipped as "already so": `set_rating` always sends (PUT/DELETE are idempotent) and `move_playlist` always PUTs
+the parent. The health
 probe uses `GET /v1/test` (a catalog id can be withdrawn) and checks each backend independently.
 
 **iCloud DAV** (dav/) — discovery: `PROPFIND /` Depth **0** → principal → home-set, an ABSOLUTE URL on the
