@@ -1,6 +1,7 @@
 import { SERVICES, type ServiceName } from './config.js';
 import { scrub } from './errors.js';
 import type { HealthProbe, ServiceHealth } from './health.js';
+import { isJson, scrubDeep } from './tools/_shared.js';
 import { healthReport, type HealthReport } from './tools/healthcheck.js';
 
 /**
@@ -12,7 +13,11 @@ import { healthReport, type HealthReport } from './tools/healthcheck.js';
  * without guessing whether the client or the credentials are at fault.
  *
  * Exit status: 0 when every configured service works, 1 when one fails,
- * 2 for a usage error. Output is scrubbed of every remembered secret.
+ * 2 for a usage error. Services named on the command line must also each be
+ * configured, enabled and working for a 0: "is calendar working?" must not
+ * pass because calendar was never checked. Output is scrubbed of every
+ * remembered secret, and an unrecognised argument is never echoed (it could
+ * be a password pasted in the wrong place).
  */
 export interface DoctorIo {
   out: (text: string) => void;
@@ -23,7 +28,9 @@ const USAGE =
   `Usage: apple-icloud-mcp doctor [service…] [--json]\n` +
   `  Checks each Apple service's credentials with one read-only request.\n` +
   `  service: ${SERVICES.join(', ')} (default: all enabled)\n` +
-  `  --json:  print the raw apple_healthcheck report\n`;
+  `  --json:  print the apple_healthcheck report as JSON\n` +
+  `  Exit 0 when every configured (and every named) service works, 1 otherwise, 2 for a usage error.\n` +
+  `  Reads the shell environment only — not the env block of an MCP client's config.\n`;
 
 export async function runDoctor(
   argv: readonly string[],
@@ -32,20 +39,33 @@ export async function runDoctor(
 ): Promise<number> {
   let json = false;
   const services: ServiceName[] = [];
-  for (const arg of argv) {
+  for (const [i, arg] of argv.entries()) {
     if (arg === '--json') json = true;
     else if (arg === '--help' || arg === '-h') {
       io.out(USAGE);
       return 0;
     } else if ((SERVICES as readonly string[]).includes(arg)) services.push(arg as ServiceName);
     else {
-      io.err(`Unknown argument "${arg}".\n${USAGE}`);
+      io.err(`Argument ${i + 1} is not a service name or option.\n${USAGE}`);
       return 2;
     }
   }
   const report = await healthReport(probes, services.length ? services : undefined);
-  io.out(scrub(json ? `${JSON.stringify(report, null, 2)}\n` : formatReport(report)));
-  return report.ok ? 0 : 1;
+  io.out(json ? `${jsonText(report)}\n` : scrub(formatReport(report)));
+  const named = services.every((s) => report.summary.working.includes(s));
+  return report.ok && named ? 0 : 1;
+}
+
+/**
+ * The report as indented JSON, scrubbed value by value first — some
+ * redaction shapes run to the next `;`, `,` or space and would eat a closing
+ * quote in serialized JSON — and then as text only if that still parses
+ * (the same two passes as `jsonErrorResponse`).
+ */
+function jsonText(report: HealthReport): string {
+  const text = JSON.stringify(scrubDeep(report), null, 2);
+  const scrubbed = scrub(text);
+  return isJson(scrubbed) ? scrubbed : text;
 }
 
 /** The report as a few aligned lines per service, worst news last. */
@@ -66,13 +86,17 @@ export function formatReport(report: HealthReport): string {
   for (const s of report.summary.disabled ?? []) lines.push(`  - ${pad(s)} disabled by APPLE_SERVICES`);
   for (const s of report.summary.unchecked ?? []) lines.push(`  ? ${pad(s)} enabled, but no check exists for it`);
   lines.push('');
-  const { working, failing } = report.summary;
+  const { working, failing, notConfigured, disabled = [] } = report.summary;
   if (failing.length) {
     lines.push(`${failing.length} configured service${failing.length === 1 ? ' is' : 's are'} failing: ${failing.join(', ')}.`);
   } else if (working.length) {
     lines.push(`Every configured service works (${working.join(', ')}).`);
-  } else {
+  } else if (notConfigured.length) {
     lines.push('No service is configured yet: set the variables listed above.');
+  } else if (disabled.length) {
+    lines.push(`Nothing was checked: ${disabled.join(', ')} ${disabled.length === 1 ? 'is' : 'are'} left out by APPLE_SERVICES. Add ${disabled.length === 1 ? 'it' : 'them'} there to check.`);
+  } else {
+    lines.push('Nothing was checked.');
   }
   return `${lines.join('\n')}\n`;
 }
@@ -82,12 +106,17 @@ function formatService(r: ServiceHealth, pad: (s: string) => string, indent: str
   if (!r.configured) {
     out.push(`  · ${pad(r.service)} not configured${r.missing?.length ? ` — set ${r.missing.join(', ')}` : ''}`);
   } else if (r.ok) {
-    const how = [r.credential?.source, r.probe, r.latencyMs !== undefined ? `${r.latencyMs} ms` : undefined].filter(Boolean);
-    out.push(`  ✓ ${pad(r.service)} working${how.length ? ` (${how.join(' · ')})` : ''}`);
+    out.push(`  ✓ ${pad(r.service)} working${r.latencyMs !== undefined ? ` (${r.latencyMs} ms)` : ''}`);
   } else {
     const what = r.error ? `${r.error.code}${r.error.status ? ` ${r.error.status}` : ''}: ${r.error.message}` : 'failed';
     out.push(`  ✗ ${pad(r.service)} FAILING — ${what}`);
   }
+  // One fact per line: a source or probe can itself hold "official: …;
+  // web: …", which a single ` · `-joined line made hard to read.
+  if (r.configured && r.credential?.source && r.credential.source !== 'none') {
+    out.push(`${indent}credential: ${r.credential.source}`);
+  }
+  if (r.configured && r.probe) out.push(`${indent}checked: ${r.probe}`);
   if (r.hint) out.push(`${indent}→ ${r.hint}`);
   for (const n of r.notes ?? []) out.push(`${indent}note: ${n}`);
   return out;

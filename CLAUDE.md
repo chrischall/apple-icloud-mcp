@@ -18,8 +18,8 @@ npm run test:coverage  # what CI runs: 100% lines/branches/functions/statements 
 npm run dev            # node --env-file=.env dist/index.js
 npm run notices        # regenerate THIRD_PARTY_NOTICES.md (the bundle script does this too)
 npx apple-icloud-mcp music-auth   # one-time MusicKit sign-in that prints APPLE_MUSIC_USER_TOKEN
-npx apple-icloud-mcp doctor [service…] [--json]   # apple_healthcheck from a terminal; exit 0 ok / 1 failing / 2 usage
 npx apple-icloud-mcp music-auth --print-developer-token --days 7   # hand out a dev token, never the .p8
+npx apple-icloud-mcp doctor [service…] [--json]   # apple_healthcheck from a terminal; exit 0 ok / 1 failing / 2 usage
 ```
 
 ## Architecture
