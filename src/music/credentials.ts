@@ -32,7 +32,7 @@ export const ENV = {
  * server's key asks its owner for a short-lived developer token from it — never for the `.p8` itself.
  */
 export const USER_TOKEN_HOWTO =
-  "run `npx @chrischall/aws-mcp music-auth` with the server's Apple Developer key set — or, without the key, with " +
+  "run `npx apple-cloud-mcp music-auth` with the server's Apple Developer key set — or, without the key, with " +
   'APPLE_MUSIC_DEVELOPER_TOKEN set to a token its owner mints with `music-auth --print-developer-token`';
 
 /** What to tell someone who has configured neither profile. */

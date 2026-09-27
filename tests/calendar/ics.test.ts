@@ -527,7 +527,7 @@ describe('building', () => {
     expect(ev.getFirstPropertyValue('uid')).toBe('U1');
     const text = serialize(vcal);
     expect(text.indexOf('BEGIN:VTIMEZONE')).toBeLessThan(text.indexOf('BEGIN:VEVENT'));
-    expect(text).toMatch(/^BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-\/\/chrischall\/\/aws-mcp\/\/EN\r\nCALSCALE:GREGORIAN\r\n/);
+    expect(text).toMatch(/^BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-\/\/chrischall\/\/apple-cloud-mcp\/\/EN\r\nCALSCALE:GREGORIAN\r\n/);
     expect(text.endsWith('END:VCALENDAR\r\n')).toBe(true);
     expect(text).toContain('SEQUENCE:0');
     expect(text).toContain('CREATED:20261020T160000Z');

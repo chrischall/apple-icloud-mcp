@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@chrischall/aws-mcp"
+        "apple-cloud-mcp"
       ],
       "env": {
         "APPLE_TEAM_ID": "${APPLE_TEAM_ID}",

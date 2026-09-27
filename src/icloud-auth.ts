@@ -63,7 +63,7 @@ export function resolveICloudCredentials(service: ICloudService, env: EnvSource 
  * Transient failures (timeouts, 5xx) never latch.
  *
  * The latch is kept in memory AND on disk (`icloud-rejected.json` under
- * `$MCP_DATA_DIR/.aws-mcp`, via `state.ts`). The disk copy is the one that
+ * `$MCP_DATA_DIR/.apple-cloud-mcp`, via `state.ts`). The disk copy is the one that
  * matters on mcp-host: a child is stopped after ten idle minutes, and
  * `persist: user` credentials are re-injected into every new one, so a latch
  * that lived only in memory re-sent a revoked password on every cold start.

@@ -20,7 +20,7 @@ import { NS, type DavMultistatus, type DavService } from './xml.js';
  * later href resolves against THAT host, which `DavResponse.url` already does.
  *
  * Discovery costs two round trips (~1.3 s), so its result is cached per
- * account in memory and on disk (`$MCP_DATA_DIR/.aws-mcp/dav-<kind>.json`,
+ * account in memory and on disk (`$MCP_DATA_DIR/.apple-cloud-mcp/dav-<kind>.json`,
  * 0600, bound to a digest of the username + app-specific password — rotate
  * either and the record is discarded). A disk record is re-checked with one
  * cheap PROPFIND before it is trusted; if the cached home is refused or gone,

@@ -30,7 +30,7 @@ describe('stateCache (failure shapes)', () => {
     });
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     expect(stateCache('x.json', 'b', (r) => r).save({ a: 1 })).toBe(false);
-    expect(err).toHaveBeenCalledWith('[aws-mcp] WARNING: could not write cache x.json: disk full');
+    expect(err).toHaveBeenCalledWith('[apple-cloud-mcp] WARNING: could not write cache x.json: disk full');
   });
 
   it('swallows a failing clear (nothing to clear, or a read-only directory)', () => {

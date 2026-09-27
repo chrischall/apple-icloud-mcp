@@ -94,7 +94,7 @@ export function makeImapLogger(state: ImapLogState): Logger {
     const o = (obj ?? {}) as { msg?: unknown; err?: { responseText?: unknown; message?: unknown } };
     const text = o.err?.responseText ?? o.err?.message;
     if (typeof text === 'string' && text) state.lastServerText = text;
-    if (isDebugLog()) console.error(`[aws-mcp] mail imap ${level}: ${scrub(String(o.msg ?? text ?? ''))}`);
+    if (isDebugLog()) console.error(`[apple-cloud-mcp] mail imap ${level}: ${scrub(String(o.msg ?? text ?? ''))}`);
   };
   return { trace: noop, debug: noop, info: noop, warn: note('warn'), error: note('error'), fatal: note('error') };
 }
@@ -114,7 +114,7 @@ export function imapOptions(account: MailAccount, form: LoginForm, logger: Logge
     connectionTimeout: timeout,
     greetingTimeout: timeout,
     socketTimeout: timeout,
-    clientInfo: { name: 'aws-mcp', version: VERSION },
+    clientInfo: { name: 'apple-cloud-mcp', version: VERSION },
   };
 }
 
@@ -198,7 +198,7 @@ async function connect(create: CreateImapClient, account: MailAccount): Promise<
     const client = create(imapOptions(account, form, makeImapLogger(state)));
     // imapflow emits 'error' after connect; with no listener Node would throw and kill the process.
     client.on('error', (err) => {
-      if (isDebugLog()) console.error(`[aws-mcp] mail imap connection error: ${scrub(String(err?.message ?? err))}`);
+      if (isDebugLog()) console.error(`[apple-cloud-mcp] mail imap connection error: ${scrub(String(err?.message ?? err))}`);
     });
     try {
       await client.connect();

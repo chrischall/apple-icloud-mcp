@@ -54,7 +54,7 @@ export function resetDefaultMapsClient(): void {
 // Constants
 // ---------------------------------------------------------------------------
 
-const LABEL = 'aws-mcp';
+const LABEL = 'apple-cloud-mcp';
 const VIEWS = ['compact', 'full'] as const;
 
 /** Apple's `PoiCategory` values (Maps Server API docs, 77 values). */

@@ -1,13 +1,13 @@
 {
-  "name": "@chrischall/aws-mcp",
+  "name": "apple-cloud-mcp",
   "version": "0.0.0",
   "license": "MIT",
-  "mcpName": "io.github.chrischall/aws-mcp",
-  "description": "Apple Web Services MCP server for Claude — Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search — developed and maintained by AI (Claude Code)",
+  "mcpName": "io.github.chrischall/apple-cloud-mcp",
+  "description": "Unofficial MCP server for Apple's services — Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search — that runs anywhere, no Mac needed. Not affiliated with Apple. Developed and maintained by AI (Claude Code)",
   "author": "Claude Code (AI) <https://www.anthropic.com/claude>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/chrischall/aws-mcp.git"
+    "url": "git+https://github.com/chrischall/apple-cloud-mcp.git"
   },
   "keywords": [
     "mcp",
@@ -17,14 +17,19 @@
     "caldav",
     "carddav",
     "weatherkit",
-    "apple-maps"
+    "apple-maps",
+    "model-context-protocol",
+    "icloud-calendar",
+    "icloud-contacts",
+    "icloud-mail",
+    "itunes"
   ],
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
   },
   "bin": {
-    "aws-mcp": "dist/index.js"
+    "apple-cloud-mcp": "dist/index.js"
   },
   "files": [
     "dist",

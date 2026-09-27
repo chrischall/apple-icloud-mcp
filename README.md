@@ -1,8 +1,8 @@
-# Apple Web Services MCP
+# apple-cloud-mcp
 
-[![CI](https://github.com/chrischall/aws-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/chrischall/aws-mcp/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/@chrischall/aws-mcp)](https://www.npmjs.com/package/@chrischall/aws-mcp)
-[![license](https://img.shields.io/npm/l/@chrischall/aws-mcp)](LICENSE)
+[![CI](https://github.com/chrischall/apple-cloud-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/chrischall/apple-cloud-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/apple-cloud-mcp)](https://www.npmjs.com/package/apple-cloud-mcp)
+[![license](https://img.shields.io/npm/l/apple-cloud-mcp)](LICENSE)
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that connects Claude to **Apple's web
 services**: Apple Music (your playlists, library and the catalog), iCloud Calendar, Contacts and Mail,
@@ -11,7 +11,14 @@ Apple Maps, WeatherKit, and the iTunes Search API.
 It talks to Apple over the network through Apple's own web APIs and standard protocols (CalDAV, CardDAV,
 IMAP/SMTP), so — unlike Mac-only Apple integrations such as
 [apple-swift-mcp](https://github.com/chrischall/apple-swift-mcp) — it runs anywhere: Linux, Windows, a
-container, or hosted on [mcp-host](#running-on-mcp-host) as a claude.ai connector.
+container, or hosted on [mcp-host](#running-on-mcp-host) as a claude.ai connector. The two complement each other:
+`apple-swift-mcp` drives the Mac's own apps (Calendar, Reminders, Contacts, Mail, Messages, Notes, Photos, Maps),
+while `apple-cloud-mcp` reaches Apple's web services from anywhere and adds Apple Music, WeatherKit and iTunes.
+
+> [!NOTE]
+> **Unofficial.** This project is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iCloud,
+> Apple Music, Apple Maps and WeatherKit are trademarks of Apple Inc., used here only to name the services it
+> connects to.
 
 > [!WARNING]
 > **AI-developed project.** This codebase was entirely built and is actively maintained by
@@ -97,7 +104,7 @@ actual terms.
 ### Claude Code
 
 ```bash
-claude mcp add apple -- npx -y @chrischall/aws-mcp
+claude mcp add apple -- npx -y apple-cloud-mcp
 ```
 
 then set the variables for the services you want (see [Setting up credentials](#setting-up-credentials)) in
@@ -108,7 +115,7 @@ the server's `env`, for example in `.mcp.json`:
   "mcpServers": {
     "apple": {
       "command": "npx",
-      "args": ["-y", "@chrischall/aws-mcp"],
+      "args": ["-y", "apple-cloud-mcp"],
       "env": {
         "ICLOUD_USERNAME": "you@icloud.com",
         "ICLOUD_APP_PASSWORD": "abcd-efgh-ijkl-mnop",
@@ -121,13 +128,13 @@ the server's `env`, for example in `.mcp.json`:
 
 ### Claude Desktop
 
-Install the `.mcpb` bundle from the [latest release](https://github.com/chrischall/aws-mcp/releases) and fill
+Install the `.mcpb` bundle from the [latest release](https://github.com/chrischall/apple-cloud-mcp/releases) and fill
 in the settings it asks for, or add the same `npx` entry to `claude_desktop_config.json`.
 
 ### From source
 
 ```bash
-git clone https://github.com/chrischall/aws-mcp.git && cd aws-mcp
+git clone https://github.com/chrischall/apple-cloud-mcp.git && cd apple-cloud-mcp
 npm install && npm run build
 cp .env.example .env   # fill in what you need
 npm run dev
@@ -175,7 +182,7 @@ Token**, which Apple only issues through an interactive MusicKit sign-in in a br
 set, run:
 
 ```bash
-npx @chrischall/aws-mcp music-auth
+npx apple-cloud-mcp music-auth
 ```
 
 It opens a page on `127.0.0.1`, you click **Sign in with Apple Music**, and it prints
@@ -183,8 +190,8 @@ It opens a page on `127.0.0.1`, you click **Sign in with Apple Music**, and it p
 the developer key that minted it, and changing your Apple ID password revokes it.
 
 **Someone without the developer key** (another person on a shared deployment) never needs the `.p8`. The key's
-owner runs `npx @chrischall/aws-mcp music-auth --print-developer-token --days 7` and sends them the short-lived
-token it prints; they run `APPLE_MUSIC_DEVELOPER_TOKEN=<that token> npx @chrischall/aws-mcp music-auth` on their
+owner runs `npx apple-cloud-mcp music-auth --print-developer-token --days 7` and sends them the short-lived
+token it prints; they run `APPLE_MUSIC_DEVELOPER_TOKEN=<that token> npx apple-cloud-mcp music-auth` on their
 own machine, sign in, and keep the user token it prints. The developer token expires on its own; the user token
 keeps working with the server's key.
 
@@ -205,7 +212,7 @@ served them.
 
 ## Running on mcp-host
 
-The package ships a [`mint.yaml`](mint.yaml) that mcp-host reads when you register `@chrischall/aws-mcp`:
+The package ships a [`mint.yaml`](mint.yaml) that mcp-host reads when you register `apple-cloud-mcp`:
 
 - **Owner settings** (the developer key, `APPLE_WRITE_MODE`, `APPLE_SERVICES`, `MCP_CONFIRM_SECRET`, …) go in
   the registration's environment — store the private key and confirm secret as secrets.
@@ -382,7 +389,7 @@ All optional; each service activates when its credentials are present. Values th
 | Variable | Meaning |
 |---|---|
 | `APPLE_MUSIC_DEVELOPER_TOKEN` 🔒 | Optional: a pre-minted Apple Music developer token (JWT) instead of signing one from the key above. |
-| `APPLE_MUSIC_USER_TOKEN` 🔒 | Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx @chrischall/aws-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months. |
+| `APPLE_MUSIC_USER_TOKEN` 🔒 | Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx apple-cloud-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months. |
 | `APPLE_MUSIC_WEB_USER_TOKEN` 🔒 | Opt-in web-player mode (no developer account needed; unlocks rename/delete/remove/reorder): the media-user-token cookie from a signed-in music.apple.com tab. |
 | `APPLE_MUSIC_WEB_DEVELOPER_TOKEN` 🔒 | Optional override for the web-player developer token (normally read automatically from music.apple.com). |
 | `APPLE_MUSIC_STOREFRONT` | Two-letter Apple Music storefront (e.g. us, gb). Default: your account's storefront, else us. |
@@ -404,7 +411,7 @@ All optional; each service activates when its credentials are present. Values th
 | `APPLE_SERVICES` | Comma-separated services to enable (music, calendar, contacts, mail, maps, weather, itunes). Default: all. |
 | `DISPLAY_TZ` | IANA time zone (e.g. America/New_York) for displayed times and for dates you give without an offset. Set this on a hosted server, which runs in UTC. |
 | `APPLE_UNITS` | "metric" (default) or "imperial" units for weather (Maps distances always show both). |
-| `APPLE_STATE_CACHE` | Set to false to write nothing under $MCP_DATA_DIR/.aws-mcp: no web-player token or iCloud discovery cache, and the rejected-password latch and spent confirmation tokens then last only as long as the process. |
+| `APPLE_STATE_CACHE` | Set to false to write nothing under $MCP_DATA_DIR/.apple-cloud-mcp: no web-player token or iCloud discovery cache, and the rejected-password latch and spent confirmation tokens then last only as long as the process. |
 | `APPLE_REQUEST_TIMEOUT_MS` | Per-request timeout in milliseconds (default 30000). |
 | `APPLE_DEBUG_LOG` | Set to 1 to log every upstream request line to stderr (credentials redacted). |
 
@@ -455,7 +462,7 @@ variables to set if not), whether Apple accepted them just now, the active write
   credential travels.
 - Reading mail never marks it read (`apple_mail_update_flags` does that when asked). HTML mail is converted to
   text with hidden content dropped, and mail and calendar text is labelled as content from its sender.
-- **Local data:** small files under `$MCP_DATA_DIR/.aws-mcp/` (or `~/.aws-mcp/`), all mode 0600 and none holding
+- **Local data:** small files under `$MCP_DATA_DIR/.apple-cloud-mcp/` (or `~/.apple-cloud-mcp/`), all mode 0600 and none holding
   your password or tokens:
   - `music-web-token.json` — Apple Music web player's own public developer token (web mode only);
   - `dav-calendar.json`, `dav-contacts.json` — iCloud discovery URLs, bound to the credential they came from;

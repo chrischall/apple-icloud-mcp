@@ -110,7 +110,7 @@ describe('DavClient requests', () => {
     expect(header(req, 'Content-Type')).toBe('application/xml; charset=utf-8');
     expect(header(req, 'Prefer')).toBe('return=minimal');
     expect(header(req, 'Authorization')).toBe(`Basic ${TOKEN}`);
-    expect(header(req, 'User-Agent')).toBe(`aws-mcp/${VERSION}`);
+    expect(header(req, 'User-Agent')).toBe(`apple-cloud-mcp/${VERSION}`);
     expect(req.body).toBe(propfindBody([[NS.DAV, 'resourcetype'], [NS.DAV, 'displayname']]));
     expect(ms.responses.map((r) => r.url)).toEqual([HOME, `${HOME}work/`]);
     expect(ms.skipped).toBe(0);

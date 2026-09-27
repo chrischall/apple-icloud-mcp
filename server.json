@@ -1,16 +1,16 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.chrischall/aws-mcp",
-  "description": "Apple Music playlists, iCloud Calendar/Contacts/Mail, Apple Maps and WeatherKit for Claude",
+  "name": "io.github.chrischall/apple-cloud-mcp",
+  "description": "Unofficial: Apple Music, iCloud Calendar/Contacts/Mail, Apple Maps and WeatherKit, no Mac needed",
   "repository": {
-    "url": "https://github.com/chrischall/aws-mcp",
+    "url": "https://github.com/chrischall/apple-cloud-mcp",
     "source": "github"
   },
   "version": "0.0.0",
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "@chrischall/aws-mcp",
+      "identifier": "apple-cloud-mcp",
       "version": "0.0.0",
       "transport": {
         "type": "stdio"
@@ -95,7 +95,7 @@
         },
         {
           "name": "APPLE_MUSIC_USER_TOKEN",
-          "description": "Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx @chrischall/aws-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months.",
+          "description": "Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx apple-cloud-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months.",
           "isRequired": false,
           "format": "string",
           "isSecret": true
@@ -171,7 +171,7 @@
         },
         {
           "name": "APPLE_STATE_CACHE",
-          "description": "Set to false to write nothing under $MCP_DATA_DIR/.aws-mcp: no web-player token or iCloud discovery cache, and the rejected-password latch and spent confirmation tokens then last only as long as the process.",
+          "description": "Set to false to write nothing under $MCP_DATA_DIR/.apple-cloud-mcp: no web-player token or iCloud discovery cache, and the rejected-password latch and spent confirmation tokens then last only as long as the process.",
           "isRequired": false,
           "format": "string"
         },

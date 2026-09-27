@@ -10,18 +10,18 @@ describe('packaging', () => {
     expect(read('server.json').description.length).toBeLessThanOrEqual(100);
   });
 
-  it('publishes the scoped npm identity while the registry name follows the repo', () => {
+  it('publishes unscoped under the repo name, like the rest of the fleet, with the registry name to match', () => {
     const server = read('server.json');
     const pkg = read('package.json');
-    expect(pkg.name).toBe('@chrischall/aws-mcp');
-    expect(pkg.mcpName).toBe('io.github.chrischall/aws-mcp');
+    expect(pkg.name).toBe('apple-cloud-mcp');
+    expect(pkg.mcpName).toBe('io.github.chrischall/apple-cloud-mcp');
     expect(server.name).toBe(pkg.mcpName);
     expect(pkg.publishConfig?.access).toBe('public');
     for (const p of server.packages) expect(p.identifier).toBe(pkg.name);
   });
 
-  it('keeps the bin unscoped', () => {
-    expect(Object.keys(read('package.json').bin)).toEqual(['aws-mcp']);
+  it('names the bin after the package', () => {
+    expect(Object.keys(read('package.json').bin)).toEqual(['apple-cloud-mcp']);
   });
 
   it('ships mint.yaml (mcp-host reads it from the published package)', () => {

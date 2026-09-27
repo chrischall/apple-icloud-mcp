@@ -81,7 +81,7 @@ const MIN_TOOLS = 50;
 
 describe('server boot (built artifacts)', () => {
   it('the .mcpb bundle (dist/bundle.js) boots with no node_modules and no credentials', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aws-mcp-bundle-'));
+    const dir = mkdtempSync(join(tmpdir(), 'apple-cloud-mcp-bundle-'));
     try {
       copyFileSync(BUNDLE, join(dir, 'bundle.js'));
       const { tools, stdout } = await listToolsViaStdio(join(dir, 'bundle.js'), dir, dir);
@@ -95,7 +95,7 @@ describe('server boot (built artifacts)', () => {
   }, 40_000);
 
   it('the npm bin (dist/index.js) boots with no credentials', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'aws-mcp-home-'));
+    const home = mkdtempSync(join(tmpdir(), 'apple-cloud-mcp-home-'));
     try {
       const { tools, stdout } = await listToolsViaStdio(BIN, ROOT, home);
       expect(tools.length).toBeGreaterThanOrEqual(MIN_TOOLS);

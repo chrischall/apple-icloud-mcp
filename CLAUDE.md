@@ -1,11 +1,13 @@
-# aws-mcp — Apple Web Services MCP
+# apple-cloud-mcp — Apple services from any OS
 
 Node/TypeScript stdio MCP server that reaches Apple's web services from any OS: Apple Music (official API +
 opt-in web-player API), iCloud Calendar (CalDAV), Contacts (CardDAV) and Mail (IMAP/SMTP), Apple Maps Server
 API, WeatherKit REST, and iTunes Search/charts. 58 tools, all prefixed `apple_`. Built to be hosted on
 mcp-host (Linux, gVisor, egress through an HTTPS proxy, scale-to-zero) as well as run locally. Published as
-`@chrischall/aws-mcp` (bin `aws-mcp`); "aws" = Apple Web Services — **never use an `AWS_` env prefix**, that
-namespace is the Amazon SDK's (a packaging test enforces it).
+`apple-cloud-mcp` (unscoped; bin of the same name). Unofficial — not affiliated with Apple, and every description
+says so. Before its first release it was `aws-mcp` ("Apple Web Services"), renamed because that reads as Amazon Web
+Services: never shorten the name to "AWS", and **never use an `AWS_` env prefix** — that namespace is the Amazon
+SDK's (a packaging test enforces it).
 
 ## Commands
 
@@ -15,8 +17,8 @@ npm test               # tsc typecheck + vitest run
 npm run test:coverage  # what CI runs: 100% lines/branches/functions/statements on src/** (excl. src/index.ts)
 npm run dev            # node --env-file=.env dist/index.js
 npm run notices        # regenerate THIRD_PARTY_NOTICES.md (the bundle script does this too)
-npx @chrischall/aws-mcp music-auth   # one-time MusicKit sign-in that prints APPLE_MUSIC_USER_TOKEN
-npx @chrischall/aws-mcp music-auth --print-developer-token --days 7   # hand out a dev token, never the .p8
+npx apple-cloud-mcp music-auth   # one-time MusicKit sign-in that prints APPLE_MUSIC_USER_TOKEN
+npx apple-cloud-mcp music-auth --print-developer-token --days 7   # hand out a dev token, never the .p8
 ```
 
 ## Architecture
@@ -33,7 +35,7 @@ src/
   apple-keys.ts     .p8 normalization/validation, ES256 tokens for MusicKit, Maps (/v1/token exchange), WeatherKit
   icloud-auth.ts    ICLOUD_USERNAME/ICLOUD_APP_PASSWORD + the credential-rejection latch (memory + disk, 24 h)
   time.ts           strict date parsing (offset-less = wall clock in DISPLAY_TZ), DST-correct formatting
-  state.ts          tiny 0600 JSON caches under $MCP_DATA_DIR/.aws-mcp, bound to the credential
+  state.ts          tiny 0600 JSON caches under $MCP_DATA_DIR/.apple-cloud-mcp, bound to the credential
   health.ts         HealthProbe contract + makeProbe; tools/healthcheck.ts runs them all (apple_healthcheck)
   tools/_shared.ts  defineTool (service switch + write-mode gate + structured scrubbed errors), ANNOTATIONS,
                     pageInfo/pagedResponse (paging facts FIRST), jsonResponse (minified)
@@ -181,9 +183,10 @@ Nothing here has been exercised against a live Apple account; `docs/APPLE-API.md
 ## Publishing constraints
 
 - `server.json` `description` ≤ 100 chars (MCP Registry 422 otherwise) — `tests/packaging.test.ts` checks.
-- Scoped npm name `@chrischall/aws-mcp`, unscoped bin, `mcpName`/`server.json` name `io.github.chrischall/aws-mcp`.
+- Unscoped npm name `apple-cloud-mcp` (like the rest of the fleet), same-named bin, `mcpName`/`server.json` name
+  `io.github.chrischall/apple-cloud-mcp`.
 - `mint.yaml` and `THIRD_PARTY_NOTICES.md` must stay in package.json `files`.
-- A green tag is not a green publish: after a release, `npm view @chrischall/aws-mcp version`.
+- A green tag is not a green publish: after a release, `npm view apple-cloud-mcp version`.
 
 ## Versioning
 

@@ -263,7 +263,7 @@ export function createItunesClient(opts: ItunesClientOptions = {}): ItunesClient
 
 /** The envelope, or an error — a body without a `results` array must never read as "no results". */
 export function checkItunesEnvelope(raw: unknown, endpoint: string): ItunesEnvelope {
-  parseLenient(itunesEnvelopeSchema, raw, { label: 'aws-mcp', context: `GET itunes.apple.com/${endpoint}` });
+  parseLenient(itunesEnvelopeSchema, raw, { label: 'apple-cloud-mcp', context: `GET itunes.apple.com/${endpoint}` });
   // The RAW body flows on (not the parse): zod reorders keys, and `view: full` promises Apple's records verbatim.
   if (!isRecord(raw) || !Array.isArray(raw.results)) {
     throw new UpstreamError('itunes', 200, `itunes: /${endpoint} answered without a results list; the response cannot be read.`, {
@@ -274,7 +274,7 @@ export function checkItunesEnvelope(raw: unknown, endpoint: string): ItunesEnvel
 }
 
 export function checkChartFeed(raw: unknown, chart: string): ChartFeed {
-  parseLenient(chartEnvelopeSchema, raw, { label: 'aws-mcp', context: `GET rss.marketingtools.apple.com ${chart}` });
+  parseLenient(chartEnvelopeSchema, raw, { label: 'apple-cloud-mcp', context: `GET rss.marketingtools.apple.com ${chart}` });
   const feed = isRecord(raw) ? raw.feed : undefined;
   if (!isRecord(feed) || !Array.isArray(feed.results)) {
     throw new UpstreamError('itunes', 200, `itunes: Apple's ${chart} chart feed answered without a results list; the response cannot be read.`, {

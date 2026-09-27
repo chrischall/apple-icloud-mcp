@@ -49,7 +49,7 @@ const JWT_RE = /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
 const BUNDLE_RE = /(?:https:\/\/music\.apple\.com)?\/assets\/index[~-][A-Za-z0-9_]+\.js/g;
 const BROWSER_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,*/*',
-  'User-Agent': 'Mozilla/5.0 (compatible; aws-mcp; +https://github.com/chrischall/aws-mcp)',
+  'User-Agent': 'Mozilla/5.0 (compatible; apple-cloud-mcp; +https://github.com/chrischall/apple-cloud-mcp)',
 };
 
 export interface WebToken {
@@ -172,7 +172,7 @@ export class WebTokenSource {
     } catch (err) {
       if (stale) {
         // Still valid, just inside the refresh window: keep working, say why on stderr.
-        console.error(`[aws-mcp] WARNING: could not refresh the Apple Music web-player token (${errorMessage(err)}); using the cached one until it expires.`);
+        console.error(`[apple-cloud-mcp] WARNING: could not refresh the Apple Music web-player token (${errorMessage(err)}); using the cached one until it expires.`);
         const kept = { ...stale, checkedAt: this.now() };
         this.cached = kept;
         diskCache().save(kept);
