@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Unofficial Apple Music, iCloud Calendar/Contacts/Mail, Apple Maps and WeatherKit tools for Claude Code",
-    "version": "0.0.0"
+    "version": "0.1.0"
   },
   "plugins": [
     {
@@ -14,7 +14,7 @@
       "displayName": "Apple iCloud",
       "source": "./",
       "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search for Claude via MCP — runs anywhere, no Mac required. Unofficial; not affiliated with Apple.",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "author": {
         "name": "Chris Chall"
       },
