@@ -226,6 +226,11 @@ describe('planUpdate', () => {
     );
     const refusal = /some occurrences as time periods \(RDATE;VALUE=PERIOD\).*cannot move, split or cut short\. Nothing was changed\./;
     await expect(update('home/per.ics#occ=2026-10-12T13:00:00Z', { span: 'allEvents', startDate: '2026-10-12T10:00' })).rejects.toThrow(refusal);
+    await expect(update('home/per.ics#occ=2026-10-12T13:00:00Z', { span: 'allEvents', endDate: '2026-10-12T10:30', timeZone: 'Europe/Berlin' })).rejects.toThrow(refusal);
+    // A new length alone moves nothing: the natural occurrences get it, the period keeps its own.
+    const longer = await update('home/per.ics#occ=2026-10-12T13:00:00Z', { span: 'allEvents', endDate: '2026-10-12T10:30' });
+    expect(longer.puts[0]!.body).toContain('DTEND;TZID=America/New_York:20261005T103000');
+    expect(longer.puts[0]!.body).toContain('RDATE;VALUE=PERIOD:20261014T130000Z/PT2H');
     await expect(update('home/per.ics#occ=2026-10-12T13:00:00Z', { span: 'futureEvents', title: 'T' })).rejects.toThrow(refusal);
     const loaded = await load('home/per.ics#occ=2026-10-12T13:00:00Z');
     expect(() => planDelete(loaded, 'futureEvents', env)).toThrow(refusal);
@@ -246,6 +251,40 @@ describe('planUpdate', () => {
     const body = (future.op as { body: string }).body;
     expect(body).toContain('DTSTART:20261019T130000Z');
     expect(body).not.toContain('RDATE');
+  });
+
+  it('keeps an edit to DTSTART of a series of RDATEs only when the rest of it is cut away', async () => {
+    dav.put('home', 'ro.ics', ics(...vevent('UID:ro', 'DTSTART:20261026T130000Z', 'DTEND:20261026T140000Z', 'RDATE:20261028T130000Z,20261030T130000Z', 'SUMMARY:Checkup')));
+    const moved = await update('home/ro.ics#occ=2026-10-26T13:00:00Z', { startDate: '2026-10-26T15:00', title: 'Checkup (moved)' });
+    dav.put('home', 'ro.ics', moved.puts[0]!.body);
+    // Deleting "this and following" from the second: the moved first one stays moved.
+    const cut = planDelete(await load('home/ro.ics#occ=2026-10-28T13:00:00Z'), 'futureEvents', env);
+    const left = eventParts(parseCalendar((cut.op as { body: string }).body, 't'));
+    expect(expandSeries(left, { from: new Date('2026-10-01T00:00:00Z'), to: new Date('2026-12-01T00:00:00Z'), zone: NY }).occurrences.map((o) => [o.occ, o.start.toISOString(), textProp(o.comp, 'summary')])).toEqual([
+      ['2026-10-26T13:00:00Z', '2026-10-26T19:00:00.000Z', 'Checkup (moved)'],
+    ]);
+    // Splitting there: the same, in the original half.
+    const split = await update('home/ro.ics#occ=2026-10-28T13:00:00Z', { span: 'futureEvents', title: 'Later' });
+    expect(keysOf(split.puts[1]!.body)).toEqual(['2026-10-28T13:00:00Z', '2026-10-30T13:00:00Z']);
+    const first = eventParts(parseCalendar(split.puts[0]!.body, 't'));
+    expect(expandSeries(first, { from: new Date('2026-10-01T00:00:00Z'), to: new Date('2026-12-01T00:00:00Z'), zone: NY }).occurrences.map((o) => textProp(o.comp, 'summary'))).toEqual(['Checkup (moved)']);
+  });
+
+  it('cuts DTSTART of a series of RDATEs only when an RDATE comes before it, on the right side of a split', async () => {
+    // Listed 10-15, 10-19 (DTSTART), 10-22.
+    dav.put('home', 'g.ics', ics(...vevent('UID:g', 'DTSTART:20261019T130000Z', 'DTEND:20261019T140000Z', 'RDATE:20261015T130000Z,20261022T130000Z', 'SUMMARY:G')));
+    const fromStart = planDelete(await load('home/g.ics#occ=2026-10-19T13:00:00Z'), 'futureEvents', env);
+    expect(keysOf((fromStart.op as { body: string }).body)).toEqual(['2026-10-15T13:00:00Z']);
+    const split = await update('home/g.ics#occ=2026-10-19T13:00:00Z', { span: 'futureEvents', title: 'Renamed' });
+    expect(keysOf(split.puts[0]!.body)).toEqual(['2026-10-15T13:00:00Z']);
+    expect(keysOf(split.puts[1]!.body)).toEqual(['2026-10-19T13:00:00Z', '2026-10-22T13:00:00Z']);
+    // From an RDATE before DTSTART: DTSTART goes too, and into the new series on a split.
+    dav.put('home', 'h.ics', ics(...vevent('UID:h', 'DTSTART:20261019T130000Z', 'DTEND:20261019T140000Z', 'RDATE:20261013T130000Z,20261015T130000Z,20261022T130000Z', 'SUMMARY:H')));
+    const fromEarlier = planDelete(await load('home/h.ics#occ=2026-10-15T13:00:00Z'), 'futureEvents', env);
+    expect(keysOf((fromEarlier.op as { body: string }).body)).toEqual(['2026-10-13T13:00:00Z']);
+    const early = await update('home/h.ics#occ=2026-10-15T13:00:00Z', { span: 'futureEvents', title: 'X' });
+    expect(keysOf(early.puts[0]!.body)).toEqual(['2026-10-13T13:00:00Z']);
+    expect(keysOf(early.puts[1]!.body)).toEqual(['2026-10-15T13:00:00Z', '2026-10-19T13:00:00Z', '2026-10-22T13:00:00Z']);
   });
 
   it('plans a single event: fields, times, a move, and a move alone', async () => {

@@ -691,6 +691,19 @@ describe('apple_calendar_delete_event', () => {
     expect(series.applied).toMatch(/^the whole series \(\d+ occurrences in the next year\)$/);
   });
 
+  it('deletes an occurrence two values name (a PERIOD on a rule instance) entirely, and verifies it', async () => {
+    h.dav.put('home', 'dup.ics', ics(...vevent('UID:dup', 'DTSTART:20261026T130000Z', 'DTEND:20261026T140000Z', 'RRULE:FREQ=WEEKLY;COUNT=3', 'RDATE;VALUE=PERIOD:20261102T130000Z/PT3H', 'SUMMARY:W')));
+    const listed = await h.call('apple_calendar_list_events', { fromDate: '2026-10-25', toDate: '2026-11-15', calendars: ['Home'] });
+    expect(listed.json.events.filter((e: { id: string }) => e.id.startsWith('home/dup.ics')).map((e: { id: string }) => e.id)).toEqual([
+      'home/dup.ics#occ=2026-10-26T13:00:00Z',
+      'home/dup.ics#occ=2026-11-02T13:00:00Z',
+      'home/dup.ics#occ=2026-11-09T13:00:00Z',
+    ]);
+    const done = json(await callConfirmed(gated('apple_calendar_delete_event'), { eventId: 'home/dup.ics#occ=2026-11-02T13:00:00Z' }));
+    expect(done).toMatchObject({ deleted: true, verified: true, applied: 'this occurrence only' });
+    expect(done.warnings).toBeUndefined();
+  });
+
   it('warns when the deletion does not read back yet, or cannot be checked', async () => {
     h.dav.hooks.push((m) => (m === 'DELETE' ? { status: 204 } : undefined)); // accepted but not applied (yet)
     const lag = json(await callConfirmed(gated('apple_calendar_delete_event'), { eventId: 'home/one.ics' }));

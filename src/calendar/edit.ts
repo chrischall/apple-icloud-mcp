@@ -98,9 +98,9 @@ function hasAttendees(vcal: Component): boolean {
  * is assumed to). Deleting the last one by EXDATE would otherwise leave a
  * resource that shows nothing anywhere yet still exists.
  */
-function hasInstance(master: Component): boolean {
+function hasInstance(master: Component, zone: string): boolean {
   try {
-    return seriesWalker(master)() !== null;
+    return seriesWalker(master, zone)() !== null;
   } catch {
     return true;
   }
@@ -347,7 +347,7 @@ export function planDelete(loaded: LoadedEvent, span: Span, env: { zone: string;
     }
     scope = SCOPE[span];
     const left = eventParts(vcal);
-    if (left.overrides.length > 0 || (left.master && hasInstance(left.master))) {
+    if (left.overrides.length > 0 || (left.master && hasInstance(left.master, zone))) {
       // Checked like every other write: a stored value holding a stray CR (another app's) is refused, never re-sent.
       op = { kind: 'put', url: resource.url, body: serializeForWrite(vcal), ifMatch };
       verify = { occ };

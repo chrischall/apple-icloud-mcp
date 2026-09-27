@@ -132,13 +132,17 @@ end). A bare id on a recurring series is refused for single-occurrence edits; ne
 occurrence. Recurrences are expanded client-side with ical.js (iCloud's server `expand` breaks all-day
 events). ical.js has NO loop limits: VTIMEZONE rules that aren't plain yearly are swapped for the standard
 zone (an invitation-controlled TZ once hung the server), and rules it would spin on are refused before it
-sees them — keep those guards. ical.js yields DTSTART only through an RRULE's iterator and hands an RDATE PERIOD
-back as an `ICAL.Period`, so `seriesWalker` gives it an RDATE view (period starts, plus DTSTART when there is no
-RRULE — RFC 5545 makes it the first instance); a PERIOD instance keeps its own end, and a series holding one is
-never moved, split or cut short (refused). API all-day end dates are INCLUSIVE; iCalendar DTEND is exclusive. Query
+sees them — keep those guards. `seriesWalker` doesn't trust ical.js's RecurExpansion with the whole set: it hands it
+a view (RDATE PERIODs as their starts, DTSTART among the RDATEs when there is no RRULE — RFC 5545 makes it the first
+instance — and no EXDATE), skips an instant it just gave (an RDATE on a rule instance came out twice) and applies
+EXDATEs itself (ical.js's one-pass pointer let an excluded instance through after an EXDATE that matched nothing). A
+PERIOD instance keeps its own end; a series holding one is never moved, split or cut short (refused). Without an
+RRULE, DTSTART is cut like an RDATE (one can precede it) and a split carries it over. API all-day end dates are
+INCLUSIVE; iCalendar DTEND is exclusive. Query
 windows are widened a day each side (iCloud evaluates all-day events in its own zone) then filtered exactly.
 `futureEvents` splits the series (UNTIL on the old, new UID for the new, COUNT adjusted; restore on failure) —
-only at an occurrence the RRULE produces (an RDATE one is refused), and ending a series never rewrites a rule that
+only at an occurrence the RRULE produces (an RDATE one is refused; a series of RDATEs only splits at any of them), and
+ending a series never rewrites a rule that
 already ends earlier (COUNT→UNTIL would EXTEND it). An unknown outcome on the split's first PUT says the new
 series was NOT created; a restore of a series with attendees carries a SEQUENCE above the shortened one they were
 sent (RFC 5546), and never claims "nothing was changed". `allEvents` time changes shift DTSTART,

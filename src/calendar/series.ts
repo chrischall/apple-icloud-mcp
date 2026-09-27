@@ -382,8 +382,8 @@ export const SHIFT_CHECK_DAYS = 3653;
  * The walk stops at the first instance past a bound, so it costs at most one
  * of the rule's own gaps beyond it.
  */
-function leadingInstances(master: Component, max: number, before?: string): { instances: Time[]; ended: boolean } {
-  const next = seriesWalker(master);
+function leadingInstances(master: Component, zone: string, max: number, before?: string): { instances: Time[]; ended: boolean } {
+  const next = seriesWalker(master, zone);
   const instances: Time[] = [];
   while (instances.length < max) {
     const t = next();
@@ -401,12 +401,18 @@ function leadingInstances(master: Component, max: number, before?: string): { in
  * the ones after it, were not read): the days before it are compared. The
  * shift keeps order, so no unread instance can land before that day.
  */
-function checkShiftedSample(sample: { instances: Time[]; ended: boolean }, shift: (t: Time) => Time, master: Component, rule: Recur | undefined): void {
+function checkShiftedSample(
+  sample: { instances: Time[]; ended: boolean },
+  shift: (t: Time) => Time,
+  master: Component,
+  rule: Recur | undefined,
+  zone: string,
+): void {
   const moved = sample.instances.map((t) => ymdOf(shift(t)));
   const before = sample.ended ? undefined : moved[moved.length - 1];
   if (!sample.ended && before === undefined) return; // nothing read within the bounds, nothing to compare
   const expected = before === undefined ? moved : moved.filter((day) => day < before);
-  const actual = leadingInstances(master, expected.length + 1, before).instances.map(ymdOf);
+  const actual = leadingInstances(master, zone, expected.length + 1, before).instances.map(ymdOf);
   checkShifted(expected, actual, rule);
 }
 
@@ -454,9 +460,10 @@ export function editSeries(e: SeriesEdit): string | undefined {
   const touched = new Set<Component>([master]);
 
   if (times) {
-    refusePeriodDates(master);
+    // A new length alone leaves every instance where it was (a PERIOD keeps its own length); a new start or zone moves them.
+    if (e.timeInput.startDate !== undefined || e.timeInput.timeZone !== undefined) refusePeriodDates(master);
     // The instances before the change, to check the rewritten series against (see checkShifted).
-    const sample = leadingInstances(master, SHIFT_CHECK_INSTANCES, addDaysYmd(ymdOf(mStart), SHIFT_CHECK_DAYS));
+    const sample = leadingInstances(master, zone, SHIFT_CHECK_INSTANCES, addDaysYmd(ymdOf(mStart), SHIFT_CHECK_DAYS));
     const oldWz = zoneOfTime(mStart, zone);
     const newWz = e.timeInput.timeZone !== undefined && !allDay ? zoneForWrite(vcal, zone) : oldWz;
     const mEnd = endTimeOf(master, mStart);
@@ -526,7 +533,7 @@ export function editSeries(e: SeriesEdit): string | undefined {
       }
       touched.add(ovr);
     }
-    const check = () => checkShiftedSample(sample, shift, master, rule);
+    const check = () => checkShiftedSample(sample, shift, master, rule, zone);
     if (e.checks) e.checks.push(check);
     else check();
   }
@@ -561,7 +568,7 @@ export function occInstant(occ: string, zone: string): Date {
 
 /** Whether the series has no instance before the occurrence (so "this and following" means "all"). */
 export function isFirstInstance(master: Component, occ: string, zone: string): boolean {
-  const first = seriesWalker(master)();
+  const first = seriesWalker(master, zone)();
   return !first || instantOf(first, zone).getTime() >= occInstant(occ, zone).getTime();
 }
 
@@ -585,6 +592,10 @@ export function truncateSeries(vcal: Component, master: Component, overrides: re
   }
   rewriteDates(master, 'exdate', (t) => (before(t) ? t : undefined));
   rewriteDates(master, 'rdate', (t) => (before(t) ? t : undefined));
+  // Without an RRULE, DTSTART is an instance like the RDATEs (seriesWalker) and an RDATE can come before it, so a cut
+  // at or before it has to remove it too.
+  const start = startTimeOf(master);
+  if (!rule && !before(start)) addTimeProp(master, 'exdate', start.clone());
   const removed: Component[] = [];
   for (const ovr of overrides) {
     if (!before(ovr.getFirstPropertyValue('recurrence-id') as Time)) {
@@ -592,6 +603,9 @@ export function truncateSeries(vcal: Component, master: Component, overrides: re
       removed.push(ovr);
     }
   }
+  // DTSTART left alone, and an override of it kept: DTSTART becomes its one RDATE so the event stays a series —
+  // as a single event the override (an edit already made to that occurrence) would no longer apply.
+  if (!rule && !master.hasProperty('rdate') && removed.length < overrides.length) addTimeProp(master, 'rdate', start.clone());
   touch(master, now);
   return removed;
 }
@@ -644,6 +658,8 @@ export function continuationSeries(
   const from = (t: Time) => (instantOf(t, zone).getTime() >= at.getTime() ? t : undefined);
   rewriteDates(next, 'exdate', from);
   rewriteDates(next, 'rdate', from);
+  // Without an RRULE the old DTSTART is an instance like any RDATE (seriesWalker): one after the split goes with it.
+  if (!rule && instantOf(start, zone).getTime() > at.getTime()) addTimeProp(next, 'rdate', start.clone());
   const overrides = carried.map((ovr) => {
     const c = cloneComponent(ovr);
     c.updatePropertyWithValue('uid', opts.uid);

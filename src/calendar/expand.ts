@@ -45,7 +45,8 @@ const DAY_MS = 86_400_000;
  * for sub-monthly frequencies: a rule whose day filters can never match
  * (`FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30`) spins forever in one synchronous
  * call — the whole server stops answering — and a rule RFC 5545 forbids
- * (`FREQ=WEEKLY;BYMONTHDAY=1`), or 500 EXDATEs in a row, makes it throw. Such
+ * (`FREQ=WEEKLY;BYMONTHDAY=1`) or a malformed value makes it throw; the walk
+ * itself stops after `MAX_SKIPPED_IN_A_ROW` excluded instances in a row. Such
  * a rule usually arrives in someone else's invitation, and it must cost that
  * one event its occurrences, never the whole calendar.
  */
@@ -111,38 +112,77 @@ function guarded<T>(step: () => T): T {
 }
 
 /**
- * The instances of a series (RRULE + RDATE − EXDATE, in start order) as a
- * `next()` that answers null at the end. Throws `UnexpandableRuleError`, up
- * front or mid-walk, instead of hanging or leaking an ical.js error.
+ * The instances of a series (DTSTART, RRULE and RDATE, less EXDATE; in start
+ * order, each instant once) as a `next()` that answers null at the end.
+ * `zone` resolves floating values, as occurrence keys do. Throws
+ * `UnexpandableRuleError`, up front or mid-walk, instead of hanging or
+ * leaking an ical.js error.
+ *
+ * ical.js orders the RRULE's instances and the RDATEs, but not the rest:
+ *  - an RDATE equal to an instance the rule (or DTSTART) also gives comes
+ *    out twice, so the walk skips an instant it has just given;
+ *  - its EXDATE pointer moves once per instance and never looks back, so an
+ *    EXDATE matching nothing let the NEXT excluded instance through, and a
+ *    duplicate's second copy slipped past the EXDATE the first one used. It
+ *    sees no EXDATE here: `exclusions` applies them, to every copy.
  */
-export function seriesWalker(master: Component): () => Time | null {
+export function seriesWalker(master: Component, zone: string): () => Time | null {
   refuseUnwalkable(master);
   const dtstart = startTimeOf(master);
-  const component = master.hasProperty('rdate') ? rdateView(master, dtstart) : master;
-  const it = guarded(() => new ICAL.RecurExpansion({ component, dtstart }));
-  // ical.js answers `undefined` (not null) once the set is exhausted.
-  return () => guarded(() => (it.next() as Time | undefined) ?? null);
+  // Inside the guard: an RDATE/EXDATE value is decoded on first read, and a malformed one throws.
+  const { view, mixed } = guarded(() => walkView(master, dtstart));
+  const it = guarded(() => new ICAL.RecurExpansion({ component: view, dtstart }));
+  const excluded = guarded(() => exclusions(master, zone));
+  // A repeat comes right after its twin when every value is written alike (ical.js orders them exactly); a floating
+  // value's twin written as a fixed one can be up to a zone offset away, so mixed series keep a window of instances.
+  let lastRough: number | undefined;
+  const recent: Array<{ t: Time; r: number }> = [];
+  const repeated = (t: Time, r: number): boolean => {
+    if (!mixed) {
+      const repeat = r === lastRough;
+      lastRough = r;
+      return repeat;
+    }
+    while (recent.length > 0 && (recent[0] as { r: number }).r < r - ROUGH_MARGIN_MS) recent.shift();
+    if (recent.some((p) => sameOccurrence(p.t, p.r, t, r, zone))) return true;
+    recent.push({ t, r });
+    return false;
+  };
+  return () => {
+    for (let skipped = 0; ; skipped++) {
+      if (skipped > MAX_SKIPPED_IN_A_ROW) throw new UnexpandableRuleError(`more than ${MAX_SKIPPED_IN_A_ROW} excluded occurrences in a row`);
+      // ical.js answers `undefined` (not null) once the set is exhausted.
+      const t = guarded(() => (it.next() as Time | undefined) ?? null);
+      if (!t) return null;
+      const r = roughStartMs(t);
+      if (!repeated(t, r) && !excluded(t, r)) return t;
+    }
+  };
 }
 
+/** Consecutive instances a walk skips (excluded or repeated) before it gives up: a bound on one `next()`. */
+export const MAX_SKIPPED_IN_A_ROW = 10_000;
+
 /**
- * The master as ical.js's RecurExpansion should see its RDATEs (it reads the
- * component through `hasProperty`/`getAllProperties`, once, as it starts):
- *  - a PERIOD value comes back from ical.js as an ICAL.Period, whose
+ * The master as ical.js's RecurExpansion should see it (it reads a component
+ * through `hasProperty`/`getAllProperties`, once, as it starts):
+ *  - no EXDATE: `exclusions` applies them;
+ *  - an RDATE PERIOD comes back from ical.js as an ICAL.Period, whose
  *    `compare` means "overlaps" and which is no Time — the walk crashed on
  *    it — so each becomes its start (its end: `SeriesShape.periodEnds`);
  *  - ical.js yields DTSTART only through an RRULE's iterator, so a series of
  *    RDATEs alone never listed its first instance, which RFC 5545 §3.8.5.3
  *    makes DTSTART whatever else the set holds: without an RRULE, DTSTART
- *    joins the dates (an EXDATE still removes it).
+ *    joins the dates (a repeat of one is skipped; an EXDATE still removes it).
  */
-function rdateView(master: Component, dtstart: Time): Component {
+function walkView(master: Component, dtstart: Time): { view: Component; mixed: boolean } {
   const dates = rdateValues(master).map((v) => (v instanceof ICAL.Period ? v.start : v));
-  if (!master.hasProperty('rrule') && !dates.some((t) => t.compare(dtstart) === 0)) dates.push(dtstart);
+  if (!master.hasProperty('rrule')) dates.push(dtstart);
   const rdate = [{ getValues: () => dates }];
-  return {
-    hasProperty: (name: string) => master.hasProperty(name),
-    getAllProperties: (name: string) => (name === 'rdate' ? rdate : master.getAllProperties(name)),
-  } as unknown as Component;
+  const props = (name: string) => (name === 'rdate' ? rdate : name === 'exdate' ? [] : master.getAllProperties(name));
+  const view = { hasProperty: (name: string) => props(name).length > 0, getAllProperties: props } as unknown as Component;
+  // The RRULE's instances are written like DTSTART.
+  return { view, mixed: dates.some((t) => kindOf(t) !== kindOf(dtstart)) };
 }
 
 type Period = InstanceType<typeof ICAL.Period>;
@@ -153,7 +193,58 @@ function rdateValues(master: Component): Array<Time | Period> {
 
 /** Whether the master lists some instances as periods (RDATE;VALUE=PERIOD), each with a length of its own. */
 export function hasPeriodDates(master: Component): boolean {
-  return rdateValues(master).some((v) => v instanceof ICAL.Period);
+  return guarded(() => rdateValues(master)).some((v) => v instanceof ICAL.Period);
+}
+
+/** How a value is written: a DATE, a floating (zone-less) date-time, or one that fixes an instant (UTC or a TZID). */
+function kindOf(t: Time): 'date' | 'floating' | 'fixed' {
+  if (t.isDate) return 'date';
+  return t.zone === ICAL.Timezone.localTimezone ? 'floating' : 'fixed';
+}
+
+/**
+ * Whether two values (with their `roughStartMs`) are the same occurrence —
+ * the same `#occ=` key. Values written alike compare on the rough value,
+ * which is exact between them; a floating and a fixed value compare as
+ * instants in `zone`; a DATE is never the same occurrence as a date-time.
+ */
+function sameOccurrence(a: Time, ra: number, b: Time, rb: number, zone: string): boolean {
+  const ka = kindOf(a);
+  const kb = kindOf(b);
+  if (ka === kb) return ra === rb;
+  if (ka === 'date' || kb === 'date') return false;
+  return occKey(a, zone) === occKey(b, zone);
+}
+
+/**
+ * Whether an instance is one the master's EXDATEs remove, as ical.js decides
+ * it for a single EXDATE: a DATE removes every instance on that day (by the
+ * instance's own date), a date-time removes the instance at that instant (a
+ * DATE instance: at its midnight, read as UTC). A floating value against a
+ * fixed one compares as instants in `zone`, like occurrence keys.
+ */
+function exclusions(master: Component, zone: string): (t: Time, rough: number) => boolean {
+  const values = master.getAllProperties('exdate').flatMap((p) => p.getValues() as Time[]);
+  if (values.length === 0) return () => false;
+  const days = new Set<string>();
+  const rough = { floating: new Set<number>(), fixed: new Set<number>() };
+  const keys = { floating: new Set<string>(), fixed: new Set<string>() };
+  for (const v of values) {
+    const kind = kindOf(v);
+    if (kind === 'date') days.add(ymdOf(v));
+    else {
+      rough[kind].add(roughStartMs(v));
+      keys[kind].add(occKey(v, zone));
+    }
+  }
+  return (t, r) => {
+    if (days.has(ymdOf(t))) return true;
+    const kind = kindOf(t);
+    if (kind === 'date') return rough.fixed.has(r) || rough.floating.has(r);
+    if (rough[kind].has(r)) return true;
+    const other = keys[kind === 'fixed' ? 'floating' : 'fixed'];
+    return other.size > 0 && other.has(occKey(t, zone));
+  };
 }
 
 /**
@@ -258,7 +349,13 @@ function seriesShape(master: Component, zone: string): SeriesShape {
   const durationMs = s.end.getTime() - s.start.getTime();
   const periodEnds = new Map<string, number>();
   let longestMs = durationMs;
-  for (const v of rdateValues(master)) {
+  let values: Array<Time | Period> = [];
+  try {
+    values = rdateValues(master);
+  } catch {
+    // A malformed RDATE value: the walk reports it (`UnexpandableRuleError`), keeping what it can list.
+  }
+  for (const v of values) {
     if (!(v instanceof ICAL.Period) || s.allDay) continue;
     const start = instantOf(v.start, zone).getTime();
     const end = Math.max(start, instantOf(v.getEnd(), zone).getTime());
@@ -373,7 +470,7 @@ export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResu
     };
     let next: (() => Time | null) | undefined;
     try {
-      next = seriesWalker(master);
+      next = seriesWalker(master, zone);
     } catch (err) {
       stopOn(err);
       // DTSTART is always an instance (RFC 5545), even of a rule that cannot be walked.
@@ -388,7 +485,7 @@ export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResu
       try {
         t = next();
       } catch (err) {
-        stopOn(err); // mid-walk (e.g. 500 EXDATEs in a row): keep what was found
+        stopOn(err); // mid-walk (e.g. an ical.js failure, or too many excluded instances in a row): keep what was found
         break;
       }
       if (!t) break;
@@ -425,7 +522,7 @@ export function findOccurrence(parts: EventParts, occ: string, zone: string, max
   if (!master || !isRecurringMaster(master)) return undefined;
   const shape = seriesShape(master, zone);
   const target = occ.length === 10 ? startOfDay(occ, zone).getTime() : Date.parse(occ);
-  const next = seriesWalker(master);
+  const next = seriesWalker(master, zone);
   for (let steps = 0; steps < maxSteps; steps++) {
     const t = next();
     if (!t) return undefined;
