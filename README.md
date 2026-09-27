@@ -11,8 +11,9 @@ Apple Maps, WeatherKit, and the iTunes Search API.
 It talks to Apple over the network through Apple's own web APIs and standard protocols (CalDAV, CardDAV,
 IMAP/SMTP), so — unlike Mac-only Apple integrations such as
 [apple-swift-mcp](https://github.com/chrischall/apple-swift-mcp) — it runs anywhere: Linux, Windows, a
-container, or hosted on [mcp-host](#running-on-mcp-host) as a claude.ai connector. Think of the two as a pair:
-`apple-swift-mcp` is the native Mac version, `apple-cloud-mcp` the one that runs anywhere.
+container, or hosted on [mcp-host](#running-on-mcp-host) as a claude.ai connector. The two complement each other:
+`apple-swift-mcp` drives the Mac's own apps (Calendar, Reminders, Contacts, Mail, Messages, Notes, Photos, Maps),
+while `apple-cloud-mcp` reaches Apple's web services from anywhere and adds Apple Music, WeatherKit and iTunes.
 
 > [!NOTE]
 > **Unofficial.** This project is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iCloud,

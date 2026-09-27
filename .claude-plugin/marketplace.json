@@ -5,7 +5,7 @@
     "email": "chris.c.hall@gmail.com"
   },
   "metadata": {
-    "description": "Unofficial Apple Music, iCloud, Apple Maps and WeatherKit tools for Claude Code",
+    "description": "Unofficial Apple Music, iCloud Calendar/Contacts/Mail, Apple Maps and WeatherKit tools for Claude Code",
     "version": "0.0.0"
   },
   "plugins": [

@@ -1,13 +1,13 @@
 ---
 name: apple-cloud-mcp
-description: This skill should be used when the user asks about Apple Music, their Apple Music playlists or library, iCloud Calendar, iCloud Contacts, iCloud Mail, Apple Maps directions or places, the weather (WeatherKit), podcasts, or iTunes/App Store search — from any OS, via Apple's web services. Triggers on phrases like "make an Apple Music playlist", "add this song to my playlist", "what's on my calendar", "schedule a meeting", "find free time", "what's Jane's number", "check my iCloud email", "directions to", "how long to drive", "will it rain", "top charts", "find a podcast".
+description: This skill should be used when the user asks about Apple Music, their Apple Music playlists or library, iCloud Calendar, iCloud Contacts, iCloud Mail, Apple Maps directions or places, the weather (WeatherKit), podcasts, or iTunes/App Store search — from any OS, via Apple's web services. Unofficial; not affiliated with Apple. Triggers on phrases like "make an Apple Music playlist", "add this song to my playlist", "what's on my calendar", "schedule a meeting", "find free time", "what's Jane's number", "check my iCloud email", "directions to", "how long to drive", "will it rain", "top charts", "find a podcast".
 ---
 
 # apple-cloud-mcp — Apple services from any OS
 
 MCP server that reaches Apple Music, iCloud Calendar/Contacts/Mail, Apple Maps, WeatherKit and the iTunes
-Search API over the network — no Mac needed. Unofficial; not affiliated with Apple. (`apple-swift-mcp` is the
-native Mac counterpart.)
+Search API over the network — no Mac needed. Unofficial; not affiliated with Apple. On a Mac, `apple-swift-mcp`
+is a native companion that adds Reminders, Notes, Photos and Messages.
 
 - **npm:** [apple-cloud-mcp](https://www.npmjs.com/package/apple-cloud-mcp)
 - **Source:** [github.com/chrischall/apple-cloud-mcp](https://github.com/chrischall/apple-cloud-mcp)
