@@ -1,0 +1,655 @@
+import ICAL from 'ical.js';
+import { tzlib_get_ical_block, tzlib_get_timezones } from 'timezones-ical-library';
+import { UpstreamError } from '../errors.js';
+import { addDaysYmd, startOfDay, zonedParts, zonedToInstant } from '../time.js';
+
+/**
+ * iCalendar handling on top of ical.js: parsing a resource, resolving its
+ * times to instants, and building the values a write puts back.
+ *
+ * Three rules this file exists to enforce:
+ *
+ *  1. **Every TZID resolves to a real zone.** RFC 5545 requires a VTIMEZONE
+ *     for every TZID, but some writers omit it; ical.js then treats the time as
+ *     FLOATING, and its `toUnixTime()` reads a floating time as UTC — a 9 AM
+ *     New York meeting would become 5 AM. Before any value is read, every TZID
+ *     without a definition that `timezones-ical-library` knows gets its
+ *     VTIMEZONE injected into the parsed tree.
+ *  2. **Floating times are wall clock in the display zone**, never UTC, and
+ *     `instantOf` is the one place that decides it.
+ *  3. **Edits are made on the parsed component and serialized**, so every
+ *     property this server does not understand (Apple's X-APPLE-* props,
+ *     SCHEDULE-STATUS, …) round-trips untouched.
+ */
+
+export type Component = InstanceType<typeof ICAL.Component>;
+export type Time = InstanceType<typeof ICAL.Time>;
+export type Timezone = InstanceType<typeof ICAL.Timezone>;
+export type Property = InstanceType<typeof ICAL.Property>;
+export type Recur = InstanceType<typeof ICAL.Recur>;
+export type Duration = InstanceType<typeof ICAL.Duration>;
+
+export const PRODID = '-//chrischall//aws-mcp//EN';
+
+// ---------------------------------------------------------------------------
+// Parsing
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse an iCalendar resource. Throws `UpstreamError` when the text is not a
+ * VCALENDAR — an unreadable event is reported, never skipped silently.
+ */
+export function parseCalendar(ics: string, what: string): Component {
+  let root: Component;
+  try {
+    root = ICAL.Component.fromString(ics);
+  } catch (err) {
+    throw new UpstreamError('calendar', 200, `calendar: ${what} is not valid iCalendar (${(err as Error).message}).`);
+  }
+  if (root.name !== 'vcalendar') {
+    throw new UpstreamError('calendar', 200, `calendar: ${what} holds a ${root.name.toUpperCase()}, not a VCALENDAR.`);
+  }
+  // Before any value is read (a zone is resolved, and cached, on first use).
+  for (const tz of root.getAllSubcomponents('vtimezone')) {
+    if (boundedTimezone(tz)) continue;
+    console.error(
+      `[aws-mcp] WARNING: calendar: ${what} defines time zone "${String(tz.getFirstPropertyValue('tzid'))}" with a rule that cannot ` +
+        'be evaluated safely; the standard definition of that zone is used instead (or none, if it is not a known zone).',
+    );
+    root.removeSubcomponent(tz);
+  }
+  injectMissingTimezones(root);
+  return root;
+}
+
+const TIME_EXPANDING_PARTS = ['BYHOUR', 'BYMINUTE', 'BYSECOND'];
+
+/**
+ * Whether ical.js can evaluate a VTIMEZONE in bounded time. It expands every
+ * observance rule, from the observance's DTSTART up to the year it needs plus
+ * five, with no other limit: a sub-yearly rule whose filters never match
+ * (`FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30`) never returns — one event carrying
+ * one would hang the whole server — and `FREQ=MINUTELY`, or BYHOUR/BYMINUTE/
+ * BYSECOND on a yearly rule, yields millions of transitions. Real zone
+ * definitions are yearly rules (`FREQ=YEARLY;BYMONTH=3;BYDAY=2SU`), whose
+ * iteration ical.js does bound.
+ */
+export function boundedTimezone(tz: Component): boolean {
+  return tz.getAllSubcomponents().every((observance) =>
+    observance.getAllProperties('rrule').every((prop) => {
+      const rule = prop.getFirstValue() as Recur;
+      return String(rule.freq) === 'YEARLY' && TIME_EXPANDING_PARTS.every((part) => rule.getComponent(part).length === 0);
+    }),
+  );
+}
+
+/** The VEVENTs of a resource: the master (no RECURRENCE-ID) and the per-occurrence overrides. */
+export interface EventParts {
+  master?: Component;
+  overrides: Component[];
+}
+
+export function eventParts(vcal: Component): EventParts {
+  let master: Component | undefined;
+  const overrides: Component[] = [];
+  for (const ev of vcal.getAllSubcomponents('vevent')) {
+    if (!ev.hasProperty('dtstart')) continue;
+    if (ev.hasProperty('recurrence-id')) overrides.push(ev);
+    else master ??= ev;
+  }
+  return { ...(master ? { master } : {}), overrides };
+}
+
+/** Whether a master VEVENT defines a recurrence set. */
+export function isRecurringMaster(master: Component): boolean {
+  return master.hasProperty('rrule') || master.hasProperty('rdate');
+}
+
+// ---------------------------------------------------------------------------
+// Time zones
+// ---------------------------------------------------------------------------
+
+let knownZones: Set<string> | undefined;
+
+/** IANA names `timezones-ical-library` can supply a VTIMEZONE for. */
+function zoneNames(): Set<string> {
+  knownZones ??= new Set(tzlib_get_timezones() as string[]);
+  return knownZones;
+}
+
+/**
+ * A VTIMEZONE component for an IANA zone, with its TZID set to `tzid` (the
+ * library resolves aliases — `US/Eastern` comes back as `America/New_York` —
+ * and a reference must find a definition under the name it used). Undefined
+ * when the zone is unknown.
+ */
+export function vtimezoneFor(zone: string, tzid: string = zone): Component | undefined {
+  if (!zoneNames().has(zone)) return undefined;
+  const [block] = tzlib_get_ical_block(zone) as string[];
+  const comp = ICAL.Component.fromString(block as string);
+  comp.updatePropertyWithValue('tzid', tzid);
+  return comp;
+}
+
+/** The TZID the library uses for `zone` (its canonical name), or undefined when unknown. */
+function canonicalTzid(zone: string): string | undefined {
+  if (!zoneNames().has(zone)) return undefined;
+  const [, line] = tzlib_get_ical_block(zone) as string[];
+  return (line as string).replace(/^TZID=/, '');
+}
+
+type JCal = [string, Array<[string, Record<string, unknown>, ...unknown[]]>, JCal[]];
+
+function collectTzids(jcal: JCal, out: Set<string>): void {
+  if (jcal[0] === 'vtimezone') return;
+  for (const prop of jcal[1]) {
+    const tzid = prop[1].tzid;
+    if (typeof tzid === 'string') out.add(tzid);
+  }
+  for (const child of jcal[2]) collectTzids(child, out);
+}
+
+/** Add a VTIMEZONE for every referenced TZID the resource does not define (see rule 1 above). */
+export function injectMissingTimezones(vcal: Component): void {
+  const defined = new Set(vcal.getAllSubcomponents('vtimezone').map((z) => String(z.getFirstPropertyValue('tzid'))));
+  const referenced = new Set<string>();
+  collectTzids(vcal.jCal as JCal, referenced);
+  for (const tzid of referenced) {
+    if (defined.has(tzid)) continue;
+    const comp = vtimezoneFor(tzid);
+    if (comp) vcal.addSubcomponent(comp);
+  }
+}
+
+const UTC_NAMES = /^(?:Etc\/)?(?:UTC|UCT|GMT0?|Zulu|Universal|Greenwich)$/i;
+
+/** How new times are written: UTC (`…Z`), with a TZID + VTIMEZONE, or floating. */
+export type WriteZone = { kind: 'utc' } | { kind: 'tz'; tz: Timezone } | { kind: 'floating'; zone: string };
+
+/**
+ * The write zone for an IANA zone name: UTC for a UTC alias, otherwise a
+ * TZID backed by a VTIMEZONE added to `vcal` when it lacks one. A zone the
+ * VTIMEZONE library does not know is written as UTC — the instant is still
+ * exact; only a recurring series would then follow UTC across DST.
+ */
+export function zoneForWrite(vcal: Component, zone: string): WriteZone {
+  if (UTC_NAMES.test(zone)) return { kind: 'utc' };
+  const tzid = canonicalTzid(zone);
+  if (tzid === undefined) return { kind: 'utc' };
+  let tz = vcal.getTimeZoneByID(tzid) as Timezone | null;
+  if (!tz) {
+    vcal.addSubcomponent(vtimezoneFor(zone, tzid) as Component);
+    tz = vcal.getTimeZoneByID(tzid) as Timezone;
+  }
+  return { kind: 'tz', tz };
+}
+
+/** The write zone an existing date-time value is in (a DATE value has none). */
+export function zoneOfTime(t: Time, displayZone: string): WriteZone {
+  if (t.zone === ICAL.Timezone.utcTimezone) return { kind: 'utc' };
+  if (t.zone === ICAL.Timezone.localTimezone) return { kind: 'floating', zone: displayZone };
+  return { kind: 'tz', tz: t.zone as Timezone };
+}
+
+/** The IANA-style name of a value's zone when it has a named one (not UTC, not floating). */
+export function tzidOf(t: Time): string | undefined {
+  if (t.isDate || t.zone === ICAL.Timezone.utcTimezone || t.zone === ICAL.Timezone.localTimezone) return undefined;
+  return (t.zone as Timezone).tzid;
+}
+
+// ---------------------------------------------------------------------------
+// Values → instants
+// ---------------------------------------------------------------------------
+
+function pad(n: number, w = 2): string {
+  return String(n).padStart(w, '0');
+}
+
+/** `YYYY-MM-DD` of a value's own (wall-clock) date. */
+export function ymdOf(t: Time): string {
+  return `${pad(t.year, 4)}-${pad(t.month)}-${pad(t.day)}`;
+}
+
+/**
+ * The instant a value denotes. A DATE is the start of that day in `zone`; a
+ * FLOATING date-time is wall-clock time in `zone`; anything else carries its
+ * own zone (UTC or a VTIMEZONE).
+ */
+export function instantOf(t: Time, zone: string): Date {
+  if (t.isDate) return startOfDay(ymdOf(t), zone);
+  if (t.zone === ICAL.Timezone.localTimezone) {
+    return zonedToInstant({ year: t.year, month: t.month, day: t.day, hour: t.hour, minute: t.minute, second: t.second }, zone);
+  }
+  return new Date(t.toUnixTime() * 1000);
+}
+
+/** `YYYY-MM-DDTHH:MM:SSZ` (whole seconds). */
+export function utcStamp(d: Date): string {
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * The occurrence key of a value: its date for a DATE, else its instant in UTC.
+ * It is what `#occ=` carries, and how overrides are matched to the instances
+ * they replace (by instant, whatever zone each side was written in).
+ */
+export function occKey(t: Time, zone: string): string {
+  return t.isDate ? ymdOf(t) : utcStamp(instantOf(t, zone));
+}
+
+// ---------------------------------------------------------------------------
+// Instants → values
+// ---------------------------------------------------------------------------
+
+/** A date-time value for `instant` in the write zone. */
+export function timeAt(instant: Date, wz: WriteZone): Time {
+  const utc = ICAL.Time.fromJSDate(new Date(Math.floor(instant.getTime() / 1000) * 1000), true);
+  if (wz.kind === 'utc') return utc;
+  if (wz.kind === 'tz') return utc.convertToZone(wz.tz);
+  const p = zonedParts(instant, wz.zone);
+  return ICAL.Time.fromData({ year: p.year, month: p.month, day: p.day, hour: p.hour, minute: p.minute, second: p.second, isDate: false });
+}
+
+/**
+ * A date-time value with the given WALL-CLOCK fields in the write zone. The
+ * fields are read from `wall` as UTC fields (a zone-free carrier).
+ */
+export function wallTime(wall: Date, wz: WriteZone): Time {
+  const fields = {
+    year: wall.getUTCFullYear(),
+    month: wall.getUTCMonth() + 1,
+    day: wall.getUTCDate(),
+    hour: wall.getUTCHours(),
+    minute: wall.getUTCMinutes(),
+    second: wall.getUTCSeconds(),
+    isDate: false,
+  };
+  if (wz.kind === 'utc') return ICAL.Time.fromData(fields, ICAL.Timezone.utcTimezone);
+  return wz.kind === 'tz' ? ICAL.Time.fromData(fields, wz.tz) : ICAL.Time.fromData(fields);
+}
+
+/** A DATE value for `YYYY-MM-DD`. */
+export function dateValue(ymd: string): Time {
+  const [year, month, day] = ymd.split('-').map(Number) as [number, number, number];
+  return ICAL.Time.fromData({ year, month, day, isDate: true });
+}
+
+/** Set a DTSTART / DTEND / RECURRENCE-ID-style property, keeping TZID in step with the value. */
+export function setTimeProp(comp: Component, name: string, value: Time): void {
+  comp.removeAllProperties(name);
+  const prop = comp.addPropertyWithValue(name, value) as Property;
+  if (!value.isDate && value.zone !== ICAL.Timezone.utcTimezone && value.zone !== ICAL.Timezone.localTimezone) {
+    prop.setParameter('tzid', (value.zone as Timezone).tzid);
+  }
+}
+
+/** Add one value of a multi-valued date property (EXDATE, RDATE) as its own line. */
+export function addTimeProp(comp: Component, name: string, value: Time): void {
+  const prop = comp.addPropertyWithValue(name, value) as Property;
+  if (!value.isDate && value.zone !== ICAL.Timezone.utcTimezone && value.zone !== ICAL.Timezone.localTimezone) {
+    prop.setParameter('tzid', (value.zone as Timezone).tzid);
+  }
+}
+
+/** Every value of every `name` property (EXDATE / RDATE lines may carry several). */
+export function timeValues(comp: Component, name: string): Time[] {
+  const out: Time[] = [];
+  for (const prop of comp.getAllProperties(name)) {
+    for (const v of prop.getValues()) if (v instanceof ICAL.Time) out.push(v);
+  }
+  return out;
+}
+
+/** The component's end value: DTEND, else DTSTART + DURATION, else one day for a DATE, else DTSTART. */
+export function endTimeOf(comp: Component, start: Time): Time {
+  const dtend = comp.getFirstPropertyValue('dtend') as Time | null;
+  if (dtend) return dtend;
+  const end = start.clone();
+  const duration = comp.getFirstPropertyValue('duration') as Duration | null;
+  if (duration) end.addDuration(duration);
+  else if (start.isDate) end.day += 1;
+  return end;
+}
+
+/** Start value of a VEVENT (every VEVENT this module keeps has one). */
+export function startTimeOf(comp: Component): Time {
+  return comp.getFirstPropertyValue('dtstart') as Time;
+}
+
+/** Whole days from `a` to `b` (`YYYY-MM-DD`, zone-free). */
+export function daysBetween(a: string, b: string): number {
+  const ms = (ymd: string) => {
+    const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
+    return Date.UTC(y, m - 1, d);
+  };
+  return Math.round((ms(b) - ms(a)) / 86_400_000);
+}
+
+export { addDaysYmd };
+
+// ---------------------------------------------------------------------------
+// Text properties
+// ---------------------------------------------------------------------------
+
+/** A text property's value; absent or empty → undefined. */
+export function textProp(comp: Component, name: string): string | undefined {
+  const v = comp.getFirstPropertyValue(name);
+  if (v == null) return undefined;
+  const s = String(v);
+  return s.length > 0 ? s : undefined;
+}
+
+/** Set a text property; undefined or `''` removes it. */
+export function setTextProp(comp: Component, name: string, value: string | undefined): void {
+  if (value === undefined || value === '') comp.removeAllProperties(name);
+  else comp.updatePropertyWithValue(name, value);
+}
+
+/** Bump SEQUENCE and restamp DTSTAMP / LAST-MODIFIED — what calendar clients do on every change. */
+export function touch(comp: Component, now: Date): void {
+  const seq = comp.getFirstPropertyValue('sequence');
+  comp.updatePropertyWithValue('sequence', typeof seq === 'number' ? seq + 1 : 1);
+  const stamp = ICAL.Time.fromJSDate(now, true);
+  comp.updatePropertyWithValue('dtstamp', stamp);
+  comp.updatePropertyWithValue('last-modified', stamp.clone());
+}
+
+// ---------------------------------------------------------------------------
+// People
+// ---------------------------------------------------------------------------
+
+export interface Person {
+  name?: string;
+  email?: string;
+}
+
+export interface Attendee extends Person {
+  status: string;
+  role?: string;
+}
+
+/** The e-mail of an ORGANIZER / ATTENDEE: its `mailto:` value, else its EMAIL parameter (iCloud rewrites the owner to a principal path). */
+export function emailOf(prop: Property): string | undefined {
+  const value = String(prop.getFirstValue());
+  if (/^mailto:/i.test(value)) return value.slice(7);
+  const param = prop.getFirstParameter('email');
+  return typeof param === 'string' && param.length > 0 ? param : undefined;
+}
+
+function personOf(prop: Property): Person {
+  const name = prop.getFirstParameter('cn');
+  const email = emailOf(prop);
+  return {
+    ...(typeof name === 'string' && name.length > 0 ? { name } : {}),
+    ...(email !== undefined ? { email } : {}),
+  };
+}
+
+const ROLES: Record<string, string> = {
+  'REQ-PARTICIPANT': 'required',
+  'OPT-PARTICIPANT': 'optional',
+  'NON-PARTICIPANT': 'non-participant',
+  CHAIR: 'chair',
+};
+
+export function readOrganizer(comp: Component): Person | undefined {
+  const prop = comp.getFirstProperty('organizer');
+  if (!prop) return undefined;
+  const p = personOf(prop);
+  return p.name === undefined && p.email === undefined ? undefined : p;
+}
+
+export function readAttendees(comp: Component): Attendee[] {
+  return comp.getAllProperties('attendee').map((prop) => {
+    const partstat = prop.getFirstParameter('partstat');
+    const role = prop.getFirstParameter('role');
+    const roleName = typeof role === 'string' ? (ROLES[role.toUpperCase()] ?? role.toLowerCase()) : undefined;
+    return {
+      ...personOf(prop),
+      status: typeof partstat === 'string' ? partstat.toLowerCase() : 'needs-action',
+      ...(roleName !== undefined ? { role: roleName } : {}),
+    };
+  });
+}
+
+/** Normalised calendar-user address: `mailto:` lower-cased, anything else reduced to its path. */
+export function normalizeAddress(value: string): string {
+  if (/^mailto:/i.test(value)) return `mailto:${value.slice(7).toLowerCase()}`;
+  const m = /^https?:\/\/[^/]+(\/.*)$/i.exec(value);
+  return m ? (m[1] as string) : value;
+}
+
+/** Whether an ATTENDEE / ORGANIZER property names the account owner (`self` = normalised addresses). */
+export function isSelf(prop: Property, self: ReadonlySet<string>): boolean {
+  if (self.has(normalizeAddress(String(prop.getFirstValue())))) return true;
+  const email = emailOf(prop);
+  return email !== undefined && self.has(`mailto:${email.toLowerCase()}`);
+}
+
+/**
+ * Replace the invitees. An attendee already on the event keeps its property
+ * (and so its PARTSTAT) when listed again; new ones are added as required
+ * participants awaiting a reply. The owner's own entry is kept while anyone
+ * else is invited, and dropped with the rest when the list is emptied.
+ */
+export function setAttendees(comp: Component, list: ReadonlyArray<{ email: string; name?: string }>, self: ReadonlySet<string>): void {
+  const existing = comp.getAllProperties('attendee');
+  const byEmail = new Map<string, Property>();
+  const keepSelf: Property[] = [];
+  for (const prop of existing) {
+    if (isSelf(prop, self)) keepSelf.push(prop);
+    else {
+      const email = emailOf(prop);
+      if (email !== undefined) byEmail.set(email.toLowerCase(), prop);
+    }
+  }
+  comp.removeAllProperties('attendee');
+  if (list.length === 0) return;
+  for (const prop of keepSelf) comp.addProperty(prop);
+  for (const a of list) {
+    const prior = byEmail.get(a.email.toLowerCase());
+    if (prior) {
+      if (a.name !== undefined) prior.setParameter('cn', a.name);
+      comp.addProperty(prior);
+      continue;
+    }
+    const prop = new ICAL.Property('attendee', comp);
+    prop.setValue(`mailto:${a.email}`);
+    if (a.name !== undefined) prop.setParameter('cn', a.name);
+    prop.setParameter('cutype', 'INDIVIDUAL');
+    prop.setParameter('role', 'REQ-PARTICIPANT');
+    prop.setParameter('partstat', 'NEEDS-ACTION');
+    prop.setParameter('rsvp', 'TRUE');
+    comp.addProperty(prop);
+  }
+}
+
+/** Set ORGANIZER to the account's address (only when the event has none). */
+export function ensureOrganizer(comp: Component, address: string): void {
+  if (comp.hasProperty('organizer')) return;
+  comp.addPropertyWithValue('organizer', `mailto:${address}`);
+}
+
+// ---------------------------------------------------------------------------
+// Alarms
+// ---------------------------------------------------------------------------
+
+/**
+ * Alarm offsets in minutes before the start (negative = after it). A trigger
+ * relative to the END is converted with the occurrence's length; an absolute
+ * trigger is measured against this occurrence's start. Apple's `ACTION:NONE`
+ * placeholder alarms are skipped.
+ */
+export function readAlarms(comp: Component, start: Date, end: Date, zone: string): number[] {
+  const out: number[] = [];
+  for (const alarm of comp.getAllSubcomponents('valarm')) {
+    if (String(alarm.getFirstPropertyValue('action') ?? '').toUpperCase() === 'NONE') continue;
+    const trigger = alarm.getFirstProperty('trigger');
+    if (!trigger) continue;
+    const value = trigger.getFirstValue();
+    let offsetMs: number;
+    if (value instanceof ICAL.Time) {
+      offsetMs = instantOf(value, zone).getTime() - start.getTime();
+    } else {
+      const related = String(trigger.getFirstParameter('related') ?? '').toUpperCase();
+      offsetMs = (value as Duration).toSeconds() * 1000 + (related === 'END' ? end.getTime() - start.getTime() : 0);
+    }
+    out.push(Math.round(-offsetMs / 60_000) + 0);
+  }
+  return out;
+}
+
+/** Replace every VALARM with display alarms `minutesBefore` the start. */
+export function setAlarms(comp: Component, minutes: readonly number[]): void {
+  comp.removeAllSubcomponents('valarm');
+  for (const m of minutes) {
+    const alarm = new ICAL.Component('valarm');
+    alarm.addPropertyWithValue('action', 'DISPLAY');
+    alarm.addPropertyWithValue('description', 'Reminder');
+    alarm.addPropertyWithValue('trigger', ICAL.Duration.fromSeconds(-m * 60));
+    comp.addSubcomponent(alarm);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Recurrence rules
+// ---------------------------------------------------------------------------
+
+export const WEEKDAYS = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+const DAY_NAMES: Record<string, string> = {
+  MO: 'Monday',
+  TU: 'Tuesday',
+  WE: 'Wednesday',
+  TH: 'Thursday',
+  FR: 'Friday',
+  SA: 'Saturday',
+  SU: 'Sunday',
+};
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const UNITS: Record<string, string> = {
+  SECONDLY: 'second',
+  MINUTELY: 'minute',
+  HOURLY: 'hour',
+  DAILY: 'day',
+  WEEKLY: 'week',
+  MONTHLY: 'month',
+  YEARLY: 'year',
+};
+
+function ordinal(n: number): string {
+  if (n === -1) return 'last';
+  if (n < 0) return `${ordinal(-n)}-to-last`;
+  const words = ['first', 'second', 'third', 'fourth', 'fifth'];
+  if (n <= 5) return words[n - 1] as string;
+  const suffix = n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th';
+  return `${n}${suffix}`;
+}
+
+function list(items: string[]): string {
+  if (items.length <= 1) return items.join('');
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+function dayPhrase(byday: string): string {
+  const m = /^([+-]?\d+)?([A-Z]{2})$/.exec(byday.toUpperCase());
+  if (!m) return byday;
+  const name = DAY_NAMES[m[2] as string] ?? (m[2] as string);
+  return m[1] ? `the ${ordinal(Number(m[1]))} ${name}` : name;
+}
+
+/**
+ * A plain-English reading of an RRULE ("Every 2 weeks on Monday and
+ * Wednesday, until Fri, Dec 31, 2027"). Rule parts it does not phrase are
+ * named rather than dropped, and the raw rule is always returned beside it.
+ */
+export function describeRule(recur: Recur, untilLabel?: string): string {
+  const unit = UNITS[String(recur.freq)] ?? String(recur.freq).toLowerCase();
+  const interval = recur.interval > 1 ? recur.interval : 1;
+  let text = interval === 1 ? `Every ${unit}` : `Every ${interval} ${unit}s`;
+  const byday = recur.getComponent('BYDAY').map(String);
+  const bymonthday = recur.getComponent('BYMONTHDAY').map(Number);
+  const bymonth = recur.getComponent('BYMONTH').map(Number);
+  const weekdaysOnly = ['MO', 'TU', 'WE', 'TH', 'FR'];
+  if (byday.length === 5 && weekdaysOnly.every((d) => byday.includes(d)) && (recur.freq === 'DAILY' || recur.freq === 'WEEKLY')) {
+    text = interval === 1 ? 'Every weekday' : `${text} on weekdays`;
+  } else if (byday.length > 0) {
+    text += ` on ${list(byday.map(dayPhrase))}`;
+  }
+  if (bymonthday.length > 0) {
+    text += ` on ${list(bymonthday.map((d) => (d === -1 ? 'the last day' : d < 0 ? `the ${ordinal(-d)}-to-last day` : `day ${d}`)))}`;
+  }
+  if (bymonth.length > 0) text += ` in ${list(bymonth.map((m) => MONTH_NAMES[m - 1] ?? String(m)))}`;
+  const other = Object.keys(recur.parts).filter((k) => !['BYDAY', 'BYMONTHDAY', 'BYMONTH'].includes(k));
+  if (other.length > 0) text += ` (also ${other.join(', ')})`;
+  if (recur.count) text += `, ${recur.count} time${recur.count === 1 ? '' : 's'}`;
+  else if (untilLabel !== undefined) text += `, until ${untilLabel}`;
+  return text;
+}
+
+/** The first RRULE of a master, if any. */
+export function ruleOf(master: Component): Recur | undefined {
+  return (master.getFirstPropertyValue('rrule') as Recur | null) ?? undefined;
+}
+
+export interface RecurrenceInput {
+  frequency: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  interval?: number;
+  count?: number;
+  byWeekday?: readonly string[];
+}
+
+/** Build an RRULE from tool input; `until` is already a value of the right type. */
+export function buildRule(input: RecurrenceInput, until: Time | undefined): Recur {
+  const data: Record<string, unknown> = { freq: input.frequency.toUpperCase() };
+  if (input.interval !== undefined && input.interval > 1) data.interval = input.interval;
+  if (input.count !== undefined) data.count = input.count;
+  if (until !== undefined) data.until = until;
+  const days = input.byWeekday;
+  if (days !== undefined && days.length > 0) data.byday = WEEKDAYS.filter((d) => days.includes(d));
+  return ICAL.Recur.fromData(data as Parameters<typeof ICAL.Recur.fromData>[0]);
+}
+
+// ---------------------------------------------------------------------------
+// Building
+// ---------------------------------------------------------------------------
+
+/** An empty VCALENDAR carrying this server's PRODID. */
+export function newCalendar(): Component {
+  const vcal = new ICAL.Component(['vcalendar', [], []]);
+  vcal.updatePropertyWithValue('version', '2.0');
+  vcal.updatePropertyWithValue('prodid', PRODID);
+  vcal.updatePropertyWithValue('calscale', 'GREGORIAN');
+  return vcal;
+}
+
+/** A new VEVENT with its identity and stamps set. */
+export function newEvent(uid: string, now: Date): Component {
+  const ev = new ICAL.Component('vevent');
+  ev.updatePropertyWithValue('uid', uid);
+  const stamp = ICAL.Time.fromJSDate(now, true);
+  ev.updatePropertyWithValue('dtstamp', stamp);
+  ev.updatePropertyWithValue('created', stamp.clone());
+  ev.updatePropertyWithValue('last-modified', stamp.clone());
+  ev.updatePropertyWithValue('sequence', 0);
+  return ev;
+}
+
+/** A deep copy of a component (for a new override or series built from a master). */
+export function cloneComponent(comp: Component): Component {
+  return new ICAL.Component(JSON.parse(JSON.stringify(comp.toJSON())));
+}
+
+/**
+ * Serialize a VCALENDAR (CRLF line endings, lines folded at 75 octets), with
+ * every VTIMEZONE ahead of the events — where clients expect them, and where
+ * a zone added during an edit would otherwise end up last.
+ */
+export function serialize(vcal: Component): string {
+  const [name, props, comps] = vcal.toJSON() as JCal;
+  const zones = comps.filter((c) => c[0] === 'vtimezone');
+  return ICAL.stringify([name, props, [...zones, ...comps.filter((c) => c[0] !== 'vtimezone')]]);
+}
+
+export { ICAL };
