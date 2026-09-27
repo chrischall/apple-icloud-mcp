@@ -54,6 +54,27 @@ build environment had no Apple credentials. The first live run is the real verif
 - None of these writes was live-tested from here (the sandbox refused authenticated probes).
   Apple has said undocumented methods "may be blocked at any time". [UNVERIFIED]
 
+**Read-after-write lag (both APIs)** — what the playlist/rating/folder write paths are built around:
+
+- Library reads lag library writes: a playlist's tracks, its attributes (name, description, isPublic),
+  a folder's children and a rating can read as they were before a write for seconds or longer. Apple
+  documents a delay only for new library items appearing; that the delay also covers edits to existing
+  playlists, folder membership and ratings, and how long it lasts, is assumed (the 2-minute write-log
+  window is a guess). [UNVERIFIED] Every such write therefore verifies by re-reading, reports "not
+  visible yet" instead of failing, refuses to rebuild or re-PATCH from a read that does not show this
+  process's own recent change, and never skips a write because a read says it is already done.
+- A catalog song appended to a library playlist reads back as a library track whose
+  `attributes.playParams.catalogId` is the catalog id that was sent (that is how the duplicate check,
+  the write log and add verification recognise it). If Apple lists it under a different catalog id
+  (another storefront's equivalent), the add reports "not showing yet" and rewrites are refused until
+  the 2-minute window lapses — safe, but noisy. [UNVERIFIED]
+- `PUT /v1/me/ratings/{type}/{id}` sets a value and `DELETE` removes it (404 when there is none), so
+  repeating either is harmless. [DOC for the endpoints; idempotence UNVERIFIED] Setting a playlist's
+  `parent` to the folder it is already in is assumed to be a no-op. [UNVERIFIED]
+- `isPublic: true` shows a playlist on the user's Apple Music profile (the web player adds `with=shared`
+  when creating or updating a public one) — i.e. to other people, which is why additive mode refuses
+  it. [BUNDLE]
+
 ## iCloud Calendar and Contacts (CalDAV / CardDAV)
 
 - Hosts `caldav.icloud.com` / `contacts.icloud.com`; Basic auth with the Apple ID and an
@@ -79,6 +100,15 @@ build environment had no Apple credentials. The first live run is the real verif
   Apple's `itemN.X-ABLabel` grouping; groups are separate cards
   (`X-ADDRESSBOOKSERVER-KIND:group`). Updates edit raw lines because a generic serializer
   rewrote Apple's grouped/typed lines. [3P: msgvault, measurements in research]
+- Contacts: cards can carry the contact photo inline (`PHOTO;ENCODING=b`), so the one unfiltered
+  `addressbook-query` answer for a large, photo-heavy book can pass the server's 32 MB read cap. The
+  fallback then lists ETags only (same query, `getetag` alone) and fetches cards with
+  `addressbook-multiget` (hrefs as absolute paths) in batches of 100, halving on a too-large batch.
+  How large iCloud's answer gets in practice, and whether it honours the ETag-only query and multiget
+  batches of 100, are [UNVERIFIED] live. Timing out on a huge answer (rather than passing the cap) is
+  not handled by the fallback. [UNVERIFIED]
+- Contacts: some exporters write a birthday with no year as `BDAY:0000-MM-DD`; it is read like Apple's
+  `1604` / `X-APPLE-OMIT-YEAR`. Whether iCloud ever serves that form is [UNVERIFIED].
 
 ## iCloud Mail (IMAP / SMTP)
 
@@ -86,6 +116,14 @@ build environment had no Apple credentials. The first live run is the real verif
   `smtp.mail.me.com:587` STARTTLS, user = full address; app-specific password. [DOC: support.apple.com/102525]
 - No MOVE / SPECIAL-USE; folders are "Sent Messages", "Deleted Messages", "Junk", "Archive".
   SMTP does not file a copy in Sent, so the server APPENDs one. [3P: Mozilla bug 1611624, imapflow]
+- iCloud advertises UIDPLUS, which the COPY-then-`UID EXPUNGE` move depends on (without MOVE or
+  UIDPLUS `apple_mail_move` refuses rather than expunge other deleted mail). [UNVERIFIED]
+- imapflow 2.0.7's COPY, MOVE, STORE and EXPUNGE catch EVERY error — a tagged NO and a
+  connection that died with the command already sent (socket timeout, reset, cancel) alike — log
+  it and return `false`; they never throw for it. Only the logged error (`responseStatus`
+  NO/BAD vs. `code: NoConnection`, …) and `client.usable` tell "refused" from "unknown", so the
+  tools read both (`swallowedWriteFailure`). [3P: imapflow 2.0.7 `commands/copy.js`, `store.js`,
+  `expunge.js`, `move.js`; reproduced in tests/mail/real-imapflow.test.ts]
 - Limits: 1,000 messages/day, 500 recipients per message, 20 MB per message. [DOC]
 - On a hosted runner raw TCP only leaves through an HTTP CONNECT tunnel, so both clients are
   handed `HTTPS_PROXY` explicitly. [mcp-host docs/SECURITY.md]
@@ -105,6 +143,13 @@ build environment had no Apple credentials. The first live run is the real verif
   500 000 calls/month free. [DOC] Unauthenticated → `401 {"reason":"MISSING JWT"}`. [LIVE]
 - Attribution (Apple Weather mark + legal link) is mandatory and included in every response;
   alerts must keep their `detailsUrl` and issuing `source`. [DOC]
+- `weatherAlerts` is believed to be OMITTED (not sent as `{alerts: []}`) when no alert is active at a covered
+  location; `GET /api/v1/availability/{lat}/{lon}?country=` lists `weatherAlerts` where alerts are covered.
+  [UNVERIFIED] Until a live run settles it, a missing set is never reported as an empty alerts list: the tool
+  asks availability and says "probably none — NOT confirmation" (covered), "no alert service here" (not
+  covered) or UNKNOWN (check failed). If a live run shows the omission means "none", tag this [LIVE] and the
+  empty list may be restored; if Apple sends `{alerts: []}` instead, a missing set means "not delivered" and
+  should always read UNKNOWN.
 
 ## iTunes Search / Lookup and charts (no auth)
 

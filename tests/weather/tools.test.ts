@@ -212,12 +212,15 @@ describe('apple_weather_get', () => {
     expect(client.getAvailability).not.toHaveBeenCalled();
   });
 
-  it('treats a missing alert set as "none" only when Apple confirms alert coverage there', async () => {
+  it('never turns a missing alert set into an empty alerts list, even where Apple lists alert coverage', async () => {
+    // Whether WeatherKit omits the set when no alert is active is unverified,
+    // so a missing set is at most "probably none" — never a structured "none".
     client.getWeather.mockResolvedValueOnce(sampleWeather({ alerts: null }));
     const { json } = await call(tools, GET, { ...NYC, countryCode: 'US' });
     expect(client.getAvailability).toHaveBeenCalledWith(40.7128, -74.006, 'US');
-    expect(json.alerts).toEqual({ returned: 0, alerts: [] });
-    expect(json.notes).toEqual([expect.stringMatching(/^No active severe-weather alerts: .*lists alert coverage/)]);
+    expect(json).not.toHaveProperty('alerts');
+    expect(json.notes).toEqual([expect.stringMatching(/^Apple sent no severe-weather alert data .*lists alert coverage.*PROBABLY no active alerts.*NOT confirmation/)]);
+    expect(json.notes.join(' ')).not.toMatch(/No active/);
   });
 
   it('never reports "no alerts" where Apple has no alert coverage', async () => {

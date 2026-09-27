@@ -4,17 +4,24 @@
  * "Safe" in three senses:
  *  - it never executes or fetches anything (it is a tokenizer, not a DOM);
  *  - every scan is linear — no backtracking regex runs over attacker-supplied
- *    markup, so a hostile message cannot stall the server;
+ *    markup, and no step re-reads output it already produced (links do not
+ *    nest, and a link's text is compared with its target only when it is short
+ *    enough to be equal), so a hostile message cannot stall the server;
  *  - content a mail client would NOT show is dropped: `<script>`, `<style>`,
  *    `<head>`/`<title>`, templates, and elements hidden with `hidden`,
  *    `display:none`, `visibility:hidden`, `font-size:0` or `opacity:0`. Hidden
  *    text is a common prompt-injection carrier ("invisible instructions" in a
  *    newsletter); the reader should see what the human sees.
  *
- * An element is only skipped when its closing tag exists (matched up front
- * with a per-name stack). Mail HTML is routinely unbalanced, and skipping to
- * the end of the document because one `</div>` was missing would silently
- * drop the rest of the message.
+ * An element is only skipped when its end is known: its closing tag (matched
+ * up front with a per-name stack), or — for `<p>` and `<li>` — the tag that
+ * ends it implicitly, as a browser reads it: a start tag that closes it
+ * (`<p hidden>x<p>shown`) or the end tag of an element it sits in
+ * (`<div><p hidden>x</div>shown`). Mail HTML is
+ * routinely unbalanced, and skipping to the end of the document because one
+ * `</div>` was missing would silently drop the rest of the message. `/>` counts
+ * only on void and SVG/MathML elements: a browser ignores it on a `<div/>`,
+ * which stays open until its `</div>`.
  */
 
 type Token =
@@ -75,8 +82,13 @@ function tokenize(html: string): Token[] {
     }
     if (lt > i) tokens.push({ kind: 'text', text: html.slice(i, lt) });
     if (html.startsWith('<!--', lt)) {
-      const end = html.indexOf('-->', lt + 4);
-      i = end === -1 ? len : end + 3;
+      // A comment ends at the first `-->` — which may overlap its opening, so `<!-->` and `<!--->`
+      // are empty comments — or at `--!>`, as the HTML tokenizer reads them. Searching for `-->`
+      // only after `<!--` made those forms swallow visible text up to some later comment.
+      const dash = html.indexOf('-->', lt + 2);
+      const bang = html.indexOf('--!>', lt + 4);
+      if (dash !== -1 && (bang === -1 || dash < bang)) i = dash + 3;
+      else i = bang === -1 ? len : bang + 4;
       continue;
     }
     const next = html[lt + 1];
@@ -117,7 +129,10 @@ function tokenize(html: string): Token[] {
       }
       continue;
     }
-    tokens.push({ kind: 'open', name, attrs, selfClosing: /\/\s*$/.test(attrs) });
+    // A browser ignores `/>` on an ordinary element (`<div/>` opens a div); it counts only on
+    // void elements and in SVG/MathML.
+    const selfClosing = /\/\s*$/.test(attrs) && (VOID.has(name) || name === 'svg' || name === 'math');
+    tokens.push({ kind: 'open', name, attrs, selfClosing });
   }
   return tokens;
 }
@@ -151,18 +166,76 @@ function tagEnd(html: string, from: number): number {
   return -1;
 }
 
-/** Index of each open tag's matching close tag (same name, nesting-aware). Unmatched opens are absent. */
+/** Elements that bound HTML's "button scope": a `<p>` outside one of these is not closed from inside it. */
+const BUTTON_SCOPE = new Set(['applet', 'caption', 'html', 'table', 'td', 'th', 'marquee', 'object', 'template', 'button']);
+/**
+ * Start tags that close an open `<p>` (HTML's "close a p element"). Not `table`: in quirks
+ * mode — most mail, which has no doctype — a table nests inside the paragraph.
+ */
+const CLOSES_P = new Set([
+  'address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'dir', 'div', 'dl', 'fieldset',
+  'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'main',
+  'menu', 'nav', 'ol', 'p', 'pre', 'listing', 'xmp', 'section', 'search', 'summary', 'ul', 'li', 'dd', 'dt',
+]);
+/**
+ * What stops a new `<li>` from closing an open one: the list-item scope (a nested list) and
+ * the other structural elements a browser will not close past (every "special" element but
+ * address, div and p).
+ */
+const LI_SCOPE = new Set([
+  ...BUTTON_SCOPE, 'ol', 'ul', 'menu', 'dir', 'article', 'aside', 'blockquote', 'center', 'details', 'dl', 'dd', 'dt',
+  'fieldset', 'figcaption', 'figure', 'footer', 'form', 'header', 'hgroup', 'main', 'nav', 'section', 'summary',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'listing', 'xmp', 'iframe', 'noscript', 'select', 'textarea',
+  'tbody', 'thead', 'tfoot', 'tr',
+]);
+
+/**
+ * Index of the token that ends each open tag: its matching close tag (same name,
+ * nesting-aware), or for `<p>`/`<li>` the token before the start tag that closes it
+ * implicitly. Opens whose end is unknown are absent.
+ */
 function matchCloses(tokens: Token[]): Map<number, number> {
   const stacks = new Map<string, number[]>();
   const match = new Map<number, number>();
+  /** Is an element named in `scope` still open that was opened after token `idx`? */
+  const openSince = (scope: ReadonlySet<string>, idx: number): boolean => {
+    for (const name of scope) {
+      const s = stacks.get(name);
+      if (s && (s[s.length - 1] as number) > idx) return true;
+    }
+    return false;
+  };
+  const closeImplicitly = (name: string, scope: ReadonlySet<string>, at: number): void => {
+    const s = stacks.get(name);
+    const open = s?.[s.length - 1];
+    if (open === undefined || openSince(scope, open)) return;
+    s?.pop();
+    match.set(open, at - 1);
+  };
+  /**
+   * An end tag closes everything still open inside the element it ends: a browser
+   * "generates implied end tags", so an unclosed <p>/<li> in a <div> or <td> ends at
+   * that </div> or </td>. Without this, a hidden <p> stayed open until some later
+   * start tag closed it, and everything visible in between was dropped.
+   */
+  const endInside = (name: string, outer: number, at: number): void => {
+    const s = stacks.get(name);
+    while (s && s.length && (s[s.length - 1] as number) > outer) match.set(s.pop() as number, at - 1);
+  };
   tokens.forEach((t, idx) => {
-    if (t.kind === 'open' && !t.selfClosing && !VOID.has(t.name)) {
+    if (t.kind === 'open') {
+      if (CLOSES_P.has(t.name)) closeImplicitly('p', BUTTON_SCOPE, idx);
+      if (t.name === 'li') closeImplicitly('li', LI_SCOPE, idx);
+      if (t.selfClosing || VOID.has(t.name)) return;
       let s = stacks.get(t.name);
       if (!s) stacks.set(t.name, (s = []));
       s.push(idx);
     } else if (t.kind === 'close') {
       const open = stacks.get(t.name)?.pop();
-      if (open !== undefined) match.set(open, idx);
+      if (open === undefined) return;
+      match.set(open, idx);
+      endInside('p', open, idx);
+      endInside('li', open, idx);
     }
   });
   return match;
@@ -205,6 +278,8 @@ const MAX_LINK_CHARS = 2048;
 class TextOut {
   private parts: string[] = [];
   private tail = '';
+  /** Characters written so far. */
+  chars = 0;
 
   /** Current trailing text (for newline bookkeeping). */
   private lastChars(): string {
@@ -214,6 +289,7 @@ class TextOut {
   push(s: string): void {
     if (!s) return;
     this.parts.push(s);
+    this.chars += s.length;
     this.tail = (this.tail + s).slice(-2);
   }
 
@@ -250,7 +326,23 @@ export function htmlToText(html: string): string {
   const tokens = tokenize(html);
   const match = matchCloses(tokens);
   const out = new TextOut();
-  const anchors: Array<{ href: string | undefined; mark: number }> = [];
+  // Links do not nest (a browser closes an open <a> when the next one starts), so at most one is open.
+  let anchor: { href: string | undefined; mark: number; start: number } | undefined;
+  const endAnchor = (): void => {
+    const a = anchor;
+    anchor = undefined;
+    if (!a?.href || !/^(https?:|mailto:)/i.test(a.href) || a.href.length > MAX_LINK_CHARS) return;
+    const target = a.href.replace(/^mailto:/i, '');
+    // The text can only BE the target when it is about as long (whitespace collapses; a few
+    // line breaks may ride along). Longer text is compared with nothing — rebuilding it for
+    // every link is what made a pile of links around a long body quadratic.
+    if (out.chars - a.start > 2 * a.href.length + 16) {
+      out.text(` (${a.href})`);
+      return;
+    }
+    const label = out.since(a.mark).replace(/\s+/g, ' ').trim();
+    if (label !== target && label !== a.href) out.text(label ? ` (${a.href})` : a.href);
+  };
   let preDepth = 0;
   for (let idx = 0; idx < tokens.length; idx++) {
     const t = tokens[idx] as Token;
@@ -290,10 +382,11 @@ export function htmlToText(html: string): string {
           break;
         }
         case 'a':
-          if (!t.selfClosing) anchors.push({ href: attrs.get('href')?.trim(), mark: out.length() });
+          endAnchor();
+          anchor = { href: attrs.get('href')?.trim(), mark: out.length(), start: out.chars };
           break;
         default:
-          if (t.name === 'pre' && !t.selfClosing) preDepth++;
+          if (t.name === 'pre') preDepth++;
           if (PARAGRAPH.has(t.name)) out.breakLines(2);
           else if (BLOCK.has(t.name)) out.breakLines(1);
       }
@@ -301,12 +394,7 @@ export function htmlToText(html: string): string {
     }
     // close tag
     if (t.name === 'a') {
-      const a = anchors.pop();
-      if (a?.href && /^(https?:|mailto:)/i.test(a.href) && a.href.length <= MAX_LINK_CHARS) {
-        const label = out.since(a.mark).replace(/\s+/g, ' ').trim();
-        const target = a.href.replace(/^mailto:/i, '');
-        if (label !== target && label !== a.href) out.text(label ? ` (${a.href})` : a.href);
-      }
+      endAnchor();
       continue;
     }
     if (t.name === 'pre' && preDepth > 0) preDepth--;

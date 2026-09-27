@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { FetchMessageObject, SearchObject } from 'imapflow';
 import { z } from 'zod';
 import { canonicalTimeZone, getDisplayTimeZone } from '../config.js';
-import { AppleToolError, InvalidArgumentError, UnconfirmedWriteError, errorMessage } from '../errors.js';
+import { AppleToolError, InvalidArgumentError, TransportError, UnconfirmedWriteError, errorMessage } from '../errors.js';
 import { assertNotLatched } from '../icloud-auth.js';
 import { formatInstant, parseDateInput, putInstant } from '../time.js';
 import { CONFIRM_NOTE, confirmTokenParam, confirmWrite, stateRevision } from '../tools/_confirm.js';
@@ -23,10 +23,12 @@ import {
   mapImapWriteError,
   openMailbox,
   resolveMailbox,
+  swallowedWriteFailure,
   uidSet,
   withImap,
   type CreateImapClient,
   type ImapClientLike,
+  type ImapSession,
 } from './imap.js';
 import {
   attachmentInfo,
@@ -164,6 +166,22 @@ async function writeStep<T>(what: string, fn: () => Promise<T>): Promise<T> {
   } catch (err) {
     throw mapImapWriteError(err, what);
   }
+}
+
+/**
+ * Run one write imapflow answers only with a result or `false` (COPY, MOVE, STORE, EXPUNGE).
+ * It swallows a connection lost mid-command into that same `false`, so a `false` that may hide
+ * an applied write is THROWN here as the transport failure it was (writeStep then reports an
+ * unknown outcome). A `false` that comes back is a definitive refusal — nothing was applied.
+ */
+async function unswallowed<T>(session: ImapSession, what: string, fn: () => Promise<T | false>): Promise<T | false> {
+  session.clearLastError();
+  const result = await fn();
+  if (!result) {
+    const lost = swallowedWriteFailure(session, what);
+    if (lost) throw lost;
+  }
+  return result;
 }
 
 function serverSaid(text: string | undefined): string {
@@ -760,14 +778,18 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
             try {
               const { lock } = await openMailbox(client, original.mailbox, { write: true, uidValidity: original.uidValidity });
               try {
-                answered = await client.messageFlagsAdd(String(original.uid), ['\\Answered'], { uid: true });
+                answered = await unswallowed(session, 'marking the original answered', () =>
+                  client.messageFlagsAdd(String(original.uid), ['\\Answered'], { uid: true }),
+                );
               } finally {
                 lock.release();
               }
               if (!answered) warnings.push(`The original could not be marked answered${serverSaid(session.lastServerText())}.`);
             } catch (err) {
               answered = false;
-              warnings.push(`The original could not be marked answered: ${errorMessage(mapImapError(err, 'marking the original answered'))}`);
+              const mapped = mapImapError(err, 'marking the original answered');
+              // A lost connection may have cut in after the STORE went out: then it is not known either way.
+              warnings.push(`The original ${mapped instanceof TransportError ? 'may not have been' : 'could not be'} marked answered: ${errorMessage(mapped)}`);
             }
           }
         });
@@ -852,9 +874,11 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
             let ok: boolean;
             try {
               ok = await writeStep(what, () =>
-                want
-                  ? client.messageFlagsAdd(uidSet(needs), [flag], { uid: true })
-                  : client.messageFlagsRemove(uidSet(needs), [flag], { uid: true }),
+                unswallowed(session, what, () =>
+                  want
+                    ? client.messageFlagsAdd(uidSet(needs), [flag], { uid: true })
+                    : client.messageFlagsRemove(uidSet(needs), [flag], { uid: true }),
+                ),
               );
             } catch (err) {
               // A change that already went through must not vanish behind the failure of the next one.
@@ -951,7 +975,9 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
           const warnings: string[] = [];
           let result;
           if (client.capabilities.has('MOVE')) {
-            result = await writeStep('moving the messages', () => client.messageMove(set, destination, { uid: true }));
+            result = await writeStep('moving the messages', () =>
+              unswallowed(session, 'moving the messages', () => client.messageMove(set, destination, { uid: true })),
+            );
             if (!result) {
               throw new AppleToolError('UPSTREAM_ERROR', `iCloud Mail refused to move the messages to "${destination}"${serverSaid(session.lastServerText())}. Nothing was moved.`);
             }
@@ -959,13 +985,15 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
             // iCloud has no MOVE. imapflow's own fallback would EXPUNGE the originals even when the COPY
             // failed (it swallows the COPY error into `false`) — deleting mail that went nowhere. So: copy,
             // check the copy landed, and only then flag + UID EXPUNGE exactly these uids.
-            result = await writeStep('copying the messages', () => client.messageCopy(set, destination, { uid: true }));
+            result = await writeStep('copying the messages', () =>
+              unswallowed(session, 'copying the messages', () => client.messageCopy(set, destination, { uid: true })),
+            );
             if (!result) {
               throw new AppleToolError('UPSTREAM_ERROR', `iCloud Mail refused to copy the messages to "${destination}"${serverSaid(session.lastServerText())}. Nothing was moved.`);
             }
             let removed: boolean;
             try {
-              removed = await client.messageDelete(set, { uid: true });
+              removed = await unswallowed(session, 'removing the originals', () => client.messageDelete(set, { uid: true }));
             } catch (err) {
               // The copy DID land. Saying only "may or may not have been applied" would invite a
               // retry — which copies them a second time.

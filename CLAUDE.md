@@ -80,11 +80,13 @@ A module exports `register<X>Tools(server, deps?)` from `src/<x>/tools.ts` and `
   ("may have landed — check before retrying"). Only 429 is ever retried on a non-idempotent request.
 - **Structural write gate:** `APPLE_WRITE_MODE` below a tool's access → the tool is NOT REGISTERED.
   `additive` = only adds to your own account; nothing modified, removed, or sent to another person
-  (calendar create refuses attendees in additive mode for that reason).
+  (calendar create refuses attendees, and music create refuses `isPublic: true`, in additive mode for that reason).
 - **Confirm gate** (`confirmWrite`) on sends, deletes, playlist track removal/rewrites, and events with
   attendees (calendar create/update say so conditionally — never end a conditionally gated tool's description
   with the unconditional `CONFIRM_NOTE`); called on EVERY invocation after reads, right before the write, with a human-readable preview and
-  a revision (ETag or `stateRevision`) so a stale token fails as DRAFT_CHANGED. Never a boolean `confirm` (CI lint).
+  a revision (ETag or `stateRevision`) so a stale token fails as DRAFT_CHANGED. A prompt's acceptance is bound to the
+  same target+revision+payload+preview (an explicit `binding` — mcp-utils' default binds the args only, so an accepted
+  "remove position 1" once removed whichever song sat there on the retry). Never a boolean `confirm` (CI lint).
 - **Annotate every tool** from `ANNOTATIONS` (an unannotated tool is published as destructive).
 - stdout is JSON-RPC: `console.error` only. imapflow's default logger writes to stdout — always `logger: false`.
 
@@ -103,14 +105,23 @@ Responses report `backend`. Track removal is `DELETE …/tracks?ids[library-song
 occurrence; `mode` mandatory; videos use the same key); reorders `PUT` the full list built from a fresh full
 read; `PATCH` sends name+description+isPublic together like the web player. Apple-curated/collaborative
 playlists are `canEdit:false`. `next` hrefs drop `limit` — always send explicit `offset`/`limit`.
-Apple's reads lag its writes: `write-log.ts` remembers (2 min) the order each create/add/remove/reorder
-replaced, and `playlistStateRefusal` refuses a rewrite whose fresh read still shows the old state, or whose
-`expectedRevision` doesn't match (`PLAYLIST_CHANGED`); every rewrite returns the new `revision`. The health
+Apple's reads lag its writes: `write-log.ts` keeps EVERY write of the last 2 min per playlist (keeping only the
+latest let a second quick write hide the first): a rewrite (remove/reorder) records the order it replaced, an
+add/create the copies of each track a read must show (never the add's own, possibly stale, read). A rewrite that
+lands supersedes the entries its read showed (`mark()` → `recordRewrite`); an unconfirmed one is kept alongside.
+`playlistStateRefusal` refuses a rewrite whose read doesn't show one of them, or whose `expectedRevision` doesn't
+match (`PLAYLIST_CHANGED`); every rewrite returns the new `revision`. add_playlist_tracks refuses the same way when
+its duplicate check would run on such a read (`skipDuplicates:false` appends with a warning) and verifies by
+PRESENCE, not count. `update_playlist` PATCHes the full attribute set, so `PlaylistAttributeLog` refuses one whose
+read doesn't show a name/description/visibility this process set in the last 2 min. A write whose read may lag is
+never skipped as "already so": `set_rating` always sends (PUT/DELETE are idempotent) and `move_playlist` always PUTs
+the parent. The health
 probe uses `GET /v1/test` (a catalog id can be withdrawn) and checks each backend independently.
 
 **iCloud DAV** (dav/) — discovery: `PROPFIND /` Depth **0** → principal → home-set, an ABSOLUTE URL on the
 partition host (moved by href, not redirect). Credentials go only to `https://*.icloud.com`. 401 latches the
-credential (`icloud-auth.ts`); a bare 403 latches only on the two discovery hosts (on partition hosts it's
+credential (`icloud-auth.ts`) on EVERY request — the cached-home `probe` too, so a cold start with a disk
+discovery record doesn't re-send a revoked pair to rediscover (the probe answers only 403/404/410); a bare 403 latches only on the two discovery hosts (on partition hosts it's
 usually a read-only calendar). REPORT responses include the collection's own href — skip it (`sameResource`).
 A 207 on DELETE/MOVE is a partial failure, not success. The dsid in paths is scrubbed from errors. The latch is
 persisted (`icloud-rejected.json`, salted digests + time) so a hosted cold start doesn't re-send a revoked
@@ -136,7 +147,12 @@ lines round-trip byte-for-byte. `entryId` = hash of property+group+raw value, `~
 resolved against the card as it was BEFORE the request's first change. FN is rewritten only when the composed
 name changes. Groups are separate cards (`X-ADDRESSBOOKSERVER-KIND:group`) excluded from results. The whole
 book is read with one unfiltered REPORT and cached per process by getctag; a 507 on the collection's own
-response means truncated — say so.
+response means truncated — say so. Inline `PHOTO`s can push that answer past `MAX_RESPONSE_BYTES`
+(`ResponseTooLargeError`): then the book is read as an ETag-only listing + `addressbook-multiget` batches of
+100, halving a batch that is still too large; a card too large ON ITS OWN is counted (`tooLarge`) and warned
+about, never a failed book, and `get` reads a card the book left out directly rather than calling it
+NOT_FOUND. ORG's department reads as every unit after the organization, so setting it replaces them all (the
+value as shown is left untouched). A `BDAY` with year `0000` is a birthday without a year, like `1604`.
 
 **Mail** — IMAP login tries the address local part then the full address (Apple domains only; a custom domain
 uses the full address) and remembers which worked (`mail-login.json`) so cold starts don't spend failed
@@ -146,7 +162,14 @@ exactly those UIDs (imapflow's fallback deletes originals even when the copy fai
 `SMTPConnection` step by step so "nothing was sent" and "may have been sent" are distinguishable, then APPENDs
 to "Sent Messages" (iCloud SMTP doesn't). The CONNECT tunnel pauses the socket until nodemailer listens (the
 greeting can arrive with the proxy's 200) and has its own deadline. WITHIN's `OLDER 0`/`YOUNGER 0` are
-invalid — future dates are handled locally. HTML→text drops hidden content (prompt-injection hygiene).
+invalid — future dates are handled locally. imapflow's COPY/MOVE/STORE/EXPUNGE swallow a connection lost
+mid-command into the same `false` as a server NO: every such write goes through `unswallowed` (tools.ts), and only
+a tagged NO/BAD (or a `false` with no error on a live connection) may say "Nothing was moved/changed" — anything
+else is UNCONFIRMED_WRITE. HTML→text drops hidden content (prompt-injection hygiene) and reads markup as a
+browser does where that decides what is hidden: comments end at the first `-->`/`--!>` (`<!-->` is empty), `/>`
+counts only on void/SVG/MathML elements, `<p>`/`<li>` close implicitly (at a start tag that closes them, or at the end tag
+of an element they sit in). It must stay linear — links don't nest
+and a link's text is compared with its target only when short (a nested-`<a>` bomb once took minutes).
 
 **Maps** — ES256 JWT (`scope: server_api`) exchanged at `GET /v1/token` for a 30-min access token; a 401 on a
 data call re-exchanges once (only if the cached token is still the refused one). Snapshot URLs are SIGNED,
@@ -156,7 +179,9 @@ won't match. A missing result list only means "empty" when the body has no other
 **Weather** — JWT header needs `id: <team>.<serviceId>` and `sub` = Services ID. Days roll over in `timeZone`
 (default: display zone) — a response warns when that zone is far from the location's solar time. Hourly
 ranges > 192 h may 400 → retried once at 192 with a note. Attribution + alert `source`/`detailsUrl` are
-mandatory and always included; alert text is never modified.
+mandatory and always included; alert text is never modified. A `weatherAlerts` set Apple didn't send is never
+turned into an empty alerts list (whether Apple omits it when none is active is [UNVERIFIED]); only a list
+Apple sent reads as "none", and not when its metadata says `temporarilyUnavailable`.
 
 **iTunes** — no auth, ~20 calls/min: one sliding-window limiter (fails fast with RATE_LIMITED past a 30 s
 wait) + 1 h response cache. No real paging upstream: tools fetch `offset+limit` (≤ 200) and slice; charts

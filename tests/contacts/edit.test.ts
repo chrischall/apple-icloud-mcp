@@ -12,7 +12,7 @@ import {
   sameValue,
   setRev,
 } from '../../src/contacts/edit.js';
-import { addressEntries, readContact, valueEntries } from '../../src/contacts/model.js';
+import { addressEntries, readContact, readOrg, valueEntries } from '../../src/contacts/model.js';
 import { VCard } from '../../src/contacts/vcard.js';
 import { InvalidArgumentError } from '../../src/errors.js';
 import { vcard } from './fake-icloud.js';
@@ -379,6 +379,44 @@ describe('review fixes: FN is rewritten only when the composed name changes', ()
     const orgOnly = parse('FN:Acme', 'ORG:Acme;');
     applyScalars(orgOnly, { organization: 'Acme Two' });
     expect(body(orgOnly)).toEqual(['FN:Acme Two', 'ORG:Acme Two;']);
+  });
+});
+
+describe('review fixes: the department of an ORG with more than two units', () => {
+  // readOrg shows every unit after the organization as the department, so an
+  // edit must replace all of them — otherwise what is stored is not what was asked.
+  it('clearing the department clears every unit after the organization', () => {
+    const c = parse('N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;Eng;Platform');
+    expect(readOrg(c)).toEqual({ organization: 'Acme', department: 'Eng, Platform' });
+    applyScalars(c, { department: '' });
+    expect(body(c)).toEqual(['N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;']);
+    expect(readOrg(c).department).toBe('');
+  });
+
+  it('a new department replaces every unit, even one equal to the current first unit', () => {
+    const c = parse('N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;Eng;Platform');
+    applyScalars(c, { department: 'Sales' });
+    expect(body(c)).toEqual(['N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;Sales']);
+    const same = parse('N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;Eng;Platform');
+    applyScalars(same, { department: 'Eng' });
+    expect(body(same)).toEqual(['N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;Eng']);
+  });
+
+  it('the department as shown is left exactly as stored (units and all), also beside an organization change', () => {
+    const c = parse('N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;Eng;Platform');
+    applyScalars(c, { organization: 'NewCo', department: 'Eng, Platform' });
+    expect(body(c)).toEqual(['N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:NewCo;Eng;Platform']);
+    expect(readOrg(c)).toEqual({ organization: 'NewCo', department: 'Eng, Platform' });
+    const untouched = vcard('N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;Eng;Platform');
+    const u = VCard.parse(untouched)!;
+    applyScalars(u, { department: ' Eng, Platform ' });
+    expect(u.toString()).toBe(untouched);
+  });
+
+  it('clearing organization and department removes the ORG line', () => {
+    const c = parse('N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;Eng;Platform');
+    applyScalars(c, { organization: '', department: '' });
+    expect(body(c)).toEqual(['N:Doe;Jane;;;', 'FN:Jane Doe']);
   });
 });
 

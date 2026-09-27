@@ -222,7 +222,9 @@ async function locate(
     rememberAccount(stored);
     const check = await client.probe(stored.homeUrl);
     if (check.ok) return { found: stored, source: 'disk' };
-    // Refused (401/403) or gone (404/410): the cached home is stale — rediscover once.
+    // Refused (bare 403) or gone (404/410): the cached home is stale — rediscover once.
+    // A 401 never gets here: it latched the pair and threw inside the probe, so
+    // the revoked password is not sent a second time to the discovery host.
     cache.clear();
   }
   const found = await discover(client, kind);

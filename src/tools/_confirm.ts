@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { CallToolResult, InputRequiredResult, ServerContext } from '@modelcontextprotocol/server';
 import {
   confirmKeyFromEnv,
+  confirmTtlFromEnv,
   confirmationFromEnv,
   confirmTokenParam,
   createSpentTokenStore,
@@ -41,8 +42,8 @@ export interface ConfirmWriteOptions {
   payload: unknown;
   /** What the user sees: names, titles, dates, addresses — never only ids. */
   preview: Record<string, unknown>;
-  /** The tool's validated arguments (bound into elicitation acceptance; `confirmToken` is stripped). */
-  args: unknown;
+  /** The tool's validated arguments (bound into the token and the prompt's acceptance; `confirmToken` is stripped). */
+  args: object;
   /** The phase-2 token from the tool's input, or undefined on phase 1. */
   confirmToken: string | undefined;
 }
@@ -58,12 +59,25 @@ export interface ConfirmWriteOptions {
  * before the write, with the freshly built payload and a freshly read
  * revision — the re-read is what makes a stale token fail.
  *
+ * Both paths commit to the same thing: the arguments AND the state the user was
+ * shown (target, revision, payload, preview). A prompt's acceptance is bound
+ * explicitly for that reason — mcp-utils' default binding covers the arguments
+ * only, so an acceptance given while "position 1" was one song would have
+ * removed whatever song sat there when the retry re-read the playlist. Now a
+ * retry whose fresh read differs asks again, with the new preview.
+ *
  * Returns `undefined` to proceed, otherwise the result to return unchanged.
  */
 export function confirmWrite(
   ctx: ServerContext,
   opts: ConfirmWriteOptions,
 ): Promise<InputRequiredResult | CallToolResult | undefined> {
+  const subject = {
+    target: opts.target,
+    ...(opts.revision !== undefined ? { revision: opts.revision } : {}),
+    payload: opts.payload,
+    preview: opts.preview,
+  };
   return requireConfirmationWithFallback(
     ctx,
     confirmationFromEnv({
@@ -76,14 +90,22 @@ export function confirmWrite(
       args: opts.args,
       // Built per call: the data dir, APPLE_STATE_CACHE and the key are read now.
       spent: createFileSpentTokenStore(),
-      subject: () => ({
-        target: opts.target,
-        ...(opts.revision !== undefined ? { revision: opts.revision } : {}),
-        payload: opts.payload,
-        preview: opts.preview,
-      }),
+      subject: () => subject,
+      // A caller-supplied binding replaces the args-only default (and is used as given: strip the token here).
+      binding: {
+        key: confirmKeyFromEnv(),
+        args: { args: withoutConfirmToken(opts.args), ...subject },
+        ttlSeconds: confirmTtlFromEnv(),
+      },
     }),
   );
+}
+
+/** The arguments as bound: the token differs between the phases, so it is never part of the commitment. */
+function withoutConfirmToken(args: object): Record<string, unknown> {
+  const { confirmToken, ...rest } = args as Record<string, unknown>;
+  void confirmToken;
+  return rest;
 }
 
 // ---------------------------------------------------------------------------

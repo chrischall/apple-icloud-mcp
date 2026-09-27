@@ -187,7 +187,7 @@
     },
     {
       "name": "apple_music_create_playlist",
-      "description": "Create a new playlist in your Apple Music library, optionally with tracks (up to 500 catalog or library song ids; added 100 at a time), a description, a folder and public visibility."
+      "description": "Create a new playlist in your Apple Music library, optionally with tracks (up to 500 catalog or library song ids; added 100 at a time), a description, a folder and public visibility (not in APPLE_WRITE_MODE=additive)."
     },
     {
       "name": "apple_music_add_playlist_tracks",

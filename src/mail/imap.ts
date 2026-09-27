@@ -54,6 +54,8 @@ import { ICLOUD_FOLDERS } from './format.js';
 export interface ImapClientLike {
   capabilities: Map<string, boolean | number>;
   mailbox: MailboxObject | false;
+  /** imapflow's own "is the connection still up" (false once it has closed). */
+  usable: boolean;
   connect(): Promise<void>;
   logout(): Promise<void>;
   close(): void;
@@ -79,6 +81,8 @@ export const defaultCreateImapClient: CreateImapClient = (options) => new ImapFl
 /** What one connection's logger saw: the server's text for a failure imapflow swallows into `false`. */
 export interface ImapLogState {
   lastServerText?: string;
+  /** The whole error of the last failure imapflow logged (and possibly swallowed). */
+  lastError?: unknown;
 }
 
 /**
@@ -92,6 +96,7 @@ export function makeImapLogger(state: ImapLogState): Logger {
   const noop = (): void => undefined;
   const note = (level: string) => (obj: unknown): void => {
     const o = (obj ?? {}) as { msg?: unknown; err?: { responseText?: unknown; message?: unknown } };
+    if (o.err !== undefined && o.err !== null) state.lastError = o.err;
     const text = o.err?.responseText ?? o.err?.message;
     if (typeof text === 'string' && text) state.lastServerText = text;
     if (isDebugLog()) console.error(`[apple-icloud-mcp] mail imap ${level}: ${scrub(String(o.msg ?? text ?? ''))}`);
@@ -178,6 +183,25 @@ export function mapImapWriteError(err: unknown, what: string): Error {
   return mapped;
 }
 
+/**
+ * imapflow's COPY, MOVE, STORE and EXPUNGE catch EVERY error — a server's tagged NO and a
+ * connection that died with the command already sent (socket timeout, reset, a cancel's
+ * close()) alike — log it, and return `false`. So a `false` alone does not mean "refused".
+ * Given the session's recorded failure (cleared right before the command), return the
+ * transport error to report when the `false` may hide a write the server DID apply, or
+ * undefined when it is a definitive "not applied": a tagged NO/BAD, or no failure at all on a
+ * connection that is still up (imapflow declined before sending, e.g. a flag the mailbox
+ * cannot take). Anything else is an unknown outcome and must never read as "nothing changed".
+ */
+export function swallowedWriteFailure(session: ImapSession, what: string): TransportError | undefined {
+  const e = session.lastError() as ImapFlowError | undefined;
+  if (e ? e.responseStatus === 'NO' || e.responseStatus === 'BAD' : session.client.usable !== false) return undefined;
+  const mapped = e ? mapImapError(e, what) : undefined;
+  if (mapped instanceof TransportError) return mapped;
+  const detail = typeof e?.message === 'string' && e.message ? `: ${e.message}` : '';
+  return new TransportError('mail', 'NETWORK_ERROR', `iCloud Mail (${IMAP_HOST}:${IMAP_PORT}) connection failed during ${what}${detail}.`, e);
+}
+
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
@@ -188,6 +212,10 @@ export interface ImapSession {
   loginAs: LoginForm;
   /** The server text of the last failure imapflow swallowed, if any. */
   lastServerText(): string | undefined;
+  /** The error of the last failure imapflow logged, if any (see swallowedWriteFailure). */
+  lastError(): unknown;
+  /** Forget the recorded failure — before a write, so a stale one is never read as its outcome. */
+  clearLastError(): void;
 }
 
 async function connect(create: CreateImapClient, account: MailAccount): Promise<ImapSession> {
@@ -208,7 +236,15 @@ async function connect(create: CreateImapClient, account: MailAccount): Promise<
       throw mapImapError(err, 'sign-in');
     }
     rememberLoginForm(account, form);
-    return { client, loginAs: form, lastServerText: () => state.lastServerText };
+    return {
+      client,
+      loginAs: form,
+      lastServerText: () => state.lastServerText,
+      lastError: () => state.lastError,
+      clearLastError: () => {
+        delete state.lastError;
+      },
+    };
   }
   // Every login form was refused: definitive. Latch it so a stale app-specific
   // password is not re-sent on every call (that locks Apple IDs).

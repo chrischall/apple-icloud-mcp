@@ -5,7 +5,7 @@ import { latchRejection } from '../../src/icloud-auth.js';
 import { NO_ELICIT_CTX, callConfirmed, callPreview, type GatedHandler } from '../tools/_confirm-helpers.js';
 import { MAX_BODY_CHARS } from '../../src/mail/tools.js';
 import { harness, useMailEnv } from './harness.js';
-import { PASS, imapError } from './fake-imap.js';
+import { PASS, droppedMidCommand, imapError } from './fake-imap.js';
 
 useMailEnv();
 
@@ -352,6 +352,17 @@ describe('apple_mail_send — replies', () => {
     const out = parse(r.content[0]?.text as string);
     expect(out.repliedTo).toEqual({ mailbox: 'INBOX', uid: 1, markedAnswered: false });
     expect(out.warnings).toEqual(['The original could not be marked answered.']);
+  });
+
+  it('an \\Answered STORE whose connection dropped mid-command is "may not have been", not "could not be"', async () => {
+    const h = seeded();
+    h.imap.override('messageFlagsAdd', droppedMidCommand);
+    const r = await callConfirmed(gated(h), { to: ['bob@example.com'], body: 'Yes!', inReplyTo: { uid: 1 } });
+    const out = parse(r.content[0]?.text as string);
+    expect(out.repliedTo).toEqual({ mailbox: 'INBOX', uid: 1, markedAnswered: false });
+    expect(out.warnings).toEqual([
+      'The original may not have been marked answered: iCloud Mail (imap.mail.me.com:993) connection failed during marking the original answered: Connection not available.',
+    ]);
   });
 
   it('when IMAP is gone after sending a reply, says both follow-ups were skipped', async () => {

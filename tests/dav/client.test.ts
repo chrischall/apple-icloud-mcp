@@ -415,16 +415,28 @@ describe('DavClient.probe', () => {
     expect(f.calls[0]!.body).toContain('<d:resourcetype/>');
   });
 
-  it('answers 401/403/404/410 without throwing and WITHOUT latching', async () => {
+  it('answers 403/404/410 without throwing and WITHOUT latching', async () => {
     const denied = vi.fn();
-    const f = fake({ status: 401 }, { status: 403 }, { status: 404 }, { status: 410 }, { status: 207, body: MS_EMPTY });
+    const f = fake({ status: 403 }, { status: 404 }, { status: 410 }, { status: 207, body: MS_EMPTY });
     const c = client(f.request, { onRefused: denied });
-    expect(await c.probe(HOME)).toEqual({ ok: false, status: 401 });
     expect(await c.probe('https://caldav.icloud.com/')).toEqual({ ok: false, status: 403 });
     expect(await c.probe(HOME)).toEqual({ ok: false, status: 404 });
     expect(await c.probe(HOME)).toEqual({ ok: false, status: 410 });
     expect(denied).not.toHaveBeenCalled();
     expect(await c.probe(HOME)).toEqual({ ok: true });
+  });
+
+  it('a 401 is definitive even on a probe: it latches, fires onRefused and throws — the pair is not sent again', async () => {
+    const denied = vi.fn();
+    const f = fake({ status: 401 });
+    const c = client(f.request, { onRefused: denied });
+    const err = await c.probe(HOME).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CredentialsRejectedError);
+    expect((err as CredentialsRejectedError).message).toContain('HTTP 401 on PROPFIND /200385701/calendars/');
+    expect(denied).toHaveBeenCalledWith(401, HOME);
+    const again = fake();
+    await expect(client(again.request).probe(HOME)).rejects.toBeInstanceOf(CredentialsRejectedError);
+    expect(again.calls).toHaveLength(0);
   });
 
   it('throws anything else', async () => {

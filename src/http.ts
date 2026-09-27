@@ -3,6 +3,7 @@ import { getRequestTimeoutMs, isDebugLog, type ServiceName } from './config.js';
 import {
   AppleToolError,
   CredentialsRejectedError,
+  ResponseTooLargeError,
   TransportError,
   UnconfirmedWriteError,
   UpstreamError,
@@ -153,7 +154,11 @@ export interface HttpResponse<T = unknown> {
   bytes: Uint8Array;
 }
 
-/** Largest response body read into memory (a full address book is a few MB). */
+/**
+ * Largest response body read into memory. A read past it is
+ * `ResponseTooLargeError`: an address book whose cards carry inline photos
+ * can pass it, so contacts/book.ts falls back to fetching cards in batches.
+ */
 export const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 const MAX_REDIRECTS = 5;
@@ -308,7 +313,7 @@ export async function httpRequest<T = unknown>(req: HttpRequest): Promise<HttpRe
         if (mayHaveLanded) {
           throw new UnconfirmedWriteError(req.service, `${what} (HTTP ${res.status}); the change may have been applied.`);
         }
-        throw new UpstreamError(req.service, res.status, `${what}.`);
+        throw new ResponseTooLargeError(req.service, res.status, `${what}.`);
       }
       const timedOut = controller.signal.aborted;
       const why = timedOut ? `timed out reading the response after ${timeoutMs} ms` : `lost the connection reading the response`;
