@@ -465,8 +465,12 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
       let verified = false;
       try {
         const now = await readRating(s, args.type, args.id);
-        verified = now === args.rating;
-        if (!verified) warnings.push(`Apple still reports "${now}" — the change may not be visible yet.`);
+        // A read that showed this rating BEFORE the write too proves nothing about it.
+        verified = now === args.rating && previous !== args.rating;
+        if (now !== args.rating) warnings.push(`Apple still reports "${now}" — the change may not be visible yet.`);
+        else if (previous === args.rating) {
+          warnings.push(`Not verified: Apple read "${now}" before the change too, so this read cannot confirm it — re-read it shortly.`);
+        }
       } catch (err) {
         warnings.push(`Changed, but could not re-read the rating to verify: ${errorMessage(err)}`);
       }
@@ -474,7 +478,8 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
         ...head(s, { type: args.type, id: args.id }),
         previous,
         rating: args.rating,
-        changed: previous !== args.rating,
+        // Unknown when the read already showed the new rating: it may lag the real one.
+        ...(previous !== args.rating ? { changed: true } : {}),
         verified,
         ...(warnings.length > 0 ? { warnings } : {}),
         ...notesField([

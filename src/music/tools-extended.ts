@@ -579,8 +579,11 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
       let verified = false;
       try {
         const after = await readFolderChildren(s, folderId);
-        verified = after.items.some((c) => c.id === args.playlistId);
-        if (!verified) warnings.push(`"${name}" does not show in ${folderName} yet — Apple can lag; re-read it shortly.`);
+        const shows = after.items.some((c) => c.id === args.playlistId);
+        // A read that listed it BEFORE the move too proves nothing about this move.
+        verified = shows && !listed;
+        if (!shows) warnings.push(`"${name}" does not show in ${folderName} yet — Apple can lag; re-read it shortly.`);
+        else if (listed) warnings.push(`Not verified: ${folderName === 'the top level' ? 'the top level' : `"${folderName}"`} listed "${name}" before the move too, so this read cannot confirm it — re-read it shortly.`);
       } catch (err) {
         warnings.push(`Moved, but could not re-read the folder to verify: ${errorMessage(err)}`);
       }

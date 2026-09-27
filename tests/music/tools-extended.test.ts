@@ -904,12 +904,19 @@ describe('apple_music_move_playlist', () => {
     const again = await callTool(tools, 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'p.F1' });
     expect(again.data).toMatchObject({
       changed: true,
-      verified: true,
+      // It listed the playlist before the move too, so the re-read proves nothing about this move.
+      verified: false,
+      warnings: ['Not verified: "Chill" listed "Road Trip" before the move too, so this read cannot confirm it — re-read it shortly.'],
       notes: ['"Chill" already listed "Road Trip"; the move was sent anyway, since Apple\'s reads can lag a move made moments ago.'],
     });
     expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(2);
     const back = await callTool(tools, 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'root' });
     expect(back.data).toMatchObject({ folderId: 'p.playlistsroot', folder: 'the top level', verified: true });
+    const backAgain = await callTool(tools, 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'root' });
+    expect(backAgain.data).toMatchObject({
+      verified: false,
+      warnings: ['Not verified: the top level listed "Road Trip" before the move too, so this read cannot confirm it — re-read it shortly.'],
+    });
     expect(back.data.notes).toBeUndefined();
   });
 
@@ -950,7 +957,7 @@ describe('apple_music_move_playlist', () => {
     l.addPlaylist('p.A', { name: 'A', tracks: [] });
     installFetch(route('GET', '/v1/me/library/playlist-folders/p.X', { json: { data: [{ id: 'p.X', type: 'library-playlist-folders' }] } }), route('GET', '/v1/me/library/playlist-folders/p.X/children', { json: { data: [{ id: 'p.A', type: 'library-playlists' }] } }), l.handler());
     const r = await callTool(captureTools(), 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'p.X' });
-    expect(r.data).toMatchObject({ folder: 'p.X', changed: true, verified: true, notes: [expect.stringMatching(/^"p\.X" already listed "A"/)] });
+    expect(r.data).toMatchObject({ folder: 'p.X', changed: true, verified: false, notes: [expect.stringMatching(/^"p\.X" already listed "A"/)] });
   });
 });
 

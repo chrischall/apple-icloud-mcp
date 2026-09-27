@@ -382,14 +382,16 @@ describe('apple_music_set_rating', () => {
     expect(put.path).toBe('/v1/me/ratings/songs/1');
     expect(put.body).toEqual({ type: 'rating', attributes: { value: 1 } });
     expect(r.data).toMatchObject({ backend: 'web', previous: 'none', rating: 'love', changed: true, verified: true });
-    // Already that rating as read: sent anyway (the read may lag), so `verified` is about THIS write.
+    // Already that rating as read: sent anyway (the read may lag), and not verified — a read that showed it before
+    // the write too proves nothing about this write — and no `changed` either way.
     const same = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '1', rating: 'love' });
     expect(same.data).toMatchObject({
       previous: 'love',
-      changed: false,
-      verified: true,
+      verified: false,
+      warnings: ['Not verified: Apple read "love" before the change too, so this read cannot confirm it — re-read it shortly.'],
       notes: ['Apple already read "love"; it was sent anyway, since a read can lag a change made moments ago.'],
     });
+    expect(same.data).not.toHaveProperty('changed');
     expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(2);
     const dis = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '1', rating: 'dislike' });
     expect(dis.data).toMatchObject({ previous: 'love', rating: 'dislike', verified: true });
@@ -411,7 +413,8 @@ describe('apple_music_set_rating', () => {
     expect(r.data).toMatchObject({ changed: true, verified: false, warnings: ['Apple still reports "none" — the change may not be visible yet.'] });
     // An empty ratings list reads as "none"; the undo is sent anyway.
     const again = await callTool(tools, 'apple_music_set_rating', { type: 'library-songs', id: 'i.x', rating: 'none' });
-    expect(again.data).toMatchObject({ previous: 'none', changed: false, verified: true });
+    expect(again.data).toMatchObject({ previous: 'none', verified: false });
+    expect(again.data).not.toHaveProperty('changed');
     let g2 = 0;
     installFetch(route('GET', '/v1/me/ratings/songs/2', () => (++g2 === 1 ? { status: 404, text: '' } : { status: 500, text: '' })), route('PUT', '/v1/me/ratings/songs/2', { status: 204 }));
     const e = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '2', rating: 'dislike' });
@@ -442,7 +445,8 @@ describe('apple_music_set_rating', () => {
     const undo = await callTool(tools, 'apple_music_set_rating', { type: 'songs', id: '123', rating: 'none' });
     expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1);
     expect(serverValue).toBe('none');
-    expect(undo.data).toMatchObject({ previous: 'none', rating: 'none', changed: false, verified: true });
+    expect(undo.data).toMatchObject({ previous: 'none', rating: 'none', verified: false });
+    expect(undo.data).not.toHaveProperty('changed');
     expect(undo.data.notes).toEqual(['Apple already read "none"; it was sent anyway, since a read can lag a change made moments ago.']);
   });
 });
