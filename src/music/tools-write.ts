@@ -170,15 +170,19 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
       }
       const warnings: string[] = [];
       let added = first.length;
+      let mayHaveLanded = added;
       if (rest.length > 0) {
         const r = await appendTracks(s, id, rest, first.length);
         added += r.added;
+        // As in add_tracks: a batch with an unknown outcome may have landed (`toTrack` counts in `refs`' numbering).
+        mayHaveLanded = r.failure?.unconfirmed ? r.failure.toTrack : added;
         warnings.push(...appendWarnings(r));
       }
       // A reorder/remove must not rebuild the list from a read that shows only part of it yet (the first batch
-      // without the appended ones): that PUT would drop the rest. So the log expects every track that landed; and an
-      // update_playlist must not PATCH back a name/description/visibility a lagging read does not show yet.
-      s.client.playlistWrites.recordAppend(id, { at: sentAt, what: `create playlist with ${added} tracks` }, [], refs.slice(0, added), s.client.now());
+      // without the appended ones): that PUT would drop the rest. So the log expects every track that landed, or may
+      // have; and an update_playlist must not PATCH back a name/description/visibility a lagging read does not show yet.
+      const what = `create playlist with ${mayHaveLanded} tracks${mayHaveLanded > added ? `, ${mayHaveLanded - added} unconfirmed` : ''}`;
+      s.client.playlistWrites.recordAppend(id, { at: sentAt, what }, [], refs.slice(0, mayHaveLanded), s.client.now());
       s.client.playlistAttributes.record(id, { at: sentAt, what: 'create playlist' }, { name: args.name, description: args.description, isPublic: args.isPublic });
       let verified = false;
       let current: Record<string, unknown> | undefined;
