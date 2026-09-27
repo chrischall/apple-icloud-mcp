@@ -55,6 +55,44 @@ describe('real imapflow on the wire', () => {
     expect(srv.commands.some((c) => /STORE/.test(c))).toBe(false);
   });
 
+  // imapflow's COPY/STORE/EXPUNGE swallow a connection lost mid-command into `false`, exactly
+  // like a server NO — only the logged error tells them apart. A retry after a false "Nothing was
+  // moved" copies the messages a second time and expunges the originals.
+  it('a UID COPY the server received before the connection died is unconfirmed, not "Nothing was moved"', async () => {
+    srv = await startLoopbackImap();
+    srv.messages = [{ uid: 1, raw: rfc822({ subject: 'Invoice' }) }];
+    srv.dropOn = /^UID COPY /;
+    const { json, isError } = await call('apple_mail_move', { uids: [1], destination: 'Sent Messages' });
+    expect(srv.commands.some((c) => c.startsWith('UID COPY 1 '))).toBe(true);
+    expect(isError).toBe(true);
+    expect(json.error.code).toBe('UNCONFIRMED_WRITE');
+    expect(json.error.message).not.toMatch(/Nothing was moved/);
+    expect(srv.commands.some((c) => /EXPUNGE/.test(c))).toBe(false);
+  });
+
+  it('a UID STORE the server received before the connection died is unconfirmed, not "Nothing was changed"', async () => {
+    srv = await startLoopbackImap();
+    srv.messages = [{ uid: 5, raw: rfc822({ subject: 'Hi' }) }];
+    srv.dropOn = /^UID STORE /;
+    const { json, isError } = await call('apple_mail_update_flags', { uids: [5], seen: true });
+    expect(srv.commands.some((c) => /^UID STORE 5 \+FLAGS/.test(c))).toBe(true);
+    expect(isError).toBe(true);
+    expect(json.error.code).toBe('UNCONFIRMED_WRITE');
+    expect(json.error.message).not.toMatch(/Nothing was changed/);
+  });
+
+  it('a UID COPY the server answers with NO is still a definitive refusal', async () => {
+    srv = await startLoopbackImap();
+    srv.messages = [{ uid: 1, raw: rfc822({ subject: 'Invoice' }) }];
+    srv.refuseOn = /^UID COPY /;
+    const { json } = await call('apple_mail_move', { uids: [1], destination: 'Sent Messages' });
+    expect(json.error).toMatchObject({
+      code: 'UPSTREAM_ERROR',
+      message: 'iCloud Mail refused to copy the messages to "Sent Messages" (server said: Mailbox does not exist). Nothing was moved.',
+    });
+    expect(srv.commands.some((c) => /EXPUNGE/.test(c))).toBe(false);
+  });
+
   it('both login forms refused → a latched credential rejection, and no third attempt', async () => {
     srv = await startLoopbackImap();
     srv.acceptUsers = [];

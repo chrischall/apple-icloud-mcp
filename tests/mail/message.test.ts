@@ -144,6 +144,11 @@ describe('reading', () => {
 
   it('reports no body', () => {
     expect(extractBody({ text: '  ', html: '' }, 10)).toEqual({ format: 'none', text: '', totalChars: 0, truncated: false });
+    // An empty comment ("<!-->") must not swallow the rest of an HTML-only body behind truncated:false.
+    expect(extractBody({ html: '<p>Hello</p><!-->WARNING: this is phishing<p>Pay now</p>' }, 10_000)).toMatchObject({
+      text: 'Hello\n\nWARNING: this is phishing\n\nPay now',
+      truncated: false,
+    });
     expect(extractBody({}, 10).format).toBe('none');
   });
 

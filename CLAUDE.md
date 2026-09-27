@@ -152,7 +152,14 @@ exactly those UIDs (imapflow's fallback deletes originals even when the copy fai
 `SMTPConnection` step by step so "nothing was sent" and "may have been sent" are distinguishable, then APPENDs
 to "Sent Messages" (iCloud SMTP doesn't). The CONNECT tunnel pauses the socket until nodemailer listens (the
 greeting can arrive with the proxy's 200) and has its own deadline. WITHIN's `OLDER 0`/`YOUNGER 0` are
-invalid — future dates are handled locally. HTML→text drops hidden content (prompt-injection hygiene).
+invalid — future dates are handled locally. imapflow's COPY/MOVE/STORE/EXPUNGE swallow a connection lost
+mid-command into the same `false` as a server NO: every such write goes through `unswallowed` (tools.ts), and only
+a tagged NO/BAD (or a `false` with no error on a live connection) may say "Nothing was moved/changed" — anything
+else is UNCONFIRMED_WRITE. HTML→text drops hidden content (prompt-injection hygiene) and reads markup as a
+browser does where that decides what is hidden: comments end at the first `-->`/`--!>` (`<!-->` is empty), `/>`
+counts only on void/SVG/MathML elements, `<p>`/`<li>` close implicitly (at a start tag that closes them, or at the end tag
+of an element they sit in). It must stay linear — links don't nest
+and a link's text is compared with its target only when short (a nested-`<a>` bomb once took minutes).
 
 **Maps** — ES256 JWT (`scope: server_api`) exchanged at `GET /v1/token` for a 30-min access token; a 401 on a
 data call re-exchanges once (only if the cached token is still the refused one). Snapshot URLs are SIGNED,

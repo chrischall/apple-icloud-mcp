@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { harness, useMailEnv } from './harness.js';
-import { PASS, imapError } from './fake-imap.js';
+import { PASS, droppedMidCommand, imapError } from './fake-imap.js';
 
 useMailEnv();
 
@@ -73,7 +73,7 @@ describe('apple_mail_update_flags', () => {
   it('a refused STORE that left the state unchanged is an error naming the server answer', async () => {
     const h = seeded();
     h.imap.override('messageFlagsAdd', function () {
-      (h.imap.created[0]?.logger as { warn: (o: unknown) => void }).warn({ err: { responseText: 'Permission denied' } });
+      (h.imap.created[0]?.logger as { warn: (o: unknown) => void }).warn({ err: { responseStatus: 'NO', responseText: 'Permission denied' } });
       return false;
     });
     const { json, isError } = await h.call('apple_mail_update_flags', { uids: [1], seen: true });
@@ -142,6 +142,26 @@ describe('apple_mail_update_flags', () => {
     const { json } = await h.call('apple_mail_update_flags', { uids: [3], flagged: false });
     expect(json.error).toMatchObject({ code: 'UNCONFIRMED_WRITE', service: 'mail' });
     expect(json.error.hint).toMatch(/re-read it/);
+  });
+
+  it('a STORE whose connection dropped mid-command is unconfirmed — never "Nothing was changed"', async () => {
+    // Real imapflow swallows the NoConnection into `false` (store.js); the fake does the same here.
+    const h = seeded();
+    h.imap.override('messageFlagsAdd', droppedMidCommand);
+    const { json, isError } = await h.call('apple_mail_update_flags', { uids: [1], seen: true });
+    expect(isError).toBe(true);
+    expect(json.error).toMatchObject({
+      code: 'UNCONFIRMED_WRITE',
+      message: 'iCloud Mail: the connection failed during setting \\Seen; it may or may not have been applied.',
+    });
+    // Nothing tried to re-read on the dead connection and call the result a refusal.
+    expect(h.imap.callsOf('fetchAll')).toHaveLength(1);
+
+    const h2 = seeded();
+    h2.imap.override('messageFlagsRemove', droppedMidCommand);
+    const r2 = await h2.call('apple_mail_update_flags', { uids: [3], seen: true, flagged: false });
+    expect(r2.json.error.code).toBe('UNCONFIRMED_WRITE');
+    expect(r2.json.error.message).toMatch(/\(Already applied before this: setting \\Seen on uid 3\.\)$/);
   });
 
   it('refuses stale uids', async () => {
@@ -268,6 +288,37 @@ describe('apple_mail_move', () => {
         'they may now be in both mailboxes. Search both before retrying: a retry would copy them again.',
     );
     expect(h.imap.mailboxes.get('Deleted Messages')?.messages.size).toBe(1);
+  });
+
+  it('a COPY or MOVE whose connection dropped mid-command is unconfirmed, and nothing is removed', async () => {
+    const h = seeded();
+    h.imap.override('messageCopy', droppedMidCommand);
+    const { json } = await h.call('apple_mail_move', { uids: [1], destination: 'archive' });
+    expect(json.error).toMatchObject({
+      code: 'UNCONFIRMED_WRITE',
+      message: 'iCloud Mail: the connection failed during copying the messages; it may or may not have been applied.',
+    });
+    expect(json.error.message).not.toMatch(/Nothing was moved/);
+    expect(h.imap.callsOf('messageDelete')).toHaveLength(0);
+
+    const h2 = seeded();
+    h2.imap.capabilities.set('MOVE', true);
+    h2.imap.override('messageMove', droppedMidCommand);
+    const r2 = await h2.call('apple_mail_move', { uids: [1], destination: 'archive' });
+    expect(r2.json.error).toMatchObject({ code: 'UNCONFIRMED_WRITE' });
+    expect(r2.json.error.message).toMatch(/during moving the messages/);
+  });
+
+  it('an EXPUNGE whose connection dropped after the copy says the copy landed, not "now in both"', async () => {
+    const h = seeded();
+    h.imap.override('messageDelete', droppedMidCommand);
+    const { json } = await h.call('apple_mail_move', { uids: [1], destination: 'trash' });
+    expect(json.error).toMatchObject({ code: 'UNCONFIRMED_WRITE', service: 'mail' });
+    expect(json.error.message).toBe(
+      'The messages were copied to "Deleted Messages", but the connection failed while removing them from "INBOX" ' +
+        '(iCloud Mail (imap.mail.me.com:993) connection failed during removing the originals: Connection not available.); ' +
+        'they may now be in both mailboxes. Search both before retrying: a retry would copy them again.',
+    );
   });
 
   it('a lost connection during the copy itself is unconfirmed', async () => {

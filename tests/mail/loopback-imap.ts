@@ -23,6 +23,13 @@ export interface LoopbackImap {
   /** Logins the server accepts (any password). */
   acceptUsers: string[];
   messages: LoopbackMessage[];
+  /**
+   * A command (untagged line) that the server RECEIVES — it counts as applied — after which
+   * the connection dies before the tagged answer: a socket timeout or reset mid-write.
+   */
+  dropOn?: RegExp;
+  /** A command the server answers with a tagged NO. */
+  refuseOn?: RegExp;
   /** A client factory: the tools' own options, pointed at this server in cleartext. */
   factory: CreateImapClient;
   close(): Promise<void>;
@@ -74,8 +81,14 @@ export async function startLoopbackImap(): Promise<LoopbackImap> {
           }
           continue;
         }
-        state.commands.push(`${cmd} ${rest.join(' ')}`.trim());
-        if (verb === 'CAPABILITY') sock.write(`* CAPABILITY ${POST_AUTH_CAPS}\r\n${tag} OK done\r\n`);
+        const command = `${cmd} ${rest.join(' ')}`.trim();
+        state.commands.push(command);
+        if (state.dropOn?.test(command)) {
+          sock.destroy();
+          return;
+        }
+        if (state.refuseOn?.test(command)) sock.write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
+        else if (verb === 'CAPABILITY') sock.write(`* CAPABILITY ${POST_AUTH_CAPS}\r\n${tag} OK done\r\n`);
         else if (verb === 'ID') sock.write(`* ID NIL\r\n${tag} OK done\r\n`);
         else if (verb === 'NAMESPACE') sock.write(`* NAMESPACE (("" "/")) NIL NIL\r\n${tag} OK done\r\n`);
         else if (verb === 'LIST' && rest.join(' ') === '"" ""') sock.write(`* LIST (\\Noselect) "/" ""\r\n${tag} OK done\r\n`);
