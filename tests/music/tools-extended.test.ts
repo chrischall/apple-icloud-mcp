@@ -544,6 +544,28 @@ describe('playlist rewrites never rebuild from a read that lags the last write',
     expect(l.playlists.get(id)!.tracks).toHaveLength(150);
   });
 
+  it('create with an UNCONFIRMED append batch: a read without that batch is not rewritten over it', async () => {
+    useWeb();
+    const l = new FakeLibrary();
+    const apply = l.handler();
+    // Tracks 101–200 land, but their answer is lost (a 503 after the write), so the create cannot tell whether they did.
+    installFetch(async (req: FakeReq) => {
+      if (req.method !== 'POST' || !/\/tracks$/.test(req.path)) return undefined;
+      await apply(req);
+      return { status: 503, text: '' };
+    }, apply);
+    const tools = captureTools();
+    const created = await callTool(tools, 'apple_music_create_playlist', { name: 'Big', tracks: Array.from({ length: 250 }, (_, i) => String(1000 + i)) });
+    expect(created.data).toMatchObject({ tracksAdded: 100, partial: true, verified: false });
+    const id = created.data.id as string;
+    expect(l.playlists.get(id)!.tracks).toHaveLength(200);
+    l.lag = true; // reads show the playlist as the create made it: 100 tracks
+    const refused = await callTool(tools, REORDER, { playlistId: id, operation: 'reverse' }, NO_ELICIT_CTX);
+    expect(errorOf(refused)).toMatchObject({ code: 'PLAYLIST_CHANGED', playlistId: id });
+    expect(errorOf(refused).message).toMatch(/\(create playlist with 200 tracks, 100 unconfirmed, 0 s ago\)/);
+    expect(l.playlists.get(id)!.tracks).toHaveLength(200);
+  });
+
   it('remove then reorder, and the guard lapses after its TTL', async () => {
     useWeb();
     const l = new FakeLibrary();
