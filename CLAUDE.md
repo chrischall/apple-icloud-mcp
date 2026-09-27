@@ -130,8 +130,9 @@ series was NOT created; a restore of a series with attendees carries a SEQUENCE 
 sent (RFC 5546), and never claims "nothing was changed". `allEvents` time changes shift DTSTART,
 EXDATE/RDATE/UNTIL, overrides AND plain BYDAY weekdays by wall clock — every value by the SERIES' day shift,
 whatever its own DATE/DATE-TIME type; every-Nth-week rules turn WKST with the days, every-Nth-month/year ones on
-named days are refused; then `checkShifted` compares the old and new series' first 400 instances day by day and
-refuses (nothing written) any move that would gain, drop or re-day one. PUT with If-Match; 412 → "changed since
+named days are refused; then `checkShifted` compares the old and new series day by day and refuses (nothing
+written) any move that would gain, drop or re-day an instance — over their first 400 instances or ten years,
+whichever ends first (unbounded, a sparse rule like Feb 29 on a Monday walked for millennia). PUT with If-Match; 412 → "changed since
 read". **Every write goes through `serializeForWrite`** (delete's EXDATE/truncation PUT too), which
 re-parses the ICS and refuses it if any line break slipped into a value or the ATTENDEE/ORGANIZER/UID set differs
 from what was built — a CR/LF in a `url` once injected an ATTENDEE past the confirm gate. Schemas refuse control

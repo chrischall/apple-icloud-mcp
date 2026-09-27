@@ -143,6 +143,48 @@ describe('planUpdate', () => {
     expect(later.result.eventId).toBe('home/m30.ics#occ=2026-10-30T15:00:00Z');
   });
 
+  it('checks a series move over a bounded sample, so a sparse rule does not walk for centuries', async () => {
+    // Rules a listing walks happily but whose 400th instance lies centuries (or millennia) away. ical.js has no loop
+    // limits, so an unbounded sample blocked the whole server for seconds to forever on a time-of-day change.
+    const rules = [
+      'FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29',
+      'FREQ=MONTHLY;BYMONTHDAY=29;BYMONTH=2',
+      'FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29',
+      'FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO',
+    ];
+    for (const [i, rule] of rules.entries()) {
+      dav.put('home', `leap${i}.ics`, ics(...NY_TZ, ...vevent(`UID:leap${i}`, 'DTSTART;TZID=America/New_York:20280229T090000', 'DTEND;TZID=America/New_York:20280229T100000', `RRULE:${rule}`, 'SUMMARY:Leap')));
+      const started = performance.now();
+      const p = await update(`home/leap${i}.ics#occ=2028-02-29T14:00:00Z`, { span: 'allEvents', startDate: '2028-02-29T11:00' });
+      expect(performance.now() - started).toBeLessThan(5000);
+      expect(p.result.eventId).toBe(`home/leap${i}.ics#occ=2028-02-29T16:00:00Z`);
+      expect(p.puts[0]!.body).toContain('DTSTART;TZID=America/New_York:20280229T110000');
+    }
+    // Nothing at all within the bounds (the first instance excluded, the next one 16 years on): nothing to compare.
+    dav.put(
+      'home',
+      'far.ics',
+      ics(
+        ...NY_TZ,
+        ...vevent('UID:far', 'DTSTART;TZID=America/New_York:20280229T090000', 'DTEND;TZID=America/New_York:20280229T100000', 'RRULE:FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO', 'EXDATE;TZID=America/New_York:20280229T090000', 'SUMMARY:Far'),
+      ),
+    );
+    const far = await update('home/far.ics#occ=2044-02-29T14:00:00Z', { span: 'allEvents', startDate: '2044-02-29T11:00' });
+    expect(far.result.eventId).toBe('home/far.ics#occ=2044-02-29T16:00:00Z');
+  });
+
+  it('compares a sample cut in the middle of a day only up to that day, so it does not refuse a sound move', async () => {
+    // Twice a day from a 17:00 start: the 400th instance is a 09:00, so the sample stops before that day's 17:00.
+    dav.put(
+      'home',
+      'twice.ics',
+      ics(...NY_TZ, ...vevent('UID:tw', 'DTSTART;TZID=America/New_York:20261019T170000', 'DTEND;TZID=America/New_York:20261019T171500', 'RRULE:FREQ=DAILY;BYHOUR=9,17', 'SUMMARY:Pills')),
+    );
+    const p = await update('home/twice.ics#occ=2026-10-19T21:00:00Z', { span: 'allEvents', startDate: '2026-10-20T17:00' });
+    expect(p.result.eventId).toBe('home/twice.ics#occ=2026-10-20T21:00:00Z');
+    expect(keysOf(p.puts[0]!.body, '2026-10-19', '2026-10-22')).toEqual(['2026-10-20T21:00:00Z', '2026-10-21T13:00:00Z', '2026-10-21T21:00:00Z']);
+  });
+
   it('refuses to split a series at an occurrence its rule does not produce (an RDATE)', async () => {
     // A Monday series with an extra Wednesday, and one with an extra occurrence past its COUNT.
     dav.put(

@@ -352,14 +352,46 @@ export function shiftRule(rule: Recur, dayShift: number, timeShifted: boolean): 
   return { rule: r, note };
 }
 
-/** How many of a series' first instances `checkShifted` compares. */
+/** How many of a series' first instances `checkShifted` compares at most… */
 export const SHIFT_CHECK_INSTANCES = 400;
+/** …and how many days past the series' start it looks, whichever bound comes first. */
+export const SHIFT_CHECK_DAYS = 3653;
 
-function leadingInstances(master: Component): Time[] {
+/**
+ * A series' first instances: at most `max`, none on or after the day `before`
+ * (YYYY-MM-DD) when given, and whether the walk reached the series' end.
+ * Bounded by days as well as by count because ical.js has no loop limits: a
+ * sparse rule a listing walks happily (Feb 29 when it is a Monday) walked to
+ * 400 instances runs through millennia of calendar in one synchronous call.
+ * The walk stops at the first instance past a bound, so it costs at most one
+ * of the rule's own gaps beyond it.
+ */
+function leadingInstances(master: Component, max: number, before?: string): { instances: Time[]; ended: boolean } {
   const next = seriesWalker(master);
-  const out: Time[] = [];
-  for (let t = next(); t && out.length < SHIFT_CHECK_INSTANCES; t = next()) out.push(t);
-  return out;
+  const instances: Time[] = [];
+  while (instances.length < max) {
+    const t = next();
+    if (!t) return { instances, ended: true };
+    if (before !== undefined && ymdOf(t) >= before) break;
+    instances.push(t);
+  }
+  return { instances, ended: false };
+}
+
+/**
+ * `checkShifted` over a bounded sample: `sample` is the old series' leading
+ * instances and `shift` how each one moves. A cut sample is complete only
+ * BEFORE the day its last instance lands on (that day's later instances, and
+ * the ones after it, were not read): the days before it are compared. The
+ * shift keeps order, so no unread instance can land before that day.
+ */
+function checkShiftedSample(sample: { instances: Time[]; ended: boolean }, shift: (t: Time) => Time, master: Component, rule: Recur | undefined): void {
+  const moved = sample.instances.map((t) => ymdOf(shift(t)));
+  const before = sample.ended ? undefined : moved[moved.length - 1];
+  if (!sample.ended && before === undefined) return; // nothing read within the bounds, nothing to compare
+  const expected = before === undefined ? moved : moved.filter((day) => day < before);
+  const actual = leadingInstances(master, expected.length + 1, before).instances.map(ymdOf);
+  checkShifted(expected, actual, rule);
 }
 
 /**
@@ -404,10 +436,10 @@ export function editSeries(e: SeriesEdit): string | undefined {
   const allDay = mStart.isDate;
   let shift: (t: Time) => Time = (t) => t;
   const touched = new Set<Component>([master]);
-  // The instances before the change, to check the rewritten series against (see checkShifted).
-  const sample = times ? leadingInstances(master) : [];
 
   if (times) {
+    // The instances before the change, to check the rewritten series against (see checkShifted).
+    const sample = leadingInstances(master, SHIFT_CHECK_INSTANCES, addDaysYmd(ymdOf(mStart), SHIFT_CHECK_DAYS));
     const oldWz = zoneOfTime(mStart, zone);
     const newWz = e.timeInput.timeZone !== undefined && !allDay ? zoneForWrite(vcal, zone) : oldWz;
     const mEnd = endTimeOf(master, mStart);
@@ -477,7 +509,7 @@ export function editSeries(e: SeriesEdit): string | undefined {
       }
       touched.add(ovr);
     }
-    const check = () => checkShifted(sample.map((t) => ymdOf(shift(t))), leadingInstances(master).map(ymdOf), rule);
+    const check = () => checkShiftedSample(sample, shift, master, rule);
     if (e.checks) e.checks.push(check);
     else check();
   }
