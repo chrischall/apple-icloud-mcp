@@ -1,11 +1,21 @@
 {
   "mcpServers": {
-    "ofw": {
+    "apple": {
       "command": "npx",
-      "args": ["-y", "ofw-mcp"],
+      "args": [
+        "-y",
+        "@chrischall/aws-mcp"
+      ],
       "env": {
-        "OFW_USERNAME": "${OFW_USERNAME}",
-        "OFW_PASSWORD": "${OFW_PASSWORD}"
+        "APPLE_TEAM_ID": "${APPLE_TEAM_ID}",
+        "APPLE_KEY_ID": "${APPLE_KEY_ID}",
+        "APPLE_PRIVATE_KEY": "${APPLE_PRIVATE_KEY}",
+        "APPLE_MUSIC_USER_TOKEN": "${APPLE_MUSIC_USER_TOKEN}",
+        "APPLE_MUSIC_WEB_USER_TOKEN": "${APPLE_MUSIC_WEB_USER_TOKEN}",
+        "APPLE_WEATHERKIT_SERVICE_ID": "${APPLE_WEATHERKIT_SERVICE_ID}",
+        "ICLOUD_USERNAME": "${ICLOUD_USERNAME}",
+        "ICLOUD_APP_PASSWORD": "${ICLOUD_APP_PASSWORD}",
+        "DISPLAY_TZ": "${DISPLAY_TZ}"
       }
     }
   }

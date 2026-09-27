@@ -1,82 +1,90 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { registerHealthcheckTools } from '../src/tools/healthcheck.js';
-import { registerUserTools } from '../src/tools/user.js';
-import { registerMessageTools } from '../src/tools/messages.js';
-import { registerCalendarTools } from '../src/tools/calendar.js';
-import { registerExpenseTools } from '../src/tools/expenses.js';
-import { registerJournalTools } from '../src/tools/journal.js';
-import { NodeAttachmentIO } from '../src/tools/attachments.js';
-import type { CacheStore } from '../src/cache/store.js';
-import type { OFWClient } from '../src/client.js';
+import { HEALTH_PROBES, REGISTRARS } from '../src/registry.js';
+import { SERVICES } from '../src/config.js';
 
 /**
  * `manifest.json`'s tool roster must equal the REGISTERED roster, both ways.
  *
- * This is the file an mcpb host reads to decide what to show. A tool missing
- * from it is callable by name and invisible in the UI; a tool listed but not
- * registered is advertised and then fails. Neither breaks a test, breaks the
- * build, or breaks the server — nothing else in this repo reads the file — so
- * the drift is silent in both directions and only a user notices.
- *
- * It had drifted: `ofw_check_freshness` and `ofw_status` were registered and
- * absent from the manifest. `ofw_status` is the call the whole "verify rather
- * than recite" design rests on (see CLAUDE.md), so it was exactly the wrong
- * one to hide.
- *
- * The roster is read by REGISTERING, not by scanning source. A grep for
- * `registerTool('name'` misses a name on a continuation line, a name that is a
- * loop variable, and a tool registered through a shared helper — all three
- * occur across this fleet.
+ * It is the file an mcpb host reads to decide what to show: a tool missing
+ * from it is callable and invisible, a tool listed but not registered is
+ * advertised and then fails. Nothing else reads it, so drift is silent in
+ * both directions. The roster is read by REGISTERING (not by grepping
+ * source), in the mode that registers everything.
  */
-const manifest = JSON.parse(
-  readFileSync(fileURLToPath(new URL('../manifest.json', import.meta.url)), 'utf8'),
-) as { tools: { name: string; description?: string }[] };
+const manifest = JSON.parse(readFileSync(fileURLToPath(new URL('../manifest.json', import.meta.url)), 'utf8')) as {
+  tools: { name: string; description?: string }[];
+};
 
-function registeredToolNames(): string[] {
-  const names: string[] = [];
-  const server = { registerTool: (name: string) => void names.push(name) } as unknown as McpServer;
-  const client = {} as OFWClient;
-  // Neither the cache nor the attachment IO is touched by registration — the
-  // handlers are never invoked here — so a stub keeps the test off the disk.
-  const cacheProvider = (): CacheStore => ({}) as CacheStore;
-  registerHealthcheckTools(server, client);
-  registerUserTools(server, client);
-  registerMessageTools(server, client, cacheProvider, new NodeAttachmentIO());
-  registerCalendarTools(server, client);
-  registerExpenseTools(server, client);
-  registerJournalTools(server, client);
-  return names;
+interface Captured {
+  name: string;
+  description: string;
+  annotations: Record<string, unknown>;
+}
+
+function registered(env: Record<string, string> = {}): Captured[] {
+  const saved = { ...process.env };
+  Object.assign(process.env, env);
+  try {
+    const out: Captured[] = [];
+    const server = {
+      registerTool: (name: string, cfg: { description: string; annotations: Record<string, unknown> }) =>
+        void out.push({ name, description: cfg.description, annotations: cfg.annotations }),
+    } as unknown as McpServer;
+    for (const r of REGISTRARS) r(server);
+    return out;
+  } finally {
+    process.env = saved;
+  }
 }
 
 describe('manifest.json tool roster', () => {
-  // Registration is gated by OFW_WRITE_MODE, and the manifest describes the
-  // full surface — so the comparison has to be made in the mode that registers
-  // everything, or the test would "pass" by hiding the write tools too.
-  const saved = process.env.OFW_WRITE_MODE;
-  beforeAll(() => {
-    process.env.OFW_WRITE_MODE = 'all';
-  });
-  afterEach(() => {
-    if (saved === undefined) delete process.env.OFW_WRITE_MODE;
-    else process.env.OFW_WRITE_MODE = saved;
-  });
-
-  it('lists every registered tool', () => {
-    const registered = registeredToolNames().sort();
-    const listed = manifest.tools.map((t) => t.name).sort();
-    expect(registered.filter((n) => !listed.includes(n))).toEqual([]);
-  });
-
-  it('lists no tool that is not registered', () => {
-    const registered = registeredToolNames();
-    const listed = manifest.tools.map((t) => t.name).sort();
-    expect(listed.filter((n) => !registered.includes(n))).toEqual([]);
+  it('lists exactly the registered tools', () => {
+    const names = registered().map((t) => t.name).sort();
+    expect(manifest.tools.map((t) => t.name).sort()).toEqual(names);
   });
 
   it('gives every entry a non-blank description', () => {
     expect(manifest.tools.filter((t) => !t.description?.trim()).map((t) => t.name)).toEqual([]);
+  });
+
+  it('registers every tool with an EMPTY environment (CI boots the bundle with env -i)', () => {
+    expect(registered().length).toBeGreaterThan(50);
+  });
+
+  it('names every tool apple_<service>_… or apple_healthcheck, with no duplicates', () => {
+    const names = registered().map((t) => t.name);
+    expect(new Set(names).size).toBe(names.length);
+    for (const n of names) expect(n).toMatch(/^apple_(healthcheck|(music|calendar|contacts|mail|maps|weather|itunes|charts)_[a-z_]+)$/);
+  });
+
+  it('annotates every tool explicitly (an unannotated tool is published as destructive)', () => {
+    for (const t of registered()) {
+      expect(typeof t.annotations.readOnlyHint, t.name).toBe('boolean');
+      if (t.annotations.readOnlyHint === false) expect(typeof t.annotations.destructiveHint, t.name).toBe('boolean');
+    }
+  });
+
+  it('registers only read tools in APPLE_WRITE_MODE=none', () => {
+    const tools = registered({ APPLE_WRITE_MODE: 'none' });
+    expect(tools.length).toBeGreaterThan(0);
+    expect(tools.filter((t) => t.annotations.readOnlyHint !== true).map((t) => t.name)).toEqual([]);
+  });
+
+  it('never registers a send or remove tool in APPLE_WRITE_MODE=additive', () => {
+    const tools = registered({ APPLE_WRITE_MODE: 'additive' });
+    expect(tools.filter((t) => t.annotations.destructiveHint === true).map((t) => t.name)).toEqual([]);
+  });
+
+  it('APPLE_SERVICES narrows registration to the named services (plus the healthcheck)', () => {
+    const names = registered({ APPLE_SERVICES: 'weather' }).map((t) => t.name);
+    expect(names.every((n) => n === 'apple_healthcheck' || n.startsWith('apple_weather_'))).toBe(true);
+    expect(names).toContain('apple_weather_get');
+  });
+
+  it('wires a health probe for every service', () => {
+    expect(HEALTH_PROBES.map((p) => p.service).sort()).toEqual([...SERVICES].sort());
   });
 });

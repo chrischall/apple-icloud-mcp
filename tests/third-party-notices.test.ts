@@ -1,0 +1,111 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+// The .mcpb ships dist/bundle.js with every runtime dependency inlined and no
+// node_modules, so THIRD_PARTY_NOTICES.md is the only place their license and
+// notice texts travel. It is generated (`npm run notices`, and as the first
+// step of every `npm run bundle`/`build`, so what CI tests and the publish job
+// ships always matches the installed lockfile); these tests pin that it does.
+
+const ROOT = join(import.meta.dirname, '..');
+const NOTICES = readFileSync(join(ROOT, 'THIRD_PARTY_NOTICES.md'), 'utf8');
+
+interface LockEntry {
+  name?: string;
+  version: string;
+  license?: string;
+  dev?: boolean;
+  devOptional?: boolean;
+  optional?: boolean;
+  link?: boolean;
+}
+
+/**
+ * Every production package in package-lock.json, derived here independently
+ * of the generator: everything the lockfile does not mark `dev` or
+ * `devOptional` (a dev tool that is only an OPTIONAL peer of a runtime
+ * package, never installed for a user).
+ */
+function productionPackages(): Array<{ name: string; version: string; license: string | undefined; optional: boolean }> {
+  const lock = JSON.parse(readFileSync(join(ROOT, 'package-lock.json'), 'utf8')) as { packages: Record<string, LockEntry> };
+  return Object.entries(lock.packages)
+    .filter(([path, e]) => path !== '' && !e.dev && !e.devOptional && !e.link)
+    .map(([path, e]) => ({
+      name: e.name ?? path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length),
+      version: e.version,
+      license: e.license,
+      optional: e.optional === true,
+    }));
+}
+
+/** The body of the `### name@version` section. */
+function section(name: string, version: string): string {
+  const start = NOTICES.indexOf(`\n### ${name}@${version}\n`);
+  if (start < 0) return '';
+  const next = NOTICES.indexOf('\n### ', start + 1);
+  return NOTICES.slice(start, next < 0 ? undefined : next);
+}
+
+describe('THIRD_PARTY_NOTICES.md', () => {
+  const prod = productionPackages();
+
+  it('covers the runtime dependencies the bundle is known to inline', () => {
+    const names = new Set(prod.map((p) => p.name));
+    for (const n of ['ical.js', 'timezones-ical-library', 'imapflow', 'nodemailer', 'pino', 'zod', '@zone-eu/mailsplit', 'socks']) {
+      expect(names.has(n), n).toBe(true);
+    }
+    expect(names.has('vitest')).toBe(false); // dev-only (devOptional) tools are not listed
+  });
+
+  it('lists EVERY production package in package-lock.json, with its version, license and full license text', () => {
+    const missing = prod.filter((p) => section(p.name, p.version) === '').map((p) => `${p.name}@${p.version}`);
+    expect(missing, 'run `npm run notices` after changing dependencies').toEqual([]);
+    for (const p of prod) {
+      const body = section(p.name, p.version);
+      if (p.license) expect(body, `${p.name} license`).toContain(`- License: ${p.license}\n`);
+      expect(NOTICES, `${p.name} table row`).toContain(`| ${p.name} | ${p.version} |`);
+      // A license file's text in a fenced block, or an explicit note that the package ships none — or,
+      // for a package the lockfile marks OPTIONAL only, the generator's note that it was not installed.
+      // The same lockfile installs differently by npm version: npm 11 (CI's Node 26) skips an optional
+      // PEER dependency such as @fetchproxy/* (optional peers of mcp-utils) that npm 10 installs. A
+      // required package that is not installed makes the generator throw, so it never reaches here.
+      const text =
+        /```+text\n[\s\S]*?\S[\s\S]*?\n```+/.test(body) ||
+        body.includes('ships no license file') ||
+        (p.optional && body.includes('_An optional dependency that was not installed where this file was generated'));
+      expect(text, `${p.name} text`).toBe(true);
+    }
+  });
+
+  it('lists nothing that is no longer a production dependency', () => {
+    const wanted = new Set(prod.map((p) => `${p.name}@${p.version}`));
+    const listed = [...NOTICES.matchAll(/^### (.+)$/gm)].map((m) => m[1]!);
+    expect(listed.filter((l) => !wanted.has(l))).toEqual([]);
+    expect(listed).toHaveLength(prod.length);
+    expect(NOTICES).toContain(`\n${prod.length} packages.\n`);
+  });
+
+  it('states where the MPL-2.0 ical.js source is available, for the version actually locked', () => {
+    const ical = prod.find((p) => p.name === 'ical.js')!;
+    expect(NOTICES).toContain('## ical.js (MPL-2.0): source code');
+    expect(NOTICES).toContain(`contains ical.js ${ical.version}, unmodified, under the Mozilla Public License 2.0`);
+    expect(NOTICES).toContain(`https://www.npmjs.com/package/ical.js/v/${ical.version}`);
+    expect(section('ical.js', ical.version)).toContain('Mozilla Public License Version 2.0');
+  });
+
+  it('is exactly what the generator produces from the installed tree (no hand edits, no stale texts)', async () => {
+    const { renderNotices } = (await import('../scripts/third-party-notices.mjs')) as { renderNotices: (root: string) => string };
+    expect(renderNotices(ROOT) === NOTICES, 'THIRD_PARTY_NOTICES.md is stale: run `npm run notices` (or `npm run build`) and commit it').toBe(true);
+  });
+
+  it('is shipped: in package.json files, generated by `npm run notices` AND before every bundle', () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { files: string[]; scripts: Record<string, string> };
+    expect(pkg.files).toContain('THIRD_PARTY_NOTICES.md');
+    expect(pkg.scripts.notices).toBe('node scripts/third-party-notices.mjs');
+    // In the script body, not a `prebundle` hook: npm skips pre/post hooks under ignore-scripts.
+    // A Dependabot bump never runs `npm run notices`; CI and the publish job do run the build.
+    expect(pkg.scripts.bundle).toMatch(/^node scripts\/third-party-notices\.mjs && esbuild /);
+    expect(pkg.scripts.build).toContain('npm run bundle');
+  });
+});

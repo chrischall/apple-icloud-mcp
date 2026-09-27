@@ -1,389 +1,241 @@
-import { expandPath as expandPathUtil, minifiedResult, rawTextResult, type textResult } from '@chrischall/mcp-utils';
+import { minifiedResult } from '@chrischall/mcp-utils';
+import type {
+  CallToolResult,
+  InputRequiredResult,
+  McpServer,
+  ServerContext,
+  ToolAnnotations,
+} from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import type { MessageRow, Recipient } from '../cache/store.js';
-import type { OFWClient } from '../client.js';
-import { parseLenient } from '@chrischall/mcp-utils';
-import { normalizeTimestampsInValue } from '../timestamps.js';
-
-// JSON tool result, with NO formatting whitespace. Thin wrapper over
-// @chrischall/mcp-utils' `minifiedResult`, with one addition: every timestamp
-// in the payload is rewritten to ISO-8601 with an explicit offset and paired
-// with a `<field>Display` sibling in the operator's zone.
-//
-// This is the single seam every structured tool response passes through, which
-// is the point — normalizing here rather than at each call site is what makes
-// it impossible for a tool to reintroduce the naive-local values that had
-// `sentAt` and `fetchedBodyAt` silently disagreeing by the UTC offset.
-//
-// Minified rather than `JSON.stringify(data, null, 2)`: indentation was 23% of
-// a 135 KB message page — about 8,000 tokens a call — and nothing downstream
-// reads it. This server has no `raw` rung (see tools/project.ts), so every
-// response is `compact` or `full` and every response is minified.
-//
-// Whitespace INSIDE a value is untouched. A message body's blank lines are
-// content, and `JSON.stringify` never touches them; the rule is pinned by
-// tests here and in mcp-utils, so do not replace this with a text-level
-// minifier.
-export function jsonResponse(data: unknown): ReturnType<typeof textResult> {
-  return minifiedResult(normalizeTimestampsInValue(data));
-}
-
-// Raw-string tool result. Wrapper over @chrischall/mcp-utils' `rawTextResult`.
-export const textResponse = rawTextResult;
-
-// A STRUCTURED failure: the machine-readable payload of `jsonResponse` plus
-// `isError`, so a refusal can carry recovery data (e.g. the server draft body
-// we declined to overwrite) without being mistaken for a successful write.
-// mcp-utils' `errorResult` only carries a string.
-export function jsonErrorResponse(data: unknown): ReturnType<typeof textResult> {
-  // Routed through jsonResponse, not textResult: a refusal payload carries the
-  // same freshness block as the success path, and emitting it unnormalized made
-  // an UNVERIFIED_EMPTY response report `asOf` in UTC while every successful
-  // response reported it with an offset.
-  return { ...jsonResponse(data), isError: true };
-}
-
-// OFW API shape for `recipients[]` on message/draft list and detail
-// responses. Used wherever we validate the response of a `/pub/v3/messages*`
-// call. Loose: unknown keys pass through (and survive into cached listData).
-export const ApiRecipientSchema = z.looseObject({
-  // Live OFW payloads key the recipient's id as `userId` (verified against a
-  // real /pub/v3/messages record: `recipients[].user.userId === 3039201`). An
-  // earlier guess read `id`, which is absent — so every normalized recipient
-  // came out with `userId: 0`, breaking any "find my own recipient" match. Both
-  // are accepted (userId first, id fallback) so a backend that ever returns `id`
-  // still resolves.
-  user: z.looseObject({
-    userId: z.number().optional(),
-    id: z.number().optional(),
-    name: z.string().optional(),
-  }).optional(),
-  viewed: z.looseObject({ dateTime: z.string() }).nullable().optional(),
-});
-export type ApiRecipient = z.infer<typeof ApiRecipientSchema>;
-
-// Translates OFW API recipient shape into the cache's normalized Recipient.
-// Used wherever we surface or persist recipients (sync, get_message, send,
-// save_draft).
-//
-// `viewedAt` is the recipient's true "First Viewed" time, or null if not yet
-// viewed. Only the DETAIL endpoint (/pub/v3/messages/{id}) carries a real
-// timestamp; the LIST endpoint returns an epoch-zero PLACEHOLDER
-// ("1970-01-01T00:00:00") in the SAME field even for read messages (on the
-// list, read status lives in `showNeverViewed`, not the timestamp). So treat
-// the epoch placeholder as "no real view time" — otherwise a list-sourced row
-// reports a bogus 1970 read time. A detail re-fetch is what fills in the truth.
-export function mapRecipients(items: ApiRecipient[] | undefined | null): Recipient[] {
-  return (items ?? []).map((r) => {
-    const dt = r.viewed?.dateTime;
-    const viewedAt = typeof dt === 'string' && !dt.startsWith('1970-01-01') ? dt : null;
-    return { userId: r.user?.userId ?? r.user?.id ?? 0, name: r.user?.name ?? '', viewedAt };
-  });
-}
-
-// True if any recipient has a *real* "First Viewed" time — i.e. present and
-// not the epoch-zero placeholder. After mapRecipients a fresh `viewedAt` is
-// only ever a real timestamp or null, but a cache row written by older code
-// (which trusted the list endpoint's `viewed`) may still hold the literal
-// "1970-01-01T00:00:00". Treating that as "not viewed" lets sync/get_message
-// re-fetch detail and self-heal the stale row to the real timestamp.
-export function hasRealView(recipients: { viewedAt: string | null }[]): boolean {
-  return recipients.some((r) => r.viewedAt !== null && !r.viewedAt.startsWith('1970-01-01'));
-}
+import { accessAllowed, isServiceEnabled, type ServiceName, type ToolAccess } from '../config.js';
+import { AppleToolError, ConfigError, CredentialsRejectedError, UpstreamError, errorMessage, scrub } from '../errors.js';
 
 /**
- * The threading echo OFW puts on a message/draft detail payload. OFW is
- * inconsistent about WHERE it reports the reply target: some payloads carry a
- * top-level `replyToId`, others report the same link as `inReplyTo` (with
- * `showContext: true`) while `replyToId` is null/absent — observed live on
- * nearly every threaded draft save. Reading only `replyToId` manufactured a
- * false "OurFamilyWizard did not thread this draft" warning on drafts that WERE
- * threaded, which trains callers to skim past warnings. Every reader of a
- * detail/list payload's threading must go through {@link threadedReplyTo} so
- * the derived value (and the revision hashed from it) is the same everywhere.
- */
-export interface ThreadingEcho {
-  replyToId?: number | null;
-  inReplyTo?: number | null;
-  showContext?: boolean;
-}
-
-/** The reply target OFW actually reports, whichever field it chose to put it in. */
-export function threadedReplyTo(detail: ThreadingEcho): number | null {
-  return detail.replyToId ?? detail.inReplyTo ?? null;
-}
-
-/** True when the payload positively reports the message as threaded. */
-export function reportsThreaded(detail: ThreadingEcho): boolean {
-  return threadedReplyTo(detail) !== null || detail.showContext === true;
-}
-
-/**
- * True when the payload POSITIVELY reports the message as unthreaded — the
- * evidence bar a "reply linkage was dropped" warning must clear.
+ * The seam every tool in this server is registered through.
  *
- * Only `inReplyTo` and `showContext` count as evidence, because those are the
- * fields OFW actually signals threading with. A present-but-null `replyToId`
- * is NOT evidence: OFW routinely emits `replyToId: null` on items that ARE
- * threaded (their linkage lives in `inReplyTo`), so treating it as a
- * disconfirmation manufactures a false UNTHREADED warning on exactly OFW's
- * normal shape. Total absence of all three fields is "not echoed", never
- * "dropped".
- */
-export function reportsUnthreaded(detail: ThreadingEcho): boolean {
-  if (reportsThreaded(detail)) return false;
-  return detail.inReplyTo !== undefined || detail.showContext !== undefined;
-}
-
-// Just the read-relevant slice of a MessageRow — so deriveRead/withReadState can
-// be unit-tested and called without constructing a whole row.
-type ReadStateInput = Pick<MessageRow, 'folder' | 'recipients' | 'fetchedBodyAt' | 'listData'>;
-
-// True when the once-scraped list flags themselves say the message is read.
-// `showNeverViewed === false` is OFW's reliable "has been viewed" signal (per
-// CLAUDE.md); `read === true` is the inbox list's own flag. Both are only ever
-// captured at first sight, so they can go stale — they raise `read` but never
-// lower it (see deriveRead).
-function scrapeSaysRead(listData: unknown): boolean {
-  if (typeof listData !== 'object' || listData === null) return false;
-  const ld = listData as { read?: unknown; showNeverViewed?: unknown };
-  return ld.read === true || ld.showNeverViewed === false;
-}
-
-/**
- * Derive a message's authoritative read state from the cached record itself,
- * rather than trusting the `read`/`showNeverViewed` flags scraped once from the
- * list endpoint. Those flags are frozen at first sight and drift the moment a
- * message is read after caching — most often when a body fetch
- * (`ofw_get_message`) marks an inbox message read on OFW as a side effect,
- * populating `fetchedBodyAt` and the recipient's `viewedAt` but leaving the
- * stale `read: false` behind.
+ * `defineTool` decides — at REGISTRATION — whether a tool exists at all: its
+ * service must be enabled (`APPLE_SERVICES`) and its access level allowed by
+ * `APPLE_WRITE_MODE`. A write the mode forbids is not refused; it is absent,
+ * so nothing (a prompt injection included) can call it.
  *
- * The derivation is monotonic — every input can only turn read ON — so a later
- * resync (which re-scrapes the list flags) can never flip a read message back
- * to unread:
- *
- *  - INBOX: the account holder is the recipient, so ANY recipient's `viewedAt`
- *    counts. OFW co-parent threads are 1:1 — the sole inbox recipient is us —
- *    so this is exact, not an approximation. Fetching the body marks the message
- *    read on OFW, so a non-null `fetchedBodyAt` is also read=true. The stale
- *    scrape flag is only a last-resort fallback.
- *  - SENT: "read" means a *recipient* has opened it — tracked via their
- *    `viewedAt` (the detail endpoint's real timestamp) — never our own body
- *    fetch, which is always set for sent messages.
- *
- * This deliberately does NOT discriminate by the account holder's own userId.
- * An earlier `selfUserId` parameter did, but nothing ever passed it, so the
- * branch was dead in production. Reviving it is not as simple as threading the
- * argument through, for two reasons:
- *   1. No non-mutating endpoint exposes our numeric id. /pub/v2/profiles returns
- *      name/address/contact and no id at all; /pub/v1/users/useraccountstatus
- *      updates last-seen status as a side effect, and view timestamps are
- *      evidentiary in custody matters — not something to touch for a read flag.
- *   2. Rows cached before the `user.userId` parse fix (see ApiRecipientSchema)
- *      normalized every recipient to `userId: 0`, so an id match would silently
- *      fail on historical data until a full re-sync.
- * If OFW ever adds third-party recipients (lawyer, parenting coordinator), both
- * problems need solving together — a bare parameter would regress to dead code.
+ * It also wraps every handler so that a thrown error becomes a STRUCTURED
+ * error result (`{error:{code,message,hint,…}}`, `isError: true`), scrubbed of
+ * every credential this process has used. An error must never render as an
+ * empty result, and it must never carry a token.
  */
-export function deriveRead(row: ReadStateInput): boolean {
-  const viewedByAnyone = row.recipients.some((r) => r.viewedAt !== null);
-  if (row.folder === 'inbox') {
-    return viewedByAnyone || row.fetchedBodyAt !== null || scrapeSaysRead(row.listData);
-  }
-  return viewedByAnyone || scrapeSaysRead(row.listData);
+
+export type ToolResult = CallToolResult | InputRequiredResult;
+
+export interface ToolDefinition<S extends z.ZodType<Record<string, unknown>>> {
+  name: string;
+  /** Which service's switch governs this tool; `core` tools are always registered. */
+  service: ServiceName | 'core';
+  access: ToolAccess;
+  title?: string;
+  description: string;
+  /** Always a `z.strictObject(...)`: an unknown argument is an error, never silently dropped. */
+  inputSchema: S;
+  annotations: ToolAnnotations;
+  handler: (args: z.infer<S>, ctx: ServerContext) => Promise<ToolResult>;
 }
 
-/**
- * Return the row augmented with an authoritative top-level `read` boolean and a
- * `listData` whose `read`/`showNeverViewed` flags are forced to agree with it —
- * so a single response can never contradict itself (the reported bug: a record
- * carrying `listData.read: false` alongside a populated recipient `viewedAt`).
- * A non-object `listData` (null / legacy string) is passed through untouched.
- */
-export function withReadState<T extends MessageRow>(row: T): T & { read: boolean } {
-  const read = deriveRead(row);
-  const listData = (typeof row.listData === 'object' && row.listData !== null)
-    ? { ...(row.listData as Record<string, unknown>), read, showNeverViewed: !read }
-    : row.listData;
-  return { ...row, read, listData };
-}
-
-// Expand a user-provided path: ~ → home, relative → absolute. Re-exports
-// @chrischall/mcp-utils' `expandPath`.
-export const expandPath = expandPathUtil;
-
-/**
- * Best-effort check that OFW actually persisted what we posted. OFW's
- * draft-update path is known to silently no-op while echoing success in the
- * POST response, so callers re-GET the detail and compare it to what was
- * sent. Containment (not equality) because OFW legitimately transforms
- * content — replies get the original message appended to the body
- * (includeOriginal) and may get a subject prefix. Returns a WARNING string
- * when the persisted content can't be confirmed to contain what was sent,
- * else null.
- */
-export function verifyWriteLanded(
-  kind: 'message' | 'draft',
-  sent: { subject: string; body: string },
-  persisted: { subject?: string; body?: string },
-): string | null {
-  const mismatches: string[] = [];
-  if (typeof persisted.subject !== 'string' || !persisted.subject.includes(sent.subject)) {
-    mismatches.push('subject');
-  }
-  if (typeof persisted.body !== 'string' || !persisted.body.includes(sent.body)) {
-    mismatches.push('body');
-  }
-  if (mismatches.length === 0) return null;
-  return `WARNING: the ${kind} re-fetched from OFW does not contain the ${mismatches.join(' and ')} that was posted — OFW may have silently dropped or altered the write. Verify the ${kind} on ourfamilywizard.com before relying on it.`;
-}
-
-// POST /pub/v3/messages response: minimal, `{entityId: <id>}` or legacy
-// `{id: <id>}`, sometimes an empty body (→ null). Validated STRICT: a
-// mistyped id (e.g. entityId as a string) must throw rather than silently
-// degrade into the "unconfirmed send" path when the write actually landed.
-// Absence of both ids stays legal — callers handle it with a WARNING.
-const PostMessagesResponseSchema = z.looseObject({
-  id: z.number().optional(),
-  entityId: z.number().optional(),
-}).nullable();
-
-/**
- * POST a payload to /pub/v3/messages, then immediately GET the detail
- * endpoint for the resulting message id. This is the only correct way to
- * populate the cache after `ofw_send_message` or `ofw_save_draft`:
- *
- *  - OFW's POST response is minimal (typically just `{entityId: <id>}`
- *    or sometimes legacy `{id: <id>}`), so we can't build a full row
- *    from it directly.
- *  - Worse, on draft updates OFW returns the same success shape even
- *    when the server silently no-ops, so the GET is also how we verify
- *    the write landed (callers compare detail.body to args.body).
- *
- * Both responses are validated STRICT against `detailSchema` / the POST
- * schema (this is the write-verification boundary — issue #83); `ctx`
- * names the calling tool in the error message.
- *
- * Returns a discriminated union so callers can narrow with
- * `if (result.id !== null)`. When id is null (no id field in the
- * response — never observed in production, but defensive), `raw`
- * carries the POST response so the caller can still surface it.
- *
- * The generic is parametrized on the schema's OUTPUT type `T`
- * (`detailSchema: z.ZodType<T>`, `detail: T`) rather than on the schema
- * type itself. This mirrors `parseLenient`'s own signature
- * (`<T>(schema: ZodType<T>, …): T`) exactly, so `T` is inferred straight
- * from the schema and flows into the return type with no `as` cast — the
- * compiler verifies that `detail` matches `detailSchema`'s output. (A
- * `<S extends z.ZodType>` constraint would widen the output to `unknown`
- * and force a cast at this call site.)
- */
-/**
- * A message write whose outcome is UNKNOWN: the POST failed without a
- * definitive answer (timeout, dropped connection, 5xx), or OFW accepted it
- * (`postedId`) and the re-fetch that confirms it failed. Either way the write
- * may have landed, so a caller must not treat it as "nothing happened" — for
- * a send, retrying would put a duplicate on the court-visible record. The
- * message is the underlying error's, so callers that do not care see the same
- * text as before.
- */
-export class UnconfirmedWriteError extends Error {
-  constructor(readonly postedId: number | null, cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
-    this.name = 'UnconfirmedWriteError';
-  }
-}
-
-/**
- * True when a failed request is a DEFINITIVE rejection — OFW answered with a
- * 4xx (other than 408 Request Timeout) or a repeated 429 — so the write
- * certainly did not happen. Anything else (timeout, network error, 5xx,
- * cancellation) leaves the outcome unknown.
- */
-function isDefinitiveRejection(e: unknown): boolean {
-  if (!(e instanceof Error)) return false;
-  if (/^Rate limited by OFW API/.test(e.message)) return true;
-  const m = /OFW API error: (4\d\d)\b/.exec(e.message);
-  return m !== null && m[1] !== '408';
-}
-
-/**
- * Issue a write that lands on the shared, court-visible record (an expense,
- * a calendar change, a journal entry) and classify how it failed. A
- * definitive rejection (4xx, repeated 429) is rethrown as-is: nothing landed
- * and a retry is safe. Anything else — a timeout, a dropped connection, a
- * 5xx, a cancellation — is an UnconfirmedWriteError, because OFW may already
- * have accepted the write, and a model that reads a plain "request timed out"
- * retries it and puts a duplicate in front of the co-parent.
- */
-export async function requestWrite<T = unknown>(
-  client: OFWClient,
-  method: 'POST' | 'PUT' | 'DELETE',
-  path: string,
-  body?: unknown,
-): Promise<T> {
-  try {
-    return await client.request<T>(method, path, body);
-  } catch (e) {
-    throw isDefinitiveRejection(e) ? e : new UnconfirmedWriteError(null, e);
-  }
-}
-
-/**
- * The `<X>_UNCONFIRMED` result for a write whose outcome is unknown: an
- * error result (so it is not read as success) that says in words the write
- * may have landed and names how to check before any retry.
- */
-export function unconfirmedWriteResponse(
-  e: UnconfirmedWriteError,
-  opts: { result: string; what: string; checkWith: string },
-): ReturnType<typeof textResult> {
-  return jsonErrorResponse({
-    result: opts.result,
-    mayHaveLanded: true,
-    reason: `The request to ${opts.what} failed without a definitive answer from OFW: ${e.message}. It MAY HAVE BEEN APPLIED on OurFamilyWizard.`,
-    remedy: `Do NOT retry blindly — a second attempt can put a duplicate on the co-parent-visible record. First check with ${opts.checkWith} (or on ourfamilywizard.com), and retry only once you have confirmed it did not land.`,
-  });
-}
-
-export async function postMessageAndRefetch<T>(
-  client: OFWClient,
-  payload: unknown,
-  detailSchema: z.ZodType<T>,
-  ctx: string,
-): Promise<
-  | { id: number; detail: T; raw: unknown }
-  | { id: null; detail: null; raw: unknown }
-> {
-  let posted: unknown;
-  try {
-    posted = await client.request('POST', '/pub/v3/messages', payload);
-  } catch (e) {
-    throw isDefinitiveRejection(e) ? e : new UnconfirmedWriteError(null, e);
-  }
-  const raw = parseLenient(
-    PostMessagesResponseSchema,
-    posted,
-    { label: 'ofw-mcp', context: `POST /pub/v3/messages (${ctx})`, mode: 'strict' },
+/** Registers `def` if its service is enabled and its access is allowed. Returns whether it registered. */
+export function defineTool<S extends z.ZodType<Record<string, unknown>>>(server: McpServer, def: ToolDefinition<S>): boolean {
+  if (def.service !== 'core' && !isServiceEnabled(def.service)) return false;
+  if (!accessAllowed(def.access)) return false;
+  server.registerTool(
+    def.name,
+    {
+      ...(def.title !== undefined ? { title: def.title } : {}),
+      description: def.description,
+      inputSchema: def.inputSchema,
+      annotations: def.annotations,
+    },
+    (async (args: z.infer<S>, ctx: ServerContext) => {
+      try {
+        return await def.handler(args, ctx);
+      } catch (err) {
+        return toolErrorResult(err);
+      }
+    }) as never,
   );
-  const id =
-    typeof raw?.id === 'number' ? raw.id
-    : typeof raw?.entityId === 'number' ? raw.entityId
-    : null;
-  if (id === null) return { id: null, detail: null, raw };
-  let fetched: unknown;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Results
+// ---------------------------------------------------------------------------
+
+/** A successful JSON result, minified (indentation is ~20% of a large payload and nothing reads it). */
+export function jsonResponse(data: unknown): CallToolResult {
+  return minifiedResult(data);
+}
+
+/**
+ * A structured failure: the JSON payload plus `isError`, for refusals that
+ * carry recovery data. Scrubbed of every credential this process has used.
+ *
+ * Scrubbing happens on the VALUES first, then on the serialized text only if
+ * the result is still JSON. Some redaction shapes run to the next `;`, `,` or
+ * whitespace (a `Cookie:` value, for one), and minified JSON has none of those
+ * before its closing `"}}` — a text-only scrub could eat the braces and hand
+ * the client an error it cannot parse. The text pass still runs because some
+ * shapes (a `"token":"…"` pair) are only visible with their key.
+ */
+export function jsonErrorResponse(data: unknown): CallToolResult {
+  // minifiedResult yields exactly one text block (JSON.stringify of `data`).
+  const [block] = minifiedResult(scrubDeep(data)).content as [{ type: 'text'; text: string }];
+  const scrubbed = scrub(block.text);
+  return { content: [{ type: 'text', text: isJson(scrubbed) ? scrubbed : block.text }], isError: true };
+}
+
+function isJson(text: string): boolean {
   try {
-    fetched = await client.request('GET', `/pub/v3/messages/${id}`);
-  } catch (e) {
-    // OFW already accepted the write (it returned an id); only the
-    // confirmation failed.
-    throw new UnconfirmedWriteError(id, e);
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
   }
-  const detail = parseLenient(
-    detailSchema,
-    fetched,
-    { label: 'ofw-mcp', context: `GET /pub/v3/messages/{id} (${ctx})`, mode: 'strict' },
-  );
-  return { id, detail, raw };
+}
+
+/** A copy of `value` with every string (at any depth) scrubbed; other values unchanged. */
+function scrubDeep(value: unknown): unknown {
+  if (typeof value === 'string') return scrub(value);
+  if (Array.isArray(value)) return value.map(scrubDeep);
+  const proto = value !== null && typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
+  if (proto === Object.prototype || proto === null) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = scrubDeep(v);
+    return out;
+  }
+  return value;
+}
+
+/** Convert any thrown value to a structured, scrubbed error result. */
+export function toolErrorResult(err: unknown): CallToolResult {
+  const error: Record<string, unknown> = {};
+  if (err instanceof AppleToolError) {
+    error.code = err.code;
+    error.message = errorMessage(err);
+    if (err.hint) error.hint = scrub(err.hint);
+    if (err instanceof ConfigError) {
+      error.service = err.service;
+      error.missing = err.missing;
+    } else if (err instanceof CredentialsRejectedError || err instanceof UpstreamError) {
+      error.service = err.service;
+      error.status = err.status;
+      if (err instanceof UpstreamError && err.upstreamCode !== undefined) error.upstreamCode = err.upstreamCode;
+    } else if ('service' in err && typeof (err as { service?: unknown }).service === 'string') {
+      error.service = (err as { service: string }).service;
+    }
+  } else {
+    error.code = 'INTERNAL_ERROR';
+    error.message = errorMessage(err);
+    const hint = (err as { hint?: unknown } | null)?.hint;
+    if (typeof hint === 'string') error.hint = scrub(hint);
+  }
+  return jsonErrorResponse({ error });
+}
+
+// ---------------------------------------------------------------------------
+// Annotations
+// ---------------------------------------------------------------------------
+
+/**
+ * Annotation presets. Every tool reaches a live Apple API, so `openWorldHint`
+ * is always true. An unannotated tool is published as destructive by default,
+ * so every tool sets these explicitly.
+ */
+export const ANNOTATIONS = {
+  /** Reads nothing but reads. */
+  read: { readOnlyHint: true, openWorldHint: true },
+  /** Adds something new; existing data untouched. Repeating it adds again. */
+  additive: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  /** Sets a reversible flag or relationship (rate, favorite, move); repeating is a no-op. */
+  toggle: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  /** Overwrites fields of an existing item in place. */
+  update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  /** Removes something. */
+  remove: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  /** Sends something to another person; cannot be recalled. */
+  send: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+} as const satisfies Record<string, ToolAnnotations>;
+
+// ---------------------------------------------------------------------------
+// Paging
+// ---------------------------------------------------------------------------
+
+export const offsetParam = z
+  .number()
+  .int()
+  .min(0)
+  .optional()
+  .describe('Zero-based index of the first item to return (default 0). Use the nextOffset from the previous page.');
+
+/** A `limit` parameter with a documented default and hard maximum. Below 1 is refused, never clamped. */
+export function limitParam(defaultLimit: number, max: number): z.ZodOptional<z.ZodNumber> {
+  return z
+    .number()
+    .int()
+    .min(1)
+    .max(max)
+    .optional()
+    .describe(`Maximum items to return (default ${defaultLimit}, max ${max}).`);
+}
+
+export interface PageInfo {
+  /** How many items this response holds. */
+  returned: number;
+  /** Total matching items, when known. */
+  total?: number;
+  offset: number;
+  limit: number;
+  /** The offset to pass for the next page, or null when this is the last page. */
+  nextOffset: number | null;
+  hasMore: boolean;
+}
+
+/**
+ * Paging facts for a slice. When `total` is known it decides `hasMore`;
+ * otherwise `hasMore` must be supplied (e.g. from an upstream `next` link) —
+ * a full page with no total is NOT assumed to be the last.
+ *
+ * `nextOffset` always moves forward. An upstream that claims more items but
+ * returned none on this page would otherwise yield `nextOffset === offset`,
+ * and a caller following it would fetch the same empty page forever; such a
+ * page advances by `limit` (the window it covered) instead.
+ */
+export function pageInfo(o: { offset: number; limit: number; returned: number; total?: number; hasMore?: boolean }): PageInfo {
+  const step = o.returned > 0 ? o.returned : o.limit;
+  const hasMore = o.total !== undefined ? o.offset + step < o.total : (o.hasMore ?? false);
+  return {
+    returned: o.returned,
+    ...(o.total !== undefined ? { total: o.total } : {}),
+    offset: o.offset,
+    limit: o.limit,
+    nextOffset: hasMore ? o.offset + step : null,
+    hasMore,
+  };
+}
+
+/**
+ * Assemble a list response with the paging facts FIRST and the data array
+ * LAST. Key order is what `JSON.stringify` emits, and a reader that sees only
+ * the head of a large response (a truncated preview, a script that pulls one
+ * key) must reach "this is a slice" before the first record.
+ */
+export function pagedResponse(
+  page: PageInfo,
+  key: string,
+  items: unknown[],
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { ...page, ...extra, [key]: items };
+}
+
+/** Drop `undefined` members so optional fields are ABSENT rather than null (an absent field is not a claim). */
+export function compactObject<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) if (v !== undefined) out[k] = v;
+  return out as Partial<T>;
 }

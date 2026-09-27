@@ -1,10 +1,10 @@
 {
   "$schema": "https://raw.githubusercontent.com/anthropics/dxt/main/dist/mcpb-manifest.schema.json",
   "manifest_version": "0.3",
-  "name": "ofw-mcp",
-  "display_name": "OurFamilyWizard",
-  "version": "2.19.4",
-  "description": "OurFamilyWizard co-parenting tools for Claude — messages, calendar, expenses, and journal",
+  "name": "aws-mcp",
+  "display_name": "Apple Web Services",
+  "version": "0.0.0",
+  "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search — through Apple's web services, so it runs anywhere",
   "author": {
     "name": "Chris Chall",
     "email": "chris.c.hall@gmail.com",
@@ -12,19 +12,22 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/chrischall/ofw-mcp"
+    "url": "https://github.com/chrischall/aws-mcp"
   },
-  "homepage": "https://github.com/chrischall/ofw-mcp",
-  "support": "https://github.com/chrischall/ofw-mcp/issues",
+  "homepage": "https://github.com/chrischall/aws-mcp",
+  "support": "https://github.com/chrischall/aws-mcp/issues",
   "license": "MIT",
   "keywords": [
-    "ofw",
-    "coparenting",
-    "ourFamilyWizard",
-    "family",
-    "messages",
+    "apple",
+    "apple-music",
+    "playlists",
+    "icloud",
     "calendar",
-    "expenses"
+    "contacts",
+    "mail",
+    "maps",
+    "weather",
+    "itunes"
   ],
   "server": {
     "type": "node",
@@ -35,189 +38,342 @@
         "${__dirname}/dist/bundle.js"
       ],
       "env": {
-        "OFW_USERNAME": "${user_config.ofw_username}",
-        "OFW_PASSWORD": "${user_config.ofw_password}",
-        "OFW_INLINE_ATTACHMENTS": "${user_config.ofw_inline_attachments}",
-        "OFW_ATTACHMENTS_DIR": "${user_config.ofw_attachments_dir}",
-        "OFW_UPLOAD_DIR": "${user_config.ofw_upload_dir}",
-        "OFW_WRITE_MODE": "${user_config.ofw_write_mode}",
-        "OFW_CALENDAR_WRITES": "${user_config.ofw_calendar_writes}",
-        "OFW_ALLOW_MARK_READ": "${user_config.ofw_allow_mark_read}",
-        "OFW_FETCH_UNREAD_BODIES": "${user_config.ofw_fetch_unread_bodies}"
+        "APPLE_TEAM_ID": "${user_config.apple_team_id}",
+        "APPLE_KEY_ID": "${user_config.apple_key_id}",
+        "APPLE_PRIVATE_KEY": "${user_config.apple_private_key}",
+        "APPLE_WEATHERKIT_SERVICE_ID": "${user_config.apple_weatherkit_service_id}",
+        "APPLE_MUSIC_USER_TOKEN": "${user_config.apple_music_user_token}",
+        "APPLE_MUSIC_WEB_USER_TOKEN": "${user_config.apple_music_web_user_token}",
+        "ICLOUD_USERNAME": "${user_config.icloud_username}",
+        "ICLOUD_APP_PASSWORD": "${user_config.icloud_app_password}",
+        "ICLOUD_MAIL_ADDRESS": "${user_config.icloud_mail_address}",
+        "APPLE_WRITE_MODE": "${user_config.apple_write_mode}",
+        "APPLE_SERVICES": "${user_config.apple_services}",
+        "DISPLAY_TZ": "${user_config.display_tz}"
       }
     }
   },
   "user_config": {
-    "ofw_username": {
+    "apple_team_id": {
       "type": "string",
-      "title": "OFW Email",
-      "description": "Your OurFamilyWizard login email address. Optional — if omitted, the server falls back to the fetchproxy browser extension (requires being signed in to ourfamilywizard.com in your browser).",
+      "title": "Apple Team ID",
+      "description": "Your Apple Developer Team ID (10 characters). Needed for Apple Music (official API), Apple Maps and WeatherKit.",
       "required": false
     },
-    "ofw_password": {
+    "apple_key_id": {
       "type": "string",
-      "title": "OFW Password",
-      "description": "Your OurFamilyWizard password. Optional — see ofw_username.",
+      "title": "Apple Key ID",
+      "description": "Key ID of a private key created in Certificates, Identifiers & Profiles → Keys with Media Services (MusicKit), MapKit JS and/or WeatherKit enabled.",
+      "required": false
+    },
+    "apple_private_key": {
+      "type": "string",
+      "title": "Apple private key (.p8 contents)",
+      "description": "Contents of that key's .p8 file (PEM; one-line values with \\n escapes and base64 are accepted).",
       "required": false,
       "sensitive": true
     },
-    "ofw_inline_attachments": {
-      "type": "boolean",
-      "title": "Return attachments inline",
-      "description": "When on, ofw_download_attachment returns bytes inline as MCP content (images render directly; other files come back as embedded resources) instead of writing to disk. Recommended for sandboxed hosts like Claude Desktop where the model cannot read files written to ~/Downloads. Callers can still override per-call via the tool's `inline` argument.",
+    "apple_weatherkit_service_id": {
+      "type": "string",
+      "title": "WeatherKit Services ID",
+      "description": "WeatherKit only: the Services ID registered for WeatherKit (e.g. com.example.weather).",
+      "required": false
+    },
+    "apple_music_user_token": {
+      "type": "string",
+      "title": "Apple Music user token",
+      "description": "Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx @chrischall/aws-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months.",
       "required": false,
-      "default": false
+      "sensitive": true
     },
-    "ofw_attachments_dir": {
-      "type": "directory",
-      "title": "Attachments download directory",
-      "description": "Directory where ofw_download_attachment writes files when not returning inline. Defaults to ~/Downloads/ofw-mcp/. Pick a directory that is readable by your MCP host. Downloads can only be written inside it.",
+    "apple_music_web_user_token": {
+      "type": "string",
+      "title": "Apple Music web session token (media-user-token cookie)",
+      "description": "Opt-in web-player mode (no developer account needed; unlocks rename/delete/remove/reorder): the media-user-token cookie from a signed-in music.apple.com tab.",
+      "required": false,
+      "sensitive": true
+    },
+    "icloud_username": {
+      "type": "string",
+      "title": "Apple ID email",
+      "description": "Your Apple ID email, for iCloud Calendar, Contacts and Mail.",
       "required": false
     },
-    "ofw_upload_dir": {
-      "type": "directory",
-      "title": "Upload source directory",
-      "description": "The only directory ofw_upload_attachment may upload files from (hidden files excluded). Defaults to the attachments download directory. Put files you want to send to OurFamilyWizard here.",
+    "icloud_app_password": {
+      "type": "string",
+      "title": "iCloud app-specific password",
+      "description": "An app-specific password from appleid.apple.com → Sign-In and Security → App-Specific Passwords (NOT your Apple ID password).",
+      "required": false,
+      "sensitive": true
+    },
+    "icloud_mail_address": {
+      "type": "string",
+      "title": "iCloud Mail address",
+      "description": "Your @icloud.com address, only if your Apple ID email is not an iCloud address (needed for Mail).",
       "required": false
     },
-    "ofw_write_mode": {
+    "apple_write_mode": {
       "type": "string",
       "title": "Write mode",
-      "description": "Structural write gate. \"none\" = no write tools registered (read/sync/search only); \"drafts\" = draft-level writes only (save/delete drafts, upload attachments — never send or calendar/expense/journal writes); \"all\" = everything (default). Unrecognized values fail closed to \"none\".",
+      "description": "\"none\" = read-only tools; \"additive\" = also create/append, never modify, delete or send; \"all\" = everything (default). Unrecognized values fail closed to \"none\".",
       "required": false,
       "default": "all"
     },
-    "ofw_calendar_writes": {
-      "type": "boolean",
-      "title": "Calendar writes in drafts mode",
-      "description": "When Write mode is \"drafts\", also register the calendar write tools (create/update/delete event). Calendar events have no draft stage but are reversible (editable/deletable), unlike a sent message. Redundant in \"all\"; never overrides \"none\".",
-      "required": false,
-      "default": false
+    "apple_services": {
+      "type": "string",
+      "title": "Enabled services",
+      "description": "Comma-separated services to enable (music, calendar, contacts, mail, maps, weather, itunes). Default: all.",
+      "required": false
     },
-    "ofw_allow_mark_read": {
-      "type": "boolean",
-      "title": "Allow marking messages read",
-      "description": "Reading a message body for the first time marks it READ on OurFamilyWizard and stamps a \"First Viewed\" time your co-parent can see - part of the record, and irreversible. Leave on for the long-standing behaviour; turn off to forbid it entirely (no per-call argument can override).",
-      "required": false,
-      "default": true
-    },
-    "ofw_fetch_unread_bodies": {
-      "type": "boolean",
-      "title": "Sync unread message bodies",
-      "description": "Whether a sync also downloads unread inbox bodies by default. Each one stamps a \"First Viewed\" time. Off by default; ignored when \"Allow marking messages read\" is off.",
-      "required": false,
-      "default": false
+    "display_tz": {
+      "type": "string",
+      "title": "Time zone",
+      "description": "IANA time zone (e.g. America/New_York) for displayed times and for dates you give without an offset. Set this on a hosted server, which runs in UTC.",
+      "required": false
     }
   },
   "tools": [
     {
-      "name": "ofw_get_profile",
-      "description": "Get current user and co-parent info"
+      "name": "apple_healthcheck",
+      "description": "Check which Apple services (Apple Music, iCloud Calendar, Contacts, Mail, Apple Maps, WeatherKit, iTunes) are configured and reachable."
     },
     {
-      "name": "ofw_get_notifications",
-      "description": "Get dashboard summary: unread messages, upcoming events, outstanding expenses"
+      "name": "apple_music_search_catalog",
+      "description": "Search Apple Music's catalog by text for songs, albums, artists, playlists, music videos or stations."
     },
     {
-      "name": "ofw_list_message_folders",
-      "description": "List message folders and unread counts"
+      "name": "apple_music_get_catalog_items",
+      "description": "Look up Apple Music catalog songs, albums, artists, playlists, music videos or stations by id — or songs/music videos by ISRC, albums by UPC."
     },
     {
-      "name": "ofw_list_messages",
-      "description": "List messages in a folder"
+      "name": "apple_music_get_charts",
+      "description": "Get Apple Music's top charts (most played songs, albums, playlists, music videos) for a storefront, optionally for one genre."
     },
     {
-      "name": "ofw_get_message",
-      "description": "Read a message by ID"
+      "name": "apple_music_list_playlists",
+      "description": "List the playlists in your Apple Music library (alphabetical), or the contents of one playlist folder (folders and playlists)."
     },
     {
-      "name": "ofw_send_message",
-      "description": "Send a message (confirmed first, with a preview of recipients, subject and body)"
+      "name": "apple_music_get_playlist",
+      "description": "Read one playlist — a library playlist (p.…) or a catalog playlist (pl.…) — with its tracks in order."
     },
     {
-      "name": "ofw_list_drafts",
-      "description": "List draft messages"
+      "name": "apple_music_list_folders",
+      "description": "List the playlist folders in your Apple Music library: the top level, or the sub-folders of one folder."
     },
     {
-      "name": "ofw_save_draft",
-      "description": "Create or update a draft"
+      "name": "apple_music_search_library",
+      "description": "Search YOUR Apple Music library (not the whole catalog) by text for songs, albums, artists, playlists or music videos."
     },
     {
-      "name": "ofw_delete_draft",
-      "description": "Delete a draft"
+      "name": "apple_music_list_library",
+      "description": "List what is in your Apple Music library: all songs, albums, artists or music videos (alphabetical, paged), or recently-added items."
     },
     {
-      "name": "ofw_get_unread_sent",
-      "description": "List sent messages the co-parent has not yet viewed"
+      "name": "apple_music_get_history",
+      "description": "Your recent Apple Music listening: recently-played (albums, playlists, stations), recently-played-tracks (songs), recent-stations, or heavy-rotation."
     },
     {
-      "name": "ofw_upload_attachment",
-      "description": "Upload a file from disk to use as an attachment on a message or draft (sharing it with the co-parent is confirmed first)"
+      "name": "apple_music_get_recommendations",
+      "description": "Your personal Apple Music recommendations (\"Made for You\", \"Recently Played\" and similar groups), each with its title and the albums, playlists or stations in it (catalog ids)."
     },
     {
-      "name": "ofw_download_attachment",
-      "description": "Download a message attachment by fileId — returns bytes inline or writes to disk"
+      "name": "apple_music_get_replay",
+      "description": "Apple Music Replay: your top songs, albums and artists for the latest Replay year, or for a given year (with play counts where Apple provides them)."
     },
     {
-      "name": "ofw_sync_messages",
-      "description": "Sync messages from OFW into local cache"
+      "name": "apple_music_get_ratings",
+      "description": "Whether you have loved or disliked songs, albums, playlists, music videos or stations — catalog or library ids — returning love, dislike or none per id."
     },
     {
-      "name": "ofw_list_events",
-      "description": "List calendar events in a date range"
+      "name": "apple_music_create_playlist",
+      "description": "Create a new playlist in your Apple Music library, optionally with tracks (up to 500 catalog or library song ids; added 100 at a time), a description, a folder and public visibility."
     },
     {
-      "name": "ofw_create_event",
-      "description": "Create a calendar event (a shared one is confirmed first)"
+      "name": "apple_music_add_playlist_tracks",
+      "description": "Append songs (up to 500 catalog or library ids) to the end of one of your library playlists."
     },
     {
-      "name": "ofw_update_event",
-      "description": "Update a calendar event (a shared one is confirmed first)"
+      "name": "apple_music_create_folder",
+      "description": "Create a playlist folder in your Apple Music library, at the top level or inside another folder."
     },
     {
-      "name": "ofw_delete_event",
-      "description": "Delete a calendar event (a shared one is confirmed first)"
+      "name": "apple_music_add_to_library",
+      "description": "Add catalog songs, albums, playlists or music videos to your Apple Music library by catalog id (up to 100 per type)."
     },
     {
-      "name": "ofw_get_expense_totals",
-      "description": "Get expense summary totals"
+      "name": "apple_music_add_favorites",
+      "description": "Mark catalog songs, albums, playlists, artists or music videos as favorites (the star in Apple Music; favorite songs go to your Favorite Songs playlist), by catalog id, up to 100 per type."
     },
     {
-      "name": "ofw_list_expenses",
-      "description": "List expenses"
+      "name": "apple_music_set_rating",
+      "description": "Set your rating on a song, album, playlist, music video or station (catalog or library id): love, dislike, or none to clear it."
     },
     {
-      "name": "ofw_create_expense",
-      "description": "Log a new expense (confirmed first, with a preview of amount and description)"
+      "name": "apple_music_update_playlist",
+      "description": "Rename one of your Apple Music library playlists, change its description, or make it public/private."
     },
     {
-      "name": "ofw_list_journal_entries",
-      "description": "List journal entries"
+      "name": "apple_music_remove_playlist_tracks",
+      "description": "Remove tracks from one of your library playlists by library track id and/or 1-based position (from apple_music_get_playlist)."
     },
     {
-      "name": "ofw_create_journal_entry",
-      "description": "Create a journal entry"
+      "name": "apple_music_reorder_playlist",
+      "description": "Reorder one of your library playlists: move tracks, sort (name, artist, album, release date, duration, date added), reverse, dedupe (keep the first copy of each song), or replace with a complete new order of its track ids (can drop tracks)."
     },
     {
-      "name": "ofw_healthcheck",
-      "description": "Report whether the OFW credential resolved and the API accepted it, and what to fix if not"
+      "name": "apple_music_move_playlist",
+      "description": "Move one of your library playlists into a playlist folder, or back to the top level (\"root\")."
     },
     {
-      "name": "ofw_check_freshness",
-      "description": "Cheaply re-verify message/draft ids against OFW — live lifecycle state and content-hash comparison, no bodies fetched"
+      "name": "apple_music_delete_playlist",
+      "description": "Delete one of your library playlists (songs stay in your library)."
     },
     {
-      "name": "ofw_status",
-      "description": "Server-verified draft inventory and live lifecycle state for given ids or draft keys, in one round trip"
+      "name": "apple_music_remove_from_library",
+      "description": "Remove songs, albums, music videos or playlists from your Apple Music library by LIBRARY id (i.…, l.…, p.… from apple_music_list_library / apple_music_search_library), up to 50 at a time; the preview names each item."
+    },
+    {
+      "name": "apple_music_remove_favorites",
+      "description": "Remove the favorite (star) from catalog songs, albums, playlists, artists or music videos, by catalog id, up to 100 per type."
+    },
+    {
+      "name": "apple_calendar_list_calendars",
+      "description": "List your iCloud calendars (event calendars only): id, name, color, whether you can add events to it, whether it is shared (shared: with you by someone else; sharedByYou: by you with others), and which one new events go into by default."
+    },
+    {
+      "name": "apple_calendar_list_events",
+      "description": "List iCloud Calendar events (appointments, meetings) in a date window, recurring events expanded into occurrences, sorted by start."
+    },
+    {
+      "name": "apple_calendar_search_events",
+      "description": "Search iCloud Calendar events by text (case-insensitive match in title, location or notes) within a date window: fromDate (default today; may be in the past) + toDate or daysAhead (default 30), max 366 days."
+    },
+    {
+      "name": "apple_calendar_get_event",
+      "description": "Get one iCloud Calendar event in full (notes untruncated, attendees, alerts, recurrence rule in plain English) by the id list/search returned."
+    },
+    {
+      "name": "apple_calendar_create_event",
+      "description": "Create an iCloud Calendar event: title, startDate/endDate (timed default 1 hour; all-day endDate = last day), location, notes, url, alarms, recurrence, attendees."
+    },
+    {
+      "name": "apple_calendar_update_event",
+      "description": "Change an iCloud Calendar event: title, startDate/endDate, isAllDay, location, notes, url (\"\" clears), alarms, attendees (full new list), calendar (moves it)."
+    },
+    {
+      "name": "apple_calendar_delete_event",
+      "description": "Delete an iCloud Calendar event. Recurring: span thisEvent (default; the one occurrence an \"#occ=\" id names), futureEvents (it and all later ones) or allEvents (the whole series)."
+    },
+    {
+      "name": "apple_calendar_find_free_time",
+      "description": "Find free time in your iCloud calendars: open slots per day within working hours (workdayStart/workdayEnd, default 09:00–17:00, weekdays only by default) at least minDurationMinutes long (default 30)."
+    },
+    {
+      "name": "apple_contacts_search",
+      "description": "Search the user's iCloud Contacts (address book) by name, nickname, company, job title, email, or phone number digits — optionally only within one contact group."
+    },
+    {
+      "name": "apple_contacts_get",
+      "description": "Get one iCloud contact in full by id (from apple_contacts_search): names, organization, job title, emails, phones, postal addresses and URLs — each with its label and an entryId that apple_contacts_update can target — birthday, note, the…"
+    },
+    {
+      "name": "apple_contacts_list_groups",
+      "description": "List the contact groups in iCloud Contacts (e.g. Family, Work): each group's id, name and member count."
+    },
+    {
+      "name": "apple_contacts_create",
+      "description": "Create a new contact in iCloud Contacts. Needs a givenName, familyName or organization; optional middleName, nickname, department, jobTitle, note, birthday (YYYY-MM-DD, or --MM-DD without a year), and lists of emails, phones, urls and po…"
+    },
+    {
+      "name": "apple_contacts_update",
+      "description": "Edit an existing iCloud contact in place. Scalar fields (givenName, familyName, middleName, nickname, organization, department, jobTitle, note, birthday) replace the current value; \"\" clears it."
+    },
+    {
+      "name": "apple_contacts_delete",
+      "description": "Permanently delete one contact from iCloud Contacts (on every device) by id."
+    },
+    {
+      "name": "apple_mail_list_mailboxes",
+      "description": "List the iCloud Mail mailboxes (folders): path, name, special use (inbox, sent, drafts, trash, junk, archive) and, by default, message and unread counts."
+    },
+    {
+      "name": "apple_mail_search",
+      "description": "Search emails in one iCloud Mail mailbox (default INBOX) by sender, recipient, subject, full text, received date range, unread and flagged state."
+    },
+    {
+      "name": "apple_mail_get_message",
+      "description": "Read one iCloud Mail message by uid (from apple_mail_search): headers (from, to, cc, reply-to, date, subject, message-id), the body as plain text (HTML converted to readable text when there is no text part), a truncated flag, and attachm…"
+    },
+    {
+      "name": "apple_mail_send",
+      "description": "Send a plain-text email from your iCloud Mail address (to/cc/bcc, subject, body; no attachments)."
+    },
+    {
+      "name": "apple_mail_update_flags",
+      "description": "Mark iCloud Mail messages read or unread, and flag or unflag them, by uid (1–100 uids from apple_mail_search, one mailbox)."
+    },
+    {
+      "name": "apple_mail_move",
+      "description": "Move iCloud Mail messages (1–100 uids from apple_mail_search, one mailbox) to another mailbox: a path from apple_mail_list_mailboxes or an alias (inbox, archive, trash, junk, sent, drafts)."
+    },
+    {
+      "name": "apple_maps_geocode",
+      "description": "Turn an address or place name into coordinates with Apple Maps (geocoding)."
+    },
+    {
+      "name": "apple_maps_reverse_geocode",
+      "description": "Find the street address at a latitude/longitude with Apple Maps (reverse geocoding) — e.g. \"where is 37.33,-122.01?\"."
+    },
+    {
+      "name": "apple_maps_search",
+      "description": "Search Apple Maps for places: businesses, points of interest, addresses, landmarks (e.g. \"coffee\", \"EV charger\", \"Golden Gate Bridge\")."
+    },
+    {
+      "name": "apple_maps_directions",
+      "description": "Driving, walking or cycling directions between two places with Apple Maps (addresses or \"lat,lng\")."
+    },
+    {
+      "name": "apple_maps_etas",
+      "description": "Travel time and distance from one point to up to 10 destinations at once with Apple Maps — driving with live traffic, transit, walking or cycling (e.g. \"which of these stores is closest by car?\")."
+    },
+    {
+      "name": "apple_maps_lookup_place",
+      "description": "Look up Apple Maps places by place id — the id field from apple_maps_search, apple_maps_geocode or apple_maps_reverse_geocode results — 1 to 50 at once."
+    },
+    {
+      "name": "apple_maps_snapshot_url",
+      "description": "Make a signed link to a static Apple Maps image (PNG): centred on an address or \"lat,lng\", and/or with pins (each with an optional label, colour and one-character glyph; the map fits the pins when no center is given)."
+    },
+    {
+      "name": "apple_weather_get",
+      "description": "Weather forecast for a place from Apple Weather (WeatherKit): current conditions, hourly (up to 240 h), daily (up to 10 days), next-hour rain, severe-weather alerts (need countryCode)."
+    },
+    {
+      "name": "apple_weather_get_alert",
+      "description": "Get one severe-weather alert's full official text from Apple Weather (WeatherKit), unmodified, by its id (the alerts[].id from apple_weather_get called with countryCode)."
+    },
+    {
+      "name": "apple_itunes_search",
+      "description": "Search Apple's iTunes Store catalog — songs, albums, artists, podcasts and podcast episodes, audiobooks, apps and ebooks — with no Apple account or key."
+    },
+    {
+      "name": "apple_itunes_lookup",
+      "description": "Look up iTunes Store items (no Apple account or key) by ids — 1–200 trackId/collectionId/artistId values, e.g. from apple_itunes_search or an Apple Music link — or by one UPC/EAN (album), ISBN (book) or bundleId (app)."
+    },
+    {
+      "name": "apple_charts_get",
+      "description": "Apple's current top charts (no Apple account or key): most-played songs, albums, music videos and playlists on Apple Music; top podcasts, trending podcast episodes and top subscriber channels; top free/paid apps and books; top audiobooks."
     }
   ],
   "compatibility": {
     "platforms": [
       "darwin",
-      "win32"
+      "win32",
+      "linux"
     ],
     "runtimes": {
-      "node": ">=22.5.0"
+      "node": ">=22.0.0"
     }
   }
 }

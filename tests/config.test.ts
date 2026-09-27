@@ -1,379 +1,225 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { DEFAULT_FRESHNESS_TTL_SECONDS, getAllowMarkRead, getAttachmentsDir, getCacheDbPath, getCalendarWritesAllowed, getDefaultInlineAttachments, getCacheDir, getFetchUnreadBodies, getFreshnessTtlSeconds, getSyncMaxRequests, getUploadDir, getWriteMode } from '../src/config.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  MAX_REQUEST_TIMEOUT_MS,
+  SERVICES,
+  WRITE_MODES,
+  accessAllowed,
+  canonicalTimeZone,
+  getDisplayTimeZone,
+  getEnabledServices,
+  getRequestTimeoutMs,
+  getWriteMode,
+  isDebugLog,
+  isServiceEnabled,
+  isValidTimeZone,
+  resetConfigWarnings,
+  systemTimeZone,
+} from '../src/config.js';
 
-describe('getCacheDbPath', () => {
-  let tmp: string;
-  let originalCacheDir: string | undefined;
-  let originalUsername: string | undefined;
-  let originalIdentity: string | undefined;
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'ofw-cache-'));
-    originalCacheDir = process.env.OFW_CACHE_DIR;
-    originalUsername = process.env.OFW_USERNAME;
-    originalIdentity = process.env.OFW_CACHE_IDENTITY;
-    process.env.OFW_CACHE_DIR = tmp;
-    process.env.OFW_USERNAME = 'test@example.com';
-    delete process.env.OFW_CACHE_IDENTITY;
+describe('getEnabledServices / isServiceEnabled', () => {
+  it('enables every service when APPLE_SERVICES is unset (or a placeholder)', () => {
+    expect([...getEnabledServices({}).enabled]).toEqual([...SERVICES]);
+    expect(getEnabledServices({}).unknown).toEqual([]);
+    expect([...getEnabledServices({ APPLE_SERVICES: '${APPLE_SERVICES}' }).enabled]).toEqual([...SERVICES]);
+    expect([...getEnabledServices({ APPLE_SERVICES: '  ' }).enabled]).toEqual([...SERVICES]);
   });
 
-  afterEach(() => {
-    if (originalCacheDir === undefined) delete process.env.OFW_CACHE_DIR;
-    else process.env.OFW_CACHE_DIR = originalCacheDir;
-    if (originalUsername === undefined) delete process.env.OFW_USERNAME;
-    else process.env.OFW_USERNAME = originalUsername;
-    if (originalIdentity === undefined) delete process.env.OFW_CACHE_IDENTITY;
-    else process.env.OFW_CACHE_IDENTITY = originalIdentity;
-    rmSync(tmp, { recursive: true, force: true });
+  it('parses comma/space separated names case-insensitively and reports unknown entries verbatim', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const r = getEnabledServices({ APPLE_SERVICES: ' Music, calendar  WEATHER,,Musik ' });
+    expect([...r.enabled].sort()).toEqual(['calendar', 'music', 'weather']);
+    expect(r.unknown).toEqual(['Musik']);
+    expect([...getEnabledServices({ APPLE_SERVICES: ',maps,' }).enabled]).toEqual(['maps']);
+    expect(err).toHaveBeenCalledTimes(1);
   });
 
-  it('returns a path inside OFW_CACHE_DIR with a 16-char hash filename', () => {
-    const path = getCacheDbPath();
-    expect(path.startsWith(tmp)).toBe(true);
-    const filename = path.slice(tmp.length + 1);
-    expect(filename).toMatch(/^[0-9a-f]{16}\.db$/);
+  it('warns once per value on stderr that a misspelled entry leaves the intended service UNREGISTERED', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const env = { APPLE_SERVICES: 'music,calender' };
+    expect([...getEnabledServices(env).enabled]).toEqual(['music']);
+    expect(isServiceEnabled('calendar', env)).toBe(false);
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(err.mock.calls[0]![0]).toBe(
+      '[aws-mcp] WARNING: APPLE_SERVICES names no such service: "calender" — ignored, so a misspelled service ' +
+        'registers NO tools. Registered services: music. Valid names: music, calendar, contacts, mail, maps, weather, itunes.',
+    );
+    // Every entry unknown: nothing but the healthcheck is registered, and it says so.
+    getEnabledServices({ APPLE_SERVICES: 'calender contcts' });
+    expect(err).toHaveBeenCalledTimes(2);
+    expect(String(err.mock.calls[1]![0])).toContain('"calender", "contcts"');
+    expect(String(err.mock.calls[1]![0])).toContain('Registered services: none.');
+    // A clean value never warns; a reset warns again.
+    getEnabledServices({ APPLE_SERVICES: 'music' });
+    expect(err).toHaveBeenCalledTimes(2);
+    resetConfigWarnings();
+    getEnabledServices(env);
+    expect(err).toHaveBeenCalledTimes(3);
   });
 
-  it('returns the same path for the same username', () => {
-    expect(getCacheDbPath()).toBe(getCacheDbPath());
+  it('reads process.env by default', () => {
+    process.env.APPLE_SERVICES = 'maps';
+    expect(isServiceEnabled('maps')).toBe(true);
+    expect(isServiceEnabled('music')).toBe(false);
+    expect([...getEnabledServices().enabled]).toEqual(['maps']);
   });
 
-  it('returns different paths for different usernames', () => {
-    const a = getCacheDbPath();
-    process.env.OFW_USERNAME = 'other@example.com';
-    const b = getCacheDbPath();
-    expect(a).not.toBe(b);
-  });
-
-  it('uses OFW_CACHE_IDENTITY when set (fetchproxy-only auth, no username)', () => {
-    delete process.env.OFW_USERNAME;
-    process.env.OFW_CACHE_IDENTITY = 'browser-session';
-    const path = getCacheDbPath();
-    const filename = path.slice(tmp.length + 1);
-    expect(filename).toMatch(/^[0-9a-f]{16}\.db$/);
-  });
-
-  it('prefers OFW_CACHE_IDENTITY over OFW_USERNAME when both are set', () => {
-    process.env.OFW_USERNAME = 'me@example.com';
-    process.env.OFW_CACHE_IDENTITY = 'override';
-    const a = getCacheDbPath();
-    delete process.env.OFW_CACHE_IDENTITY;
-    const b = getCacheDbPath();
-    expect(a).not.toBe(b);
-  });
-
-  it('falls back to "_default" when neither OFW_USERNAME nor OFW_CACHE_IDENTITY is set', () => {
-    delete process.env.OFW_USERNAME;
-    // Single-user fetchproxy install: cache is keyed on the placeholder.
-    // Multi-account users should set OFW_CACHE_IDENTITY explicitly.
-    expect(() => getCacheDbPath()).not.toThrow();
-    const path = getCacheDbPath();
-    expect(path.startsWith(tmp)).toBe(true);
+  it('accepts an explicit env for isServiceEnabled', () => {
+    expect(isServiceEnabled('mail', { APPLE_SERVICES: 'mail' })).toBe(true);
+    expect(isServiceEnabled('mail', { APPLE_SERVICES: 'itunes' })).toBe(false);
   });
 });
 
-describe('getAttachmentsDir', () => {
-  let originalAttachmentsDir: string | undefined;
-
-  beforeEach(() => {
-    originalAttachmentsDir = process.env.OFW_ATTACHMENTS_DIR;
-    delete process.env.OFW_ATTACHMENTS_DIR;
-  });
-
-  afterEach(() => {
-    if (originalAttachmentsDir === undefined) delete process.env.OFW_ATTACHMENTS_DIR;
-    else process.env.OFW_ATTACHMENTS_DIR = originalAttachmentsDir;
-  });
-
-  it('defaults to ~/Downloads/ofw-mcp so sandboxed MCP hosts can read the file', () => {
-    expect(getAttachmentsDir()).toBe(join(homedir(), 'Downloads', 'ofw-mcp'));
-  });
-
-  it('honors OFW_ATTACHMENTS_DIR override', () => {
-    process.env.OFW_ATTACHMENTS_DIR = '/custom/attachments';
-    expect(getAttachmentsDir()).toBe('/custom/attachments');
-  });
-});
-
-describe('getUploadDir', () => {
-  let prevUpload: string | undefined;
-  let prevAttach: string | undefined;
-
-  beforeEach(() => {
-    prevUpload = process.env.OFW_UPLOAD_DIR;
-    prevAttach = process.env.OFW_ATTACHMENTS_DIR;
-    delete process.env.OFW_UPLOAD_DIR;
-    delete process.env.OFW_ATTACHMENTS_DIR;
-  });
-
-  afterEach(() => {
-    if (prevUpload === undefined) delete process.env.OFW_UPLOAD_DIR; else process.env.OFW_UPLOAD_DIR = prevUpload;
-    if (prevAttach === undefined) delete process.env.OFW_ATTACHMENTS_DIR; else process.env.OFW_ATTACHMENTS_DIR = prevAttach;
-  });
-
-  it('defaults to the attachments dir', () => {
-    expect(getUploadDir()).toBe(join(homedir(), 'Downloads', 'ofw-mcp'));
-    process.env.OFW_ATTACHMENTS_DIR = '/custom/attachments';
-    expect(getUploadDir()).toBe('/custom/attachments');
-  });
-
-  it('honors OFW_UPLOAD_DIR, ignoring a blank value', () => {
-    process.env.OFW_UPLOAD_DIR = '  ';
-    expect(getUploadDir()).toBe(join(homedir(), 'Downloads', 'ofw-mcp'));
-    process.env.OFW_UPLOAD_DIR = ' /outbox ';
-    expect(getUploadDir()).toBe('/outbox');
-  });
-});
-
-describe('getDefaultInlineAttachments', () => {
-  let original: string | undefined;
-
-  beforeEach(() => {
-    original = process.env.OFW_INLINE_ATTACHMENTS;
-    delete process.env.OFW_INLINE_ATTACHMENTS;
-  });
-
-  afterEach(() => {
-    if (original === undefined) delete process.env.OFW_INLINE_ATTACHMENTS;
-    else process.env.OFW_INLINE_ATTACHMENTS = original;
-  });
-
-  it('defaults to false when unset', () => {
-    expect(getDefaultInlineAttachments()).toBe(false);
-  });
-
-  it.each(['true', 'TRUE', 'True', '1', 'yes', 'on', ' true '])('treats %j as true', (val) => {
-    process.env.OFW_INLINE_ATTACHMENTS = val;
-    expect(getDefaultInlineAttachments()).toBe(true);
-  });
-
-  it.each(['false', '0', 'no', 'off', '', 'maybe'])('treats %j as false', (val) => {
-    process.env.OFW_INLINE_ATTACHMENTS = val;
-    expect(getDefaultInlineAttachments()).toBe(false);
-  });
-});
-
-describe('getCacheDir', () => {
-  it('honors OFW_CACHE_DIR when set, else falls back to ~/.cache/ofw-mcp', () => {
-    const orig = process.env.OFW_CACHE_DIR;
-    try {
-      process.env.OFW_CACHE_DIR = '/tmp/custom-cache';
-      expect(getCacheDir()).toBe('/tmp/custom-cache');
-      delete process.env.OFW_CACHE_DIR;
-      expect(getCacheDir()).toBe(join(homedir(), '.cache', 'ofw-mcp'));
-    } finally {
-      if (orig === undefined) delete process.env.OFW_CACHE_DIR;
-      else process.env.OFW_CACHE_DIR = orig;
-    }
-  });
-});
-
-describe('getSyncMaxRequests', () => {
-  let original: string | undefined;
-  beforeEach(() => {
-    original = process.env.OFW_SYNC_MAX_REQUESTS;
-    delete process.env.OFW_SYNC_MAX_REQUESTS;
-  });
-  afterEach(() => {
-    if (original === undefined) delete process.env.OFW_SYNC_MAX_REQUESTS;
-    else process.env.OFW_SYNC_MAX_REQUESTS = original;
-  });
-
-  it('is POSITIVE_INFINITY (unbounded) when unset or blank', () => {
-    expect(getSyncMaxRequests()).toBe(Number.POSITIVE_INFINITY);
-    process.env.OFW_SYNC_MAX_REQUESTS = '   ';
-    expect(getSyncMaxRequests()).toBe(Number.POSITIVE_INFINITY);
-  });
-
-  it('parses a positive integer (trimmed)', () => {
-    process.env.OFW_SYNC_MAX_REQUESTS = '25';
-    expect(getSyncMaxRequests()).toBe(25);
-    process.env.OFW_SYNC_MAX_REQUESTS = ' 200 ';
-    expect(getSyncMaxRequests()).toBe(200);
-  });
-
-  it.each(['0', '-5', '12.5', 'abc', 'NaN'])('falls back to unbounded for invalid value %j', (val) => {
-    process.env.OFW_SYNC_MAX_REQUESTS = val;
-    expect(getSyncMaxRequests()).toBe(Number.POSITIVE_INFINITY);
-  });
-});
-
-describe('getAllowMarkRead', () => {
-  const KEY = 'OFW_ALLOW_MARK_READ';
-  let prev: string | undefined;
-  beforeEach(() => { prev = process.env[KEY]; delete process.env[KEY]; });
-  afterEach(() => {
-    if (prev === undefined) delete process.env[KEY];
-    else process.env[KEY] = prev;
-    vi.restoreAllMocks();
-  });
-
-  it('defaults to true when unset or blank — the pre-existing behaviour', () => {
-    expect(getAllowMarkRead()).toBe(true);
-    process.env[KEY] = '   ';
-    expect(getAllowMarkRead()).toBe(true);
-  });
-
-  it('accepts the affirmative spellings', () => {
-    for (const v of ['1', 'true', 'TRUE', 'yes', 'on', ' true ']) {
-      process.env[KEY] = v;
-      expect(getAllowMarkRead()).toBe(true);
-    }
-  });
-
-  it('accepts the negative spellings', () => {
-    for (const v of ['0', 'false', 'FALSE', 'no', 'off', ' false ']) {
-      process.env[KEY] = v;
-      expect(getAllowMarkRead()).toBe(false);
-    }
-  });
-
-  it('fails closed with a warning on an unrecognized value', () => {
-    // A typo is a deliberate attempt to set something. Honouring it as the
-    // permissive default would silently keep stamping the record; refusing is
-    // both safer and loud (every refusal names its reason).
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    process.env[KEY] = 'flase';
-    expect(getAllowMarkRead()).toBe(false);
-    expect(err).toHaveBeenCalledWith(expect.stringContaining('OFW_ALLOW_MARK_READ'));
-  });
-});
-
-describe('getFetchUnreadBodies', () => {
-  const KEY = 'OFW_FETCH_UNREAD_BODIES';
-  let prev: string | undefined;
-  beforeEach(() => { prev = process.env[KEY]; delete process.env[KEY]; });
-  afterEach(() => {
-    if (prev === undefined) delete process.env[KEY];
-    else process.env[KEY] = prev;
-  });
-
-  it('defaults to false — the pre-existing sync behaviour', () => {
-    expect(getFetchUnreadBodies()).toBe(false);
-  });
-
-  it('is true only for an affirmative value', () => {
-    process.env[KEY] = 'true';
-    expect(getFetchUnreadBodies()).toBe(true);
-    process.env[KEY] = 'nonsense';
-    expect(getFetchUnreadBodies()).toBe(false);
-  });
-});
-
-describe('getWriteMode', () => {
-  let original: string | undefined;
-  beforeEach(() => {
-    original = process.env.OFW_WRITE_MODE;
-  });
-  afterEach(() => {
-    if (original === undefined) delete process.env.OFW_WRITE_MODE;
-    else process.env.OFW_WRITE_MODE = original;
-    vi.restoreAllMocks();
-  });
-
-  it('defaults to "all" when unset or blank', () => {
-    delete process.env.OFW_WRITE_MODE;
+describe('getWriteMode / accessAllowed', () => {
+  it('defaults to all when unset', () => {
+    expect(getWriteMode({})).toBe('all');
     expect(getWriteMode()).toBe('all');
-    process.env.OFW_WRITE_MODE = '   ';
-    expect(getWriteMode()).toBe('all');
+    expect(WRITE_MODES).toEqual(['none', 'additive', 'all']);
   });
 
-  it('accepts none/drafts/all, case-insensitive and trimmed', () => {
-    process.env.OFW_WRITE_MODE = 'none';
-    expect(getWriteMode()).toBe('none');
-    process.env.OFW_WRITE_MODE = ' Drafts ';
-    expect(getWriteMode()).toBe('drafts');
-    process.env.OFW_WRITE_MODE = 'ALL';
-    expect(getWriteMode()).toBe('all');
+  it('accepts each mode case-insensitively', () => {
+    expect(getWriteMode({ APPLE_WRITE_MODE: 'NONE' })).toBe('none');
+    expect(getWriteMode({ APPLE_WRITE_MODE: ' Additive ' })).toBe('additive');
+    expect(getWriteMode({ APPLE_WRITE_MODE: 'all' })).toBe('all');
   });
 
-  it('fails closed to "none" on an unrecognized value, warning on stderr', () => {
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    process.env.OFW_WRITE_MODE = 'readonly';
-    expect(getWriteMode()).toBe('none');
-    expect(err).toHaveBeenCalledWith(expect.stringContaining('Unrecognized OFW_WRITE_MODE "readonly"'));
-  });
-});
-
-describe('getCalendarWritesAllowed', () => {
-  let originalMode: string | undefined;
-  let originalFlag: string | undefined;
-  beforeEach(() => {
-    originalMode = process.env.OFW_WRITE_MODE;
-    originalFlag = process.env.OFW_CALENDAR_WRITES;
-    delete process.env.OFW_WRITE_MODE;
-    delete process.env.OFW_CALENDAR_WRITES;
-  });
-  afterEach(() => {
-    if (originalMode === undefined) delete process.env.OFW_WRITE_MODE;
-    else process.env.OFW_WRITE_MODE = originalMode;
-    if (originalFlag === undefined) delete process.env.OFW_CALENDAR_WRITES;
-    else process.env.OFW_CALENDAR_WRITES = originalFlag;
-    vi.restoreAllMocks();
+  it('fails CLOSED to none on an unrecognized value, warning once per value', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(getWriteMode({ APPLE_WRITE_MODE: 'everything' })).toBe('none');
+    expect(getWriteMode({ APPLE_WRITE_MODE: 'everything' })).toBe('none');
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0]![0])).toContain('unrecognized APPLE_WRITE_MODE "everything"');
+    expect(getWriteMode({ APPLE_WRITE_MODE: 'yes' })).toBe('none');
+    expect(err).toHaveBeenCalledTimes(2);
+    resetConfigWarnings();
+    getWriteMode({ APPLE_WRITE_MODE: 'yes' });
+    expect(err).toHaveBeenCalledTimes(3);
   });
 
-  it('is true in mode "all" regardless of the flag', () => {
-    process.env.OFW_WRITE_MODE = 'all';
-    expect(getCalendarWritesAllowed()).toBe(true);
-    process.env.OFW_CALENDAR_WRITES = 'false';
-    expect(getCalendarWritesAllowed()).toBe(true);
-  });
-
-  it('is false in mode "drafts" without the flag', () => {
-    process.env.OFW_WRITE_MODE = 'drafts';
-    expect(getCalendarWritesAllowed()).toBe(false);
-    process.env.OFW_CALENDAR_WRITES = 'no';
-    expect(getCalendarWritesAllowed()).toBe(false);
-  });
-
-  it('is true in mode "drafts" with OFW_CALENDAR_WRITES set', () => {
-    process.env.OFW_WRITE_MODE = 'drafts';
-    process.env.OFW_CALENDAR_WRITES = 'true';
-    expect(getCalendarWritesAllowed()).toBe(true);
-  });
-
-  it('never overrides mode "none", including the unrecognized-mode fail-closed path', () => {
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    process.env.OFW_CALENDAR_WRITES = 'true';
-    process.env.OFW_WRITE_MODE = 'none';
-    expect(getCalendarWritesAllowed()).toBe(false);
-    process.env.OFW_WRITE_MODE = 'readonly'; // fails closed to 'none'
-    expect(getCalendarWritesAllowed()).toBe(false);
-    expect(err).toHaveBeenCalled();
-  });
-});
-
-describe('getFreshnessTtlSeconds', () => {
-  let original: string | undefined;
-  beforeEach(() => {
-    original = process.env.OFW_FRESHNESS_TTL_SECONDS;
-    delete process.env.OFW_FRESHNESS_TTL_SECONDS;
-  });
-  afterEach(() => {
-    if (original === undefined) delete process.env.OFW_FRESHNESS_TTL_SECONDS;
-    else process.env.OFW_FRESHNESS_TTL_SECONDS = original;
-  });
-
-  it('defaults to 5 minutes when unset or blank', () => {
-    expect(getFreshnessTtlSeconds()).toBe(DEFAULT_FRESHNESS_TTL_SECONDS);
-    process.env.OFW_FRESHNESS_TTL_SECONDS = '   ';
-    expect(getFreshnessTtlSeconds()).toBe(DEFAULT_FRESHNESS_TTL_SECONDS);
-  });
-
-  it('honours a positive integer', () => {
-    process.env.OFW_FRESHNESS_TTL_SECONDS = '30';
-    expect(getFreshnessTtlSeconds()).toBe(30);
-  });
-
-  it('falls back to the default on junk rather than widening the window', () => {
-    // A bad value must never make stale data pass as fresh for longer, so
-    // every unusable input lands on the default instead of Infinity/NaN.
-    for (const bad of ['0', '-5', '1.5', 'soon', 'Infinity']) {
-      process.env.OFW_FRESHNESS_TTL_SECONDS = bad;
-      expect(getFreshnessTtlSeconds()).toBe(DEFAULT_FRESHNESS_TTL_SECONDS);
+  it('gates by mode: reads always, additive only in additive/all, all only in all', () => {
+    for (const [mode, read, additive, all] of [
+      ['none', true, false, false],
+      ['additive', true, true, false],
+      ['all', true, true, true],
+    ] as const) {
+      const env = { APPLE_WRITE_MODE: mode };
+      expect(accessAllowed('read', env)).toBe(read);
+      expect(accessAllowed('additive', env)).toBe(additive);
+      expect(accessAllowed('all', env)).toBe(all);
     }
+    // Unset → all; bad value → none.
+    expect(accessAllowed('all', {})).toBe(true);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(accessAllowed('additive', { APPLE_WRITE_MODE: 'typo' })).toBe(false);
+    expect(accessAllowed('read', { APPLE_WRITE_MODE: 'typo' })).toBe(true);
+  });
+
+  it('reads process.env by default', () => {
+    process.env.APPLE_WRITE_MODE = 'additive';
+    expect(accessAllowed('additive')).toBe(true);
+    expect(accessAllowed('all')).toBe(false);
+  });
+});
+
+describe('time zones', () => {
+  it('recognizes IANA zones, case-insensitively, and refuses junk', () => {
+    expect(isValidTimeZone('America/New_York')).toBe(true);
+    expect(isValidTimeZone('america/new_york')).toBe(true);
+    expect(isValidTimeZone('UTC')).toBe(true);
+    expect(isValidTimeZone('Asia/Kolkata')).toBe(true);
+    expect(isValidTimeZone('Etc/GMT+5')).toBe(true);
+    expect(isValidTimeZone('Mars/Olympus_Mons')).toBe(false);
+    expect(isValidTimeZone('')).toBe(false);
+  });
+
+  it('refuses a bare UTC offset even though Intl would accept one (no DST → wrong half the year)', () => {
+    expect(isValidTimeZone('-04:00')).toBe(false);
+    expect(isValidTimeZone('+05:30')).toBe(false);
+    expect(isValidTimeZone(' +0000')).toBe(false);
+    // U+2212 MINUS SIGN: Intl accepts it and resolves it to "-04:00", so an
+    // ASCII-only check on the input would let it through.
+    expect(isValidTimeZone('\u221204:00')).toBe(false);
+  });
+
+  it('canonicalTimeZone gives the runtime spelling of a zone, or undefined for anything else', () => {
+    expect(canonicalTimeZone('europe/london')).toBe('Europe/London');
+    expect(canonicalTimeZone('Etc/UTC')).toBe('UTC');
+    expect(canonicalTimeZone('-04:00')).toBeUndefined();
+    expect(canonicalTimeZone('Nowhere/Land')).toBeUndefined();
+  });
+
+  it('reports DISPLAY_TZ in its canonical spelling (case, aliases), not as typed', () => {
+    expect(getDisplayTimeZone({ DISPLAY_TZ: 'america/new_york' })).toBe('America/New_York');
+    expect(getDisplayTimeZone({ DISPLAY_TZ: 'US/Eastern' })).toBe('America/New_York');
+    expect(getDisplayTimeZone({ DISPLAY_TZ: 'utc' })).toBe('UTC');
+  });
+
+  it('uses DISPLAY_TZ when it is a valid zone', () => {
+    expect(getDisplayTimeZone({ DISPLAY_TZ: 'Europe/Paris' })).toBe('Europe/Paris');
+    process.env.DISPLAY_TZ = 'Australia/Adelaide';
+    expect(getDisplayTimeZone()).toBe('Australia/Adelaide');
+  });
+
+  it('falls back to the system zone for an unset or invalid DISPLAY_TZ, warning once per bad value', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const sys = systemTimeZone();
+    expect(getDisplayTimeZone({})).toBe(sys);
+    expect(err).not.toHaveBeenCalled();
+    expect(getDisplayTimeZone({ DISPLAY_TZ: 'Nowhere/Land' })).toBe(sys);
+    expect(getDisplayTimeZone({ DISPLAY_TZ: 'Nowhere/Land' })).toBe(sys);
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0]![0])).toContain('DISPLAY_TZ "Nowhere/Land" is not a known IANA zone');
+    expect(getDisplayTimeZone({ DISPLAY_TZ: '-05:00' })).toBe(sys);
+    expect(err).toHaveBeenCalledTimes(2);
+    resetConfigWarnings();
+    getDisplayTimeZone({ DISPLAY_TZ: '-05:00' });
+    expect(err).toHaveBeenCalledTimes(3);
+  });
+
+  it('systemTimeZone returns the runtime zone, or UTC when the runtime cannot say', () => {
+    expect(isValidTimeZone(systemTimeZone())).toBe(true);
+    const spy = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions');
+    spy.mockReturnValue({ timeZone: undefined } as unknown as Intl.ResolvedDateTimeFormatOptions);
+    expect(systemTimeZone()).toBe('UTC');
+    spy.mockReturnValue({ timeZone: 'Not/AZone' } as unknown as Intl.ResolvedDateTimeFormatOptions);
+    expect(systemTimeZone()).toBe('UTC');
+    spy.mockReturnValue({ timeZone: 'Asia/Tokyo' } as unknown as Intl.ResolvedDateTimeFormatOptions);
+    expect(systemTimeZone()).toBe('Asia/Tokyo');
+  });
+});
+
+describe('getRequestTimeoutMs', () => {
+  it('defaults to 30 s', () => {
+    expect(DEFAULT_REQUEST_TIMEOUT_MS).toBe(30_000);
+    expect(getRequestTimeoutMs({})).toBe(30_000);
+    expect(getRequestTimeoutMs()).toBe(30_000);
+  });
+
+  it('honours a valid override and ignores junk or values below 1 s', () => {
+    expect(getRequestTimeoutMs({ APPLE_REQUEST_TIMEOUT_MS: '5000' })).toBe(5000);
+    expect(getRequestTimeoutMs({ APPLE_REQUEST_TIMEOUT_MS: '999' })).toBe(30_000);
+    expect(getRequestTimeoutMs({ APPLE_REQUEST_TIMEOUT_MS: '5s' })).toBe(30_000);
+    expect(getRequestTimeoutMs({ APPLE_REQUEST_TIMEOUT_MS: '${X}' })).toBe(30_000);
+  });
+
+  it('caps the timeout at 10 minutes (setTimeout reads a delay past 2^31-1 ms as 1 ms)', () => {
+    expect(MAX_REQUEST_TIMEOUT_MS).toBe(600_000);
+    expect(getRequestTimeoutMs({ APPLE_REQUEST_TIMEOUT_MS: '600000' })).toBe(600_000);
+    expect(getRequestTimeoutMs({ APPLE_REQUEST_TIMEOUT_MS: '600001' })).toBe(30_000);
+    expect(getRequestTimeoutMs({ APPLE_REQUEST_TIMEOUT_MS: '3000000000' })).toBe(30_000);
+  });
+});
+
+describe('isDebugLog', () => {
+  it('is off by default and on for truthy values', () => {
+    expect(isDebugLog({})).toBe(false);
+    expect(isDebugLog()).toBe(false);
+    expect(isDebugLog({ APPLE_DEBUG_LOG: 'true' })).toBe(true);
+    expect(isDebugLog({ APPLE_DEBUG_LOG: '1' })).toBe(true);
+    expect(isDebugLog({ APPLE_DEBUG_LOG: 'off' })).toBe(false);
   });
 });

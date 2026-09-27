@@ -1,61 +1,54 @@
-// Suite-wide guard: no test may touch the developer's real session cache.
+// Suite-wide hermeticity guards. Every test starts from the same blank
+// environment and a network that refuses to be used.
 //
-// `createSessionCache` resolves its path from MCP_DATA_DIR/HOME, so any test
-// that happens to have OFW_USERNAME + OFW_PASSWORD set would read and write
-// ~/.ofw-mcp/session.json — making the suite non-hermetic, order-dependent, and
-// (worse) able to leave a real file behind. An earlier run of this branch did
-// exactly that before this file existed.
-//
-// Two independent guards, deliberately belt-and-braces:
-//   1. The cache is OFF by default, so the ordinary suite never constructs one.
-//   2. The path is pinned into a temp dir anyway, so a test that turns the cache
-//      ON to exercise it still cannot reach $HOME.
-//
-// A cache test opts in with `process.env.OFW_SESSION_CACHE = 'true'` and gets
-// the temp path for free.
-import { beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+//  - Apple/iCloud/config variables from the developer's shell are removed, so
+//    a real APPLE_PRIVATE_KEY or ICLOUD_APP_PASSWORD can never change an
+//    outcome (or be sent anywhere).
+//  - MCP_DATA_DIR is pinned to a temp dir, so the on-disk caches (src/state.ts)
+//    can never touch the real home directory.
+//  - `fetch` is stubbed to THROW: a test that forgets to mock the network
+//    fails loudly instead of calling Apple. A test mocks it with
+//    `vi.stubGlobal('fetch', vi.fn(...))`.
+//  - Retry sleeps are instant.
+import { afterAll, afterEach, beforeEach, vi } from 'vitest';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resetCredentialRejections } from '../src/auth-password.js';
+import { forgetSecrets } from '../src/errors.js';
+import { resetConfigWarnings } from '../src/config.js';
+import { setSleepForTests } from '../src/http.js';
+import { resetICloudLatch } from '../src/icloud-auth.js';
 
-const CACHE_DIR = mkdtempSync(join(tmpdir(), 'ofw-test-cache-'));
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'aws-mcp-test-'));
+const homeStateExisted = existsSync(join(homedir(), '.aws-mcp'));
 
 beforeEach(() => {
-  process.env.OFW_SESSION_CACHE = 'false';
-  process.env.OFW_SESSION_FILE = join(CACHE_DIR, 'session.json');
-  // The confirm gate reads MCP_CONFIRM_MODE / _TTL_SECONDS / _SECRET. Tests
-  // exercise the fleet DEFAULTS (ask-user, 600 s, a per-process key); a
-  // developer's shell exporting one of these must not change the outcome.
-  delete process.env.MCP_CONFIRM_MODE;
-  delete process.env.MCP_CONFIRM_TTL_SECONDS;
-  delete process.env.MCP_CONFIRM_SECRET;
-  // The login rejection latch is process-wide; one test's rejected fixture
-  // credentials must not refuse the next test's login.
-  resetCredentialRejections();
+  for (const key of Object.keys(process.env)) {
+    if (/^(APPLE_|ICLOUD_|MCP_CONFIRM_)/.test(key) || key === 'DISPLAY_TZ') delete process.env[key];
+  }
+  process.env.MCP_DATA_DIR = DATA_DIR;
+  forgetSecrets();
+  resetICloudLatch();
+  resetConfigWarnings();
+  setSleepForTests(() => Promise.resolve());
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: unknown) => {
+      throw new Error(`Unexpected network call in a test: ${String(input)}`);
+    }),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 afterAll(() => {
-  rmSync(CACHE_DIR, { recursive: true, force: true });
-
-  // The tripwire, and why the guards above are not enough on their own: both
-  // work through process.env, and a client that reads an INJECTED env bypasses
-  // them completely — the path resolver then falls back to os.homedir(), which
-  // no environment variable can redirect. Fixing exactly that plumbing in
-  // schoolpass-mcp is what created a real file under $HOME.
-  //
-  // So assert the outcome rather than the mechanism.
-  const leaked = join(homedir(), '.ofw-mcp');
-  if (existsSync(leaked)) {
-    // Remove it BEFORE throwing. Detecting the leak and leaving it behind
-    // pollutes the developer's home directory with the very file the guard
-    // exists to prevent — and the next run would then fail on the debris of
-    // the last one rather than on anything it did itself.
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  const leaked = join(homedir(), '.aws-mcp');
+  if (!homeStateExisted && existsSync(leaked)) {
     rmSync(leaked, { recursive: true, force: true });
-    throw new Error(
-      `A test wrote to ${leaked}. The suite must never touch the real home ` +
-        'directory — inject OFW_SESSION_CACHE=false (or a temp OFW_SESSION_FILE) ' +
-        'into the env that test hands the client.',
-    );
+    throw new Error(`A test wrote to ${leaked}; tests must only use the temp MCP_DATA_DIR.`);
   }
 });
