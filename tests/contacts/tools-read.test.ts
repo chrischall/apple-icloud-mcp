@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { MAX_RESPONSE_BYTES } from '../../src/http.js';
 import { matchesQuery, resolveZone } from '../../src/contacts/tools.js';
 import { readContact } from '../../src/contacts/model.js';
 import { VCard } from '../../src/contacts/vcard.js';
@@ -398,3 +399,63 @@ describe('review fixes: truncated listings and group counts', () => {
     expect(s.json.total).toBe(1);
   });
 });
+
+describe('review fixes: a stored BDAY with year 0000', () => {
+  it('get reads it as a birthday without a year (it used to fail with INVALID_ARGUMENT)', async () => {
+    const zero = vcard('N:Zero;Zed;;;', 'FN:Zed Zero', 'BDAY:0000-05-12', 'UID:ZERO-UID', 'REV:2023-01-15T10:20:30Z');
+    const h = harness({ 'ZERO-UID.vcf': zero });
+    const r = await h.call('apple_contacts_get', { contactId: 'ZERO-UID' });
+    expect(r.isError).toBe(false);
+    expect(r.json).toMatchObject({ id: 'ZERO-UID', birthday: '--05-12', birthdayDisplay: 'May 12' });
+  });
+});
+
+describe('review fixes: an address book larger than one response', () => {
+  /** A card with an inline base64 photo of `kb` KB. */
+  const withPhoto = (i: number, kb: number) =>
+    vcard(`N:Person${i};Test;;;`, `FN:Test Person${i}`, `PHOTO;ENCODING=b;TYPE=JPEG:${'A'.repeat(kb * 1024)}`, `UID:C${i}`);
+
+  it('search still answers through the REAL httpRequest when the single REPORT passes MAX_RESPONSE_BYTES', async () => {
+    // 400 contacts with a ~100 KB inline JPEG each: ~41 MB in one answer.
+    const cards: Record<string, string> = {};
+    for (let i = 0; i < 400; i++) cards[`C${i}.vcf`] = withPhoto(i, 100);
+    expect(Object.values(cards).reduce((n, c) => n + c.length, 0)).toBeGreaterThan(MAX_RESPONSE_BYTES);
+    const h = harness(cards, { request: undefined });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const res = await h.fake.request({
+          service: 'contacts',
+          method: String(init.method ?? 'GET'),
+          url: String(input),
+          headers: Object.fromEntries(new Headers(init.headers).entries()) as Record<string, string>,
+          ...(typeof init.body === 'string' ? { body: init.body } : {}),
+        });
+        return new Response(res.text, { status: res.status, headers: res.headers });
+      }),
+    );
+    const res = await h.call('apple_contacts_search', { query: 'Person399' });
+    expect(res.isError).toBe(false);
+    expect(res.json).toMatchObject({ total: 1, searched: 'all 400 contact(s) in the iCloud address book', contacts: [{ id: 'C399' }] });
+    expect(res.json.warnings).toBeUndefined();
+    // One refused REPORT, the ETag listing, then four multigets of 100.
+    expect(h.fake.multigets.map((m) => m.length)).toEqual([100, 100, 100, 100]);
+    const get = await h.call('apple_contacts_get', { contactId: 'C7' });
+    expect(get.json).toMatchObject({ id: 'C7', hasPhoto: true });
+  }, 60_000);
+
+  it('a card too large on its own is left out and said so; get reads it directly rather than calling it missing', async () => {
+    const h = harness({ ...BOOK_CARDS, 'HUGE.vcf': withPhoto(1, 64) });
+    h.fake.maxResponseBytes = 32 * 1024;
+    const s = await h.call('apple_contacts_search', {});
+    expect(s.json.total).toBe(4);
+    expect(s.json.warnings).toEqual([
+      '1 card(s) are each larger than the 32 MB this server reads in one response (usually a very large contact photo) and are not included. ' +
+        'Making the photo smaller in the Contacts app makes them readable.',
+    ]);
+    const g = await h.call('apple_contacts_get', { contactId: 'HUGE' });
+    expect(h.fake.log().slice(-1)).toEqual(['GET /27015122/carddavhome/card/HUGE.vcf']);
+    expect(g.json).toMatchObject({ id: 'HUGE', name: 'Test Person1', hasPhoto: true });
+  });
+});
+

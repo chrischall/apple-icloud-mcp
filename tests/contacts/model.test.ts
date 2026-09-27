@@ -18,6 +18,7 @@ import {
   valueEntries,
 } from '../../src/contacts/model.js';
 import { VCard, newLine } from '../../src/contacts/vcard.js';
+import { formatDateOnly } from '../../src/time.js';
 import { vcard } from './fake-icloud.js';
 
 const card = (...lines: string[]) => VCard.parse(vcard(...lines))!;
@@ -167,6 +168,29 @@ describe('birthday and revision', () => {
     expect(validMonthDay(0, 1)).toBe(false);
     expect(validMonthDay(1, 0)).toBe(false);
     expect(validMonthDay(4, 31)).toBe(false);
+  });
+
+  it('reads year 0000 as "no year" (some exporters write it), Feb 29 included', () => {
+    expect(bday('BDAY:0000-05-12')).toBe('--05-12');
+    expect(bday('BDAY:00000512')).toBe('--05-12');
+    expect(bday('BDAY:0000-02-29')).toBe('--02-29');
+    expect(bday('BDAY:0000-02-30')).toBeUndefined();
+  });
+
+  it('validMonthDay uses the real calendar for years 0–99 (Date.UTC would read them as 1900–1999)', () => {
+    expect(validMonthDay(2, 29, 0)).toBe(true); // year 0 is leap; 1900 is not
+    expect(validMonthDay(2, 29, 1900)).toBe(false);
+    expect(validMonthDay(2, 29, 4)).toBe(true);
+    expect(validMonthDay(2, 29, 1)).toBe(false);
+  });
+
+  it('every full date readBirthday returns is one formatDateOnly can show (it never throws on a stored card)', () => {
+    for (const y of ['0000', '0001', '0004', '0099', '0100', '1604', '1900', '2000', '2024', '9999']) {
+      for (const md of ['01-01', '02-28', '02-29', '12-31']) {
+        const v = bday(`BDAY:${y}-${md}`);
+        if (v !== undefined && !v.startsWith('--')) expect(() => formatDateOnly(v)).not.toThrow();
+      }
+    }
   });
 
   it('formats a month-day', () => {

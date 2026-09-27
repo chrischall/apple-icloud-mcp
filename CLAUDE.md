@@ -137,7 +137,12 @@ lines round-trip byte-for-byte. `entryId` = hash of property+group+raw value, `~
 resolved against the card as it was BEFORE the request's first change. FN is rewritten only when the composed
 name changes. Groups are separate cards (`X-ADDRESSBOOKSERVER-KIND:group`) excluded from results. The whole
 book is read with one unfiltered REPORT and cached per process by getctag; a 507 on the collection's own
-response means truncated — say so.
+response means truncated — say so. Inline `PHOTO`s can push that answer past `MAX_RESPONSE_BYTES`
+(`ResponseTooLargeError`): then the book is read as an ETag-only listing + `addressbook-multiget` batches of
+100, halving a batch that is still too large; a card too large ON ITS OWN is counted (`tooLarge`) and warned
+about, never a failed book, and `get` reads a card the book left out directly rather than calling it
+NOT_FOUND. ORG's department reads as every unit after the organization, so setting it replaces them all (the
+value as shown is left untouched). A `BDAY` with year `0000` is a birthday without a year, like `1604`.
 
 **Mail** — IMAP login tries the address local part then the full address (Apple domains only; a custom domain
 uses the full address) and remembers which worked (`mail-login.json`) so cold starts don't spend failed

@@ -79,6 +79,15 @@ build environment had no Apple credentials. The first live run is the real verif
   Apple's `itemN.X-ABLabel` grouping; groups are separate cards
   (`X-ADDRESSBOOKSERVER-KIND:group`). Updates edit raw lines because a generic serializer
   rewrote Apple's grouped/typed lines. [3P: msgvault, measurements in research]
+- Contacts: cards can carry the contact photo inline (`PHOTO;ENCODING=b`), so the one unfiltered
+  `addressbook-query` answer for a large, photo-heavy book can pass the server's 32 MB read cap. The
+  fallback then lists ETags only (same query, `getetag` alone) and fetches cards with
+  `addressbook-multiget` (hrefs as absolute paths) in batches of 100, halving on a too-large batch.
+  How large iCloud's answer gets in practice, and whether it honours the ETag-only query and multiget
+  batches of 100, are [UNVERIFIED] live. Timing out on a huge answer (rather than passing the cap) is
+  not handled by the fallback. [UNVERIFIED]
+- Contacts: some exporters write a birthday with no year as `BDAY:0000-MM-DD`; it is read like Apple's
+  `1604` / `X-APPLE-OMIT-YEAR`. Whether iCloud ever serves that form is [UNVERIFIED].
 
 ## iCloud Mail (IMAP / SMTP)
 

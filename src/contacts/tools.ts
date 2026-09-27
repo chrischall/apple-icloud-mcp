@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { canonicalTimeZone, getDisplayTimeZone } from '../config.js';
 import { VCARD_CONTENT_TYPE, childUrl } from '../dav/client.js';
 import { InvalidArgumentError, UnconfirmedWriteError, errorMessage } from '../errors.js';
+import { MAX_RESPONSE_BYTES } from '../http.js';
 import { formatDateOnly, parseDateInput, putInstant } from '../time.js';
 import { CONFIRM_NOTE, confirmTokenParam, confirmWrite, stateRevision } from '../tools/_confirm.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonResponse, limitParam, offsetParam, pageInfo, pagedResponse } from '../tools/_shared.js';
@@ -248,6 +249,12 @@ function bookWarnings(book: Book): Record<string, unknown> {
     );
   }
   if (book.unreadable > 0) warnings.push(`${book.unreadable} card(s) in the address book could not be read and are not included.`);
+  if (book.tooLarge > 0) {
+    warnings.push(
+      `${book.tooLarge} card(s) are each larger than the ${MAX_RESPONSE_BYTES / (1024 * 1024)} MB this server reads in one response ` +
+        '(usually a very large contact photo) and are not included. Making the photo smaller in the Contacts app makes them readable.',
+    );
+  }
   return warnings.length > 0 ? { warnings } : {};
 }
 
@@ -543,8 +550,9 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
       const id = normalizeId(args.contactId);
       const { session, book } = await loadBook(deps);
       let entry = findInBook(book, id);
-      // A truncated listing is not proof of absence: ask for the card itself.
-      if (!entry && book.truncated) entry = await reread(session, childUrl(session.bookUrl, `${id}.vcf`));
+      // A truncated listing, or one that left out too-large cards, is not
+      // proof of absence: ask for the card itself.
+      if (!entry && (book.truncated || book.tooLarge > 0)) entry = await reread(session, childUrl(session.bookUrl, `${id}.vcf`));
       if (!entry) throw contactNotFound(id);
       refuseGroup(entry);
       return jsonResponse({ ...contactDetail(entry, zone, groupNamesOf(book, entry)), ...bookWarnings(book) });

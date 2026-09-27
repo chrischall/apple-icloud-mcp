@@ -252,7 +252,8 @@ export interface ParsedDateInput {
 const DATE_RE =
   /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|z|[+-]\d{2}(?::?\d{2})?)?)?$/;
 
-function daysInMonth(year: number, month: number): number {
+/** Days in `month` (1–12) of `year`, proleptic Gregorian — years 0–99 are NOT shifted to the 1900s. */
+export function daysInMonth(year: number, month: number): number {
   return new Date(utcMs(year, month, 0, 0, 0, 0, 0)).getUTCDate();
 }
 

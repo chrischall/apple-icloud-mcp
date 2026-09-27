@@ -86,6 +86,19 @@ export class UpstreamError extends AppleToolError {
   }
 }
 
+/**
+ * A READ whose answer passed `MAX_RESPONSE_BYTES` and was refused unread
+ * (`httpRequest`). Its own class so a caller that can ask for less at a time
+ * (the address book's batched fallback) can tell it from any other upstream
+ * failure. A write whose answer is too large is `UnconfirmedWriteError`.
+ */
+export class ResponseTooLargeError extends UpstreamError {
+  constructor(service: ServiceName, status: number, message: string) {
+    super(service, status, message);
+    this.name = 'ResponseTooLargeError';
+  }
+}
+
 /** The request never produced an HTTP answer (timeout, DNS, reset, proxy refusal). */
 export class TransportError extends AppleToolError {
   readonly service: ServiceName;

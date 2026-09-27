@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach } from 'vitest';
-import { UpstreamError } from '../../src/errors.js';
+import { ResponseTooLargeError, UpstreamError } from '../../src/errors.js';
 import type { HttpRequest, HttpResponse } from '../../src/http.js';
 import type { DavRequestFn } from '../../src/dav/client.js';
 import { forgetDavContext } from '../../src/dav/icloud.js';
@@ -41,7 +41,8 @@ const xmlEscape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').
 
 /**
  * A stateful stand-in for iCloud CardDAV behind `httpRequest`: discovery,
- * the home listing, getctag, the unfiltered addressbook-query, and
+ * the home listing, getctag, the unfiltered addressbook-query (with or
+ * without address-data), addressbook-multiget, and
  * GET / PUT (If-Match, If-None-Match) / DELETE on cards. Non-2xx answers go
  * through the request's `classifyError` then the default mapping, like
  * `httpRequest`.
@@ -60,6 +61,16 @@ export class FakeICloud {
   sendEtags = true;
   /** Extra raw <response> elements appended to the REPORT answer. */
   extraReport = '';
+  /** Extra raw <response> elements appended to the ETag-only listing (the batched fallback's first step). */
+  extraListing = '';
+  /** Extra raw <response> elements appended to every addressbook-multiget answer. */
+  extraMultiget = '';
+  /** Cards an addressbook-multiget answer leaves out even when asked for. */
+  readonly multigetOmits = new Set<string>();
+  /** The hrefs of each addressbook-multiget, in order. */
+  readonly multigets: string[][] = [];
+  /** Simulate httpRequest's size cap: a REPORT answer longer than this throws ResponseTooLargeError. */
+  maxResponseBytes?: number;
   /** Cards that exist (GET works) but are left out of the REPORT answer — a truncated listing. */
   readonly unlisted = new Set<string>();
   /** The home listing's collections (name → is an address book). */
@@ -164,16 +175,38 @@ export class FakeICloud {
       return this.answer(req, 207, this.ms(`<response><href>${bookPath}</href>${props}</response>`), new Headers());
     }
     if (method === 'REPORT' && path === bookPath) {
+      const body = String(req.body ?? '');
+      const withData = body.includes('address-data');
       const self = `<response><href>${bookPath}</href><propstat><prop><resourcetype><collection/></resourcetype></prop><status>HTTP/1.1 200 OK</status></propstat></response>`;
-      const items = [...this.cards]
-        .filter(([name]) => !this.unlisted.has(name))
-        .map(
-          ([name, c]) =>
-            `<response><href>${bookPath}${encodeURIComponent(name)}</href><propstat><prop>${this.sendEtags ? `<getetag>${xmlEscape(c.etag)}</getetag>` : ''}` +
-            `<address-data xmlns="urn:ietf:params:xml:ns:carddav"><![CDATA[${c.body}]]></address-data></prop><status>HTTP/1.1 200 OK</status></propstat></response>`,
-        )
-        .join('');
-      return this.answer(req, 207, this.ms(self + items + this.extraReport), new Headers());
+      const item = (name: string, c: Card) =>
+        `<response><href>${bookPath}${encodeURIComponent(name)}</href><propstat><prop>${this.sendEtags ? `<getetag>${xmlEscape(c.etag)}</getetag>` : ''}` +
+        `${withData ? `<address-data xmlns="urn:ietf:params:xml:ns:carddav"><![CDATA[${c.body}]]></address-data>` : ''}</prop><status>HTTP/1.1 200 OK</status></propstat></response>`;
+      let text: string;
+      if (body.includes('addressbook-multiget')) {
+        // The hrefs asked for, in order; one that names no card is a 404 response.
+        const hrefs = [...body.matchAll(/<(?:\w+:)?href>([^<]*)<\/(?:\w+:)?href>/g)].map((m) => m[1] as string);
+        this.multigets.push(hrefs);
+        text = hrefs
+          .filter((href) => !this.multigetOmits.has(decodeURIComponent(href.slice(bookPath.length))))
+          .map((href) => {
+            const name = decodeURIComponent(href.slice(bookPath.length));
+            const card = this.cards.get(name);
+            return card ? item(name, card) : `<response><href>${href}</href><status>HTTP/1.1 404 Not Found</status></response>`;
+          })
+          .join('');
+        text = this.ms(text + this.extraMultiget);
+      } else {
+        const items = [...this.cards]
+          .filter(([name]) => !this.unlisted.has(name))
+          .map(([name, c]) => item(name, c))
+          .join('');
+        text = this.ms(self + items + (withData ? this.extraReport : this.extraListing));
+      }
+      if (this.maxResponseBytes !== undefined && Buffer.byteLength(text) > this.maxResponseBytes) {
+        // What httpRequest throws for a read past MAX_RESPONSE_BYTES.
+        throw new ResponseTooLargeError(req.service, 207, `contacts: response from ${path} is larger than ${this.maxResponseBytes} bytes; refusing to read it.`);
+      }
+      return this.answer(req, 207, text, new Headers());
     }
     if (path.startsWith(bookPath) && path.length > bookPath.length) {
       const name = decodeURIComponent(path.slice(bookPath.length));

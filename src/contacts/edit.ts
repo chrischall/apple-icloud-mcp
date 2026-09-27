@@ -8,6 +8,7 @@ import {
   formatAddress,
   formatRev,
   readBirthday,
+  readOrg,
   valueEntries,
   type AddressEntry,
   type EntryKind,
@@ -501,6 +502,13 @@ function setComponents(card: VCard, name: string, updates: ReadonlyMap<number, s
       changed = true;
     }
   }
+  // ORG's department reads as EVERY unit after the organization (readOrg), so
+  // setting it replaces them all with the one value asked for — otherwise a
+  // cleared department would still read as the third unit.
+  if (name === 'ORG' && updates.has(1) && comps.length > 2) {
+    comps.splice(2);
+    changed = true;
+  }
   if (!changed) return false;
   if (!line) {
     // Only reached by setting a non-empty component: a fresh line was all empty.
@@ -558,7 +566,9 @@ export function applyScalars(card: VCard, edits: ScalarEdits): void {
   const nameChanged = setComponents(card, 'N', n, 5);
   const org = new Map<number, string>();
   if (edits.organization !== undefined) org.set(0, edits.organization.trim());
-  if (edits.department !== undefined) org.set(1, edits.department.trim());
+  // The department as shown (every unit after the organization, joined) is
+  // left exactly as stored; anything else replaces all of those units.
+  if (edits.department !== undefined && edits.department.trim() !== readOrg(card).department) org.set(1, edits.department.trim());
   const orgChanged = setComponents(card, 'ORG', org, 2);
   if (nameChanged || orgChanged) {
     const composed = composeFormattedName(card);

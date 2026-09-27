@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BOOK_TTL_MS,
+  MULTIGET_BATCH,
   cardIdFromUrl,
   contactNotFound,
   fetchCard,
@@ -265,3 +266,70 @@ describe('review fixes: the listing itself', () => {
     expect(book.contacts.map((c) => [c.id, c.view.name])).toEqual([['INDENT', 'Ann Lee']]);
   });
 });
+
+describe('review fixes: a book too large for one answer is fetched in batches', () => {
+  const big = (name: string, kb: number) => vcard(`N:${name};;;;`, `FN:${name}`, `PHOTO;ENCODING=b;TYPE=JPEG:${'A'.repeat(kb * 1024)}`, `UID:${name}`);
+  const reports = (fake: FakeICloud) => fake.calls.filter((c) => c.method === 'REPORT').map((c) => String(c.body));
+
+  it('falls back to an ETag listing + addressbook-multiget batches of MULTIGET_BATCH, then caches by ctag as before', async () => {
+    const cards: Record<string, string> = { 'FAMILY.vcf': FAMILY };
+    for (let i = 0; i < 2 * MULTIGET_BATCH + 10; i++) cards[`P${i}.vcf`] = vcard(`FN:P${i}`, `UID:P${i}`);
+    const fake = new FakeICloud(cards);
+    fake.maxResponseBytes = 40_000; // the full book is larger, one batch of 100 fits
+    const a = await loadBook({ request: fake.request });
+    expect(a.book).toMatchObject({ unreadable: 0, tooLarge: 0, truncated: false });
+    expect(a.book.contacts).toHaveLength(2 * MULTIGET_BATCH + 10);
+    expect(a.book.groups.map((g) => g.id)).toEqual(['FAMILY']);
+    expect(a.book.contacts[0]!.etag).toMatch(/^"e\d+"$/);
+    const [full, listing, ...gets] = reports(fake);
+    expect(full).toContain('address-data');
+    expect(listing).toContain('addressbook-query');
+    expect(listing).not.toContain('address-data');
+    expect(gets.every((g) => g.includes('addressbook-multiget'))).toBe(true);
+    // Hrefs are sent as absolute paths (iCloud refuses absolute URIs in a multiget).
+    expect(fake.multigets.map((m) => m.length)).toEqual([MULTIGET_BATCH, MULTIGET_BATCH, 11]);
+    expect(fake.multigets[0]![0]).toMatch(new RegExp(`^/${DSID}/carddavhome/card/`));
+    expect((await loadBook({ request: fake.request })).cached).toBe(true);
+  });
+
+  it('halves a batch that is still too large; a single card too large alone is counted in tooLarge, not a failed book', async () => {
+    const fake = new FakeICloud({ 'ANN.vcf': ANN, 'BOB.vcf': BOB, 'HUGE.vcf': big('HUGE', 40), 'FAMILY.vcf': FAMILY });
+    fake.maxResponseBytes = 20_000;
+    const { book } = await loadBook({ request: fake.request });
+    expect(book.contacts.map((c) => c.id).sort()).toEqual(['ANN', 'BOB']);
+    expect(book.groups.map((g) => g.id)).toEqual(['FAMILY']);
+    expect(book).toMatchObject({ tooLarge: 1, unreadable: 0 });
+    expect(fake.multigets.map((m) => m.length)).toEqual([4, 2, 2, 1, 1]);
+  });
+
+  it('counts what the batched path could not read: error members of the listing, cards a multiget left out or answered 404', async () => {
+    const fake = new FakeICloud({ 'ANN.vcf': ANN, 'BOB.vcf': BOB, 'HUGE.vcf': big('HUGE', 40) });
+    fake.maxResponseBytes = 20_000;
+    fake.extraListing =
+      `<response><href>/${DSID}/carddavhome/card/</href><status>HTTP/1.1 507 Insufficient Storage</status></response>` +
+      `<response><href>/${DSID}/carddavhome/card/GONE.vcf</href><propstat><prop><getetag>"g"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response>` +
+      `<response><href>/${DSID}/carddavhome/card/DENIED.vcf</href><status>HTTP/1.1 403 Forbidden</status></response>`;
+    fake.multigetOmits.add('BOB.vcf');
+    // A member nobody asked for is ignored (it is never counted twice).
+    fake.extraMultiget = `<response><href>/${DSID}/carddavhome/card/ANN.vcf</href><propstat><prop><address-data xmlns="urn:ietf:params:xml:ns:carddav">${'x'}</address-data></prop><status>HTTP/1.1 200 OK</status></propstat></response>`;
+    const { book } = await loadBook({ request: fake.request });
+    expect(book.contacts.map((c) => c.id)).toEqual(['ANN']);
+    // DENIED (listing status), BOB (left out), GONE (404 in the multiget).
+    expect(book).toMatchObject({ truncated: true, unreadable: 3, tooLarge: 1 });
+  });
+
+  it('any other failure of a batch is an error, never a partial book', async () => {
+    const fake = new FakeICloud({ 'ANN.vcf': ANN, 'HUGE.vcf': big('HUGE', 40) });
+    fake.maxResponseBytes = 20_000;
+    let reportsSeen = 0;
+    const request: typeof fake.request = async (req) => {
+      if (req.method === 'REPORT' && ++reportsSeen === 3) throw new UpstreamError('contacts', 503, 'contacts: REPORT failed with HTTP 503');
+      return fake.request(req);
+    };
+    await expect(loadBook({ request })).rejects.toMatchObject({ status: 503 });
+    // Nothing was cached from the failed attempt.
+    fake.maxResponseBytes = undefined;
+    expect((await loadBook({ request: fake.request })).cached).toBe(false);
+  });
+});
+
