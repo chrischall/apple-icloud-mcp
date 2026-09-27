@@ -83,6 +83,29 @@ describe('htmlToText', () => {
     expect(htmlToText('<div style="display:none" style="color:red">dup</div>shown')).toBe('shown');
   });
 
+  it('ends an unclosed hidden <p>/<li> at the end tag of the element it sits in, as a browser does', () => {
+    const invoice = htmlToText(
+      '<div class="pre"><p style="display:none">Preview text</div><table><tr><td><p>Your invoice total is $500</p>' +
+        '<p>Pay by Friday</p></td></tr></table><div>Footer</div>',
+    );
+    expect(invoice).toContain('Your invoice total is $500');
+    expect(invoice).toContain('Pay by Friday');
+    expect(invoice).toContain('Footer');
+    expect(invoice).not.toContain('Preview text');
+
+    const warning = htmlToText('<div><p hidden>secret</div>Pay attention: this is a scam<div>more</div>');
+    expect(warning).toContain('Pay attention: this is a scam');
+    expect(warning).not.toContain('secret');
+
+    const cell = htmlToText('<table><tr><td><p hidden>x</td><td>Visible cell</td></tr></table><p>after</p>');
+    expect(cell).toContain('Visible cell');
+    expect(cell).toContain('after');
+
+    const list = htmlToText('<ul><li hidden>gone</ul>Still here<ul><li>next</li></ul>');
+    expect(list).toContain('Still here');
+    expect(list).not.toContain('gone');
+  });
+
   it('keeps an unclosed hidden element visible rather than swallowing the rest', () => {
     expect(htmlToText('<div style="display:none">preheader<p>Body text</p>')).toBe('preheader\n\nBody text');
   });

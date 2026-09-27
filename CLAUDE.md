@@ -151,7 +151,8 @@ mid-command into the same `false` as a server NO: every such write goes through 
 a tagged NO/BAD (or a `false` with no error on a live connection) may say "Nothing was moved/changed" — anything
 else is UNCONFIRMED_WRITE. HTML→text drops hidden content (prompt-injection hygiene) and reads markup as a
 browser does where that decides what is hidden: comments end at the first `-->`/`--!>` (`<!-->` is empty), `/>`
-counts only on void/SVG/MathML elements, `<p>`/`<li>` close implicitly. It must stay linear — links don't nest
+counts only on void/SVG/MathML elements, `<p>`/`<li>` close implicitly (at a start tag that closes them, or at the end tag
+of an element they sit in). It must stay linear — links don't nest
 and a link's text is compared with its target only when short (a nested-`<a>` bomb once took minutes).
 
 **Maps** — ES256 JWT (`scope: server_api`) exchanged at `GET /v1/token` for a 30-min access token; a 401 on a

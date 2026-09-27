@@ -15,7 +15,9 @@
  *
  * An element is only skipped when its end is known: its closing tag (matched
  * up front with a per-name stack), or — for `<p>` and `<li>` — the tag that
- * ends it implicitly, as a browser reads `<p hidden>x<p>shown`. Mail HTML is
+ * ends it implicitly, as a browser reads it: a start tag that closes it
+ * (`<p hidden>x<p>shown`) or the end tag of an element it sits in
+ * (`<div><p hidden>x</div>shown`). Mail HTML is
  * routinely unbalanced, and skipping to the end of the document because one
  * `</div>` was missing would silently drop the rest of the message. `/>` counts
  * only on void and SVG/MathML elements: a browser ignores it on a `<div/>`,
@@ -210,6 +212,16 @@ function matchCloses(tokens: Token[]): Map<number, number> {
     s?.pop();
     match.set(open, at - 1);
   };
+  /**
+   * An end tag closes everything still open inside the element it ends: a browser
+   * "generates implied end tags", so an unclosed <p>/<li> in a <div> or <td> ends at
+   * that </div> or </td>. Without this, a hidden <p> stayed open until some later
+   * start tag closed it, and everything visible in between was dropped.
+   */
+  const endInside = (name: string, outer: number, at: number): void => {
+    const s = stacks.get(name);
+    while (s && s.length && (s[s.length - 1] as number) > outer) match.set(s.pop() as number, at - 1);
+  };
   tokens.forEach((t, idx) => {
     if (t.kind === 'open') {
       if (CLOSES_P.has(t.name)) closeImplicitly('p', BUTTON_SCOPE, idx);
@@ -220,7 +232,10 @@ function matchCloses(tokens: Token[]): Map<number, number> {
       s.push(idx);
     } else if (t.kind === 'close') {
       const open = stacks.get(t.name)?.pop();
-      if (open !== undefined) match.set(open, idx);
+      if (open === undefined) return;
+      match.set(open, idx);
+      endInside('p', open, idx);
+      endInside('li', open, idx);
     }
   });
   return match;
