@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getDisplayTimeZone } from '../config.js';
 import { AppleToolError, InvalidArgumentError, UnconfirmedWriteError, UpstreamError, errorMessage } from '../errors.js';
 import { CONFIRM_NOTE, confirmTokenParam, confirmWrite, stateRevision } from '../tools/_confirm.js';
-import { ANNOTATIONS, compactObject, defineTool, jsonResponse } from '../tools/_shared.js';
+import { ANNOTATIONS, compactObject, defineTool, jsonErrorResponse, jsonResponse } from '../tools/_shared.js';
 import { requireData, type AppleDoc, type MusicClient, type MusicSession } from './client.js';
 import { head, notesField, uniq } from './common.js';
 import { ROOT_FOLDER_ID, assertLibraryId, assertLibraryPlaylistId, LIBRARY_TYPES } from './ids.js';
@@ -11,6 +11,7 @@ import {
   MAX_TRACKS_READ,
   expectedRevisionParam,
   folderIdArg,
+  PLAYLIST_CHANGED,
   playlistExists,
   playlistPath,
   playlistStateRefusal,
@@ -27,7 +28,7 @@ import {
 } from './playlists.js';
 import { attrs, nameOf, num, putDate, resourceName, str, type AppleResource } from './project.js';
 import { FAVORITE_FIELDS, typedIdsQuery, typedIdsSchema, type TypedIdField } from './tools-write.js';
-import { trackRevision } from './write-log.js';
+import { PLAYLIST_WRITE_TTL_MS, trackRevision } from './write-log.js';
 
 /**
  * Extended playlist and library tools — the operations Apple's documented API
@@ -168,7 +169,8 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
     title: 'Rename an Apple Music playlist or change its description',
     description:
       'Rename one of your Apple Music library playlists, change its description, or make it public/private. Returns the ' +
-      `previous values and verifies the change. ${WEB_ONLY}`,
+      'previous values and verifies the change. Refused while Apple does not show your last change to the playlist yet ' +
+      `(the update sends every field back, so it would undo it). ${WEB_ONLY}`,
     inputSchema: z.strictObject({
       playlistId: z.string().min(1).max(140).describe('Library playlist id (p.…) from apple_music_list_playlists.'),
       name: z.string().trim().min(1).max(200).optional().describe('New name.'),
@@ -186,6 +188,26 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
       const name = nameOf(pl, args.playlistId);
       refuseReadOnly(pl, name);
       const previous = playlistFields(pl);
+      // Apple's reads lag its writes, and the PATCH below sends every field back: from a read that does not show a
+      // change this process made moments ago, it would undo it (re-publish a playlist just made private, restore
+      // the old name). Refused rather than overlaid — an overlay could mask a change made elsewhere since.
+      const now = s.client.now();
+      const lagging = s.client.playlistAttributes.pending(args.playlistId, previous, now);
+      if (lagging.length > 0) {
+        const ago = Math.max(0, Math.round((now - Math.max(...lagging.map((l) => l.at))) / 1000));
+        const what = lagging.map((l) => `${l.field} set to ${JSON.stringify(l.value)} but still reads ${JSON.stringify(l.reads)}`).join('; ');
+        return jsonErrorResponse({
+          error: {
+            code: PLAYLIST_CHANGED,
+            service: 'music',
+            message:
+              `Apple is not showing your last change to "${name}" yet (${lagging[0]!.what}, ${ago} s ago: ${what}). This update sends ` +
+              'name, description and visibility back together, so from this read it would undo that change. Nothing was changed.',
+            hint: `Wait a few seconds and retry once it shows the change (this check lapses ${PLAYLIST_WRITE_TTL_MS / 1000} s after the change).`,
+            playlistId: args.playlistId,
+          },
+        });
+      }
       const changes = compactObject({
         name: args.name !== undefined && args.name !== previous.name ? args.name : undefined,
         description: args.description !== undefined && args.description !== (previous.description ?? '') ? args.description : undefined,
@@ -198,22 +220,35 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
       // whenever the result is public). Whether a partial body leaves the omitted fields alone is undocumented —
       // it could clear a description or make a public playlist private — so send the merged set it sends.
       const attributes = compactObject({ ...previous, ...changes });
-      await s.request({
-        method: 'PATCH',
-        path: playlistPath(args.playlistId),
-        ...(attributes.isPublic === true ? { query: { with: 'shared' } } : {}),
-        json: { attributes },
-      });
+      const sentAt = s.client.now();
+      try {
+        await s.request({
+          method: 'PATCH',
+          path: playlistPath(args.playlistId),
+          ...(attributes.isPublic === true ? { query: { with: 'shared' } } : {}),
+          json: { attributes },
+        });
+      } catch (err) {
+        // It may have landed: a later update must not PATCH the old values back from a read that lags it.
+        if (err instanceof UnconfirmedWriteError) s.client.playlistAttributes.record(args.playlistId, { at: sentAt, what: 'update playlist, unconfirmed' }, changes);
+        throw err;
+      }
+      s.client.playlistAttributes.record(args.playlistId, { at: sentAt, what: 'update playlist' }, changes);
       const warnings: string[] = [];
       let current: Record<string, unknown> | undefined;
       try {
-        const now: Record<string, unknown> = playlistFields(await readLibraryPlaylist(s, args.playlistId));
-        current = now;
-        for (const [k, v] of Object.entries(changes)) {
+        const read: Record<string, unknown> = playlistFields(await readLibraryPlaylist(s, args.playlistId));
+        current = read;
+        // Every field sent, not only the requested ones: the others went back unchanged and must still read so.
+        for (const [k, v] of Object.entries(attributes)) {
           // A cleared description may come back as "" or be dropped entirely; both mean cleared.
-          if ((now[k] ?? (k === 'description' ? '' : undefined)) !== v) {
-            warnings.push(`${k} still reads ${JSON.stringify(now[k] ?? null)} — Apple may not show the change yet.`);
-          }
+          const reads = read[k] ?? (k === 'description' ? '' : undefined);
+          if (reads === v) continue;
+          warnings.push(
+            k in changes
+              ? `${k} still reads ${JSON.stringify(read[k] ?? null)} — Apple may not show the change yet.`
+              : `${k} now reads ${JSON.stringify(read[k] ?? null)}, not the ${JSON.stringify(v)} sent back unchanged — check it.`,
+          );
         }
       } catch (err) {
         warnings.push(`Changed, but could not re-read the playlist to verify: ${errorMessage(err)}`);
@@ -261,6 +296,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
       const read = await readAllLibraryTracks(s, args.playlistId);
       requireCompleteRead(read, 'remove tracks');
       const tracks = read.tracks;
+      const shown = s.client.playlistWrites.mark();
       const stale = playlistStateRefusal(s.client, args.playlistId, name, tracks, args.expectedRevision);
       if (stale) return stale;
       const n = tracks.length;
@@ -319,7 +355,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
         confirmToken: args.confirmToken,
       });
       if (gate) return gate;
-      await recordedPlaylistWrite(s, args.playlistId, 'remove tracks', tracks, () =>
+      await recordedPlaylistWrite(s, args.playlistId, 'remove tracks', tracks, shown, () =>
         s.request({ method: 'DELETE', path: `${playlistPath(args.playlistId)}/tracks`, query: { ...ids, mode: 'all' } }),
       );
       const warnings: string[] = [];
@@ -398,6 +434,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
       const read = await readAllLibraryTracks(s, args.playlistId);
       requireCompleteRead(read, 'rewrite its order');
       const current = read.tracks;
+      const shown = s.client.playlistWrites.mark();
       const stale = playlistStateRefusal(s.client, args.playlistId, name, current, args.expectedRevision);
       if (stale) return stale;
       let next: AppleResource[];
@@ -479,7 +516,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
         confirmToken: args.confirmToken,
       });
       if (gate) return gate;
-      await recordedPlaylistWrite(s, args.playlistId, `reorder (${args.operation})`, current, () =>
+      await recordedPlaylistWrite(s, args.playlistId, `reorder (${args.operation})`, current, shown, () =>
         s.request({ method: 'PUT', path: `${playlistPath(args.playlistId)}/tracks`, json: payload }),
       );
       const warnings: string[] = [];
@@ -529,10 +566,10 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
       const pl = await readLibraryPlaylist(s, args.playlistId);
       const name = nameOf(pl, args.playlistId);
       const folderName = folderId === ROOT_FOLDER_ID ? 'the top level' : nameOf(await readFolder(s, folderId), folderId);
+      // Always sent, even when the folder already lists the playlist: that read can lag a move made moments ago
+      // (moving it back out right after moving it in would otherwise be skipped). Setting the parent is idempotent.
       const before = await readFolderChildren(s, folderId);
-      if (before.items.some((c) => c.id === args.playlistId)) {
-        return jsonResponse({ ...head(s, { playlistId: args.playlistId, playlist: name, folderId, folder: folderName }), changed: false, ...notesField([...s.notes, `"${name}" is already in ${folderName}.`]) });
-      }
+      const listed = before.items.some((c) => c.id === args.playlistId);
       await s.request({
         method: 'PUT',
         path: `${playlistPath(args.playlistId)}/parent`,
@@ -542,17 +579,24 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
       let verified = false;
       try {
         const after = await readFolderChildren(s, folderId);
-        verified = after.items.some((c) => c.id === args.playlistId);
-        if (!verified) warnings.push(`"${name}" does not show in ${folderName} yet — Apple can lag; re-read it shortly.`);
+        const shows = after.items.some((c) => c.id === args.playlistId);
+        // A read that listed it BEFORE the move too proves nothing about this move.
+        verified = shows && !listed;
+        if (!shows) warnings.push(`"${name}" does not show in ${folderName} yet — Apple can lag; re-read it shortly.`);
+        else if (listed) warnings.push(`Not verified: ${folderName === 'the top level' ? 'the top level' : `"${folderName}"`} listed "${name}" before the move too, so this read cannot confirm it — re-read it shortly.`);
       } catch (err) {
         warnings.push(`Moved, but could not re-read the folder to verify: ${errorMessage(err)}`);
       }
       return jsonResponse({
         ...head(s, { playlistId: args.playlistId, playlist: name, folderId, folder: folderName }),
+        // Whether it was elsewhere cannot be told from a read that may lag; `changed` says the move was sent.
         changed: true,
         verified,
         ...(warnings.length > 0 ? { warnings } : {}),
-        ...notesField(s.notes),
+        ...notesField([
+          ...s.notes,
+          listed ? `${folderName === 'the top level' ? 'The top level' : `"${folderName}"`} already listed "${name}"; the move was sent anyway, since Apple's reads can lag a move made moments ago.` : undefined,
+        ]),
       });
     },
   });

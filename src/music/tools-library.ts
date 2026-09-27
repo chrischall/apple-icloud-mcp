@@ -205,7 +205,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
       if (pending) {
         notes.push(
           `This read does not show the change made ${Math.max(0, Math.round((c.now() - pending.at) / 1000))} s ago (${pending.what}) yet — ` +
-            `Apple can lag. Re-read it shortly: reordering it or removing tracks is refused while it reads like this (up to ${PLAYLIST_WRITE_TTL_MS / 1000} s after the change).`,
+            `Apple can lag. Re-read it shortly: reordering it, removing tracks or adding with the duplicate check is refused while it reads like this (up to ${PLAYLIST_WRITE_TTL_MS / 1000} s after the change).`,
         );
       }
       if (args.allTracks && !complete) notes.push(`Stopped after ${MAX_TRACKS_READ} tracks; the playlist has more. Page on with offset ${MAX_TRACKS_READ}.`);

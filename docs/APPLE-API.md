@@ -54,6 +54,27 @@ build environment had no Apple credentials. The first live run is the real verif
 - None of these writes was live-tested from here (the sandbox refused authenticated probes).
   Apple has said undocumented methods "may be blocked at any time". [UNVERIFIED]
 
+**Read-after-write lag (both APIs)** — what the playlist/rating/folder write paths are built around:
+
+- Library reads lag library writes: a playlist's tracks, its attributes (name, description, isPublic),
+  a folder's children and a rating can read as they were before a write for seconds or longer. Apple
+  documents a delay only for new library items appearing; that the delay also covers edits to existing
+  playlists, folder membership and ratings, and how long it lasts, is assumed (the 2-minute write-log
+  window is a guess). [UNVERIFIED] Every such write therefore verifies by re-reading, reports "not
+  visible yet" instead of failing, refuses to rebuild or re-PATCH from a read that does not show this
+  process's own recent change, and never skips a write because a read says it is already done.
+- A catalog song appended to a library playlist reads back as a library track whose
+  `attributes.playParams.catalogId` is the catalog id that was sent (that is how the duplicate check,
+  the write log and add verification recognise it). If Apple lists it under a different catalog id
+  (another storefront's equivalent), the add reports "not showing yet" and rewrites are refused until
+  the 2-minute window lapses — safe, but noisy. [UNVERIFIED]
+- `PUT /v1/me/ratings/{type}/{id}` sets a value and `DELETE` removes it (404 when there is none), so
+  repeating either is harmless. [DOC for the endpoints; idempotence UNVERIFIED] Setting a playlist's
+  `parent` to the folder it is already in is assumed to be a no-op. [UNVERIFIED]
+- `isPublic: true` shows a playlist on the user's Apple Music profile (the web player adds `with=shared`
+  when creating or updating a public one) — i.e. to other people, which is why additive mode refuses
+  it. [BUNDLE]
+
 ## iCloud Calendar and Contacts (CalDAV / CardDAV)
 
 - Hosts `caldav.icloud.com` / `contacts.icloud.com`; Basic auth with the Apple ID and an

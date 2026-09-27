@@ -196,10 +196,10 @@ export const PLAYLIST_CHANGED = 'PLAYLIST_CHANGED';
 
 /**
  * Refuse to rewrite a playlist from `tracks` (a fresh, complete read) when
- *  - it still shows the order a write from THIS process replaced moments ago
- *    (Apple's reads lag its writes; a full-list rewrite from that read would
- *    undo the change), or
+ *  - it does not show a write THIS process made moments ago (Apple's reads
+ *    lag its writes; a full-list rewrite from that read would undo it), or
  *  - the caller passed `expectedRevision` and the read is a different order.
+ * `consequence` says what acting on the stale read would do (default: undo it).
  * Returns the error result to hand back, or undefined to proceed.
  */
 export function playlistStateRefusal(
@@ -208,6 +208,7 @@ export function playlistStateRefusal(
   name: string,
   tracks: readonly AppleResource[],
   expectedRevision: string | undefined,
+  consequence = 'rewriting the playlist from this read would undo it',
 ): CallToolResult | undefined {
   const currentRevision = trackRevision(tracks);
   const now = c.now();
@@ -228,7 +229,7 @@ export function playlistStateRefusal(
     const ago = Math.max(0, Math.round((now - pending.at) / 1000));
     return refuse(
       `Apple is not showing your last change to "${name}" yet (${pending.what}, ${ago} s ago): it still lists the tracks as ` +
-        'they were before that change, and rewriting the playlist from this read would undo it. Nothing was changed.',
+        `they were before that change, and ${consequence}. Nothing was changed.`,
       `Wait a few seconds, re-read it with apple_music_get_playlist, and retry once it shows the change (this check lapses ${PLAYLIST_WRITE_TTL_MS / 1000} s after the change).`,
     );
   }
@@ -244,30 +245,30 @@ export function playlistStateRefusal(
 
 /**
  * Send a write that replaces `before` (the playlist's order as read) and
- * remember it, so a lagging read is not rewritten over it. An UNCONFIRMED
- * write is remembered too: it may have landed.
+ * remember it, so a lagging read is not rewritten over it. `shown` is the
+ * write-log mark taken when `before` passed playlistStateRefusal: a write that
+ * lands supersedes the entries that read showed. An UNCONFIRMED write is
+ * remembered too (it may have landed), alongside them.
  */
 export async function recordedPlaylistWrite<T>(
   s: MusicSession,
   playlistId: string,
   what: string,
   before: readonly AppleResource[],
+  shown: number,
   send: () => Promise<T>,
 ): Promise<T> {
   const at = s.client.now();
   try {
     const out = await send();
-    rememberPlaylistWrite(s, playlistId, what, before, at);
+    s.client.playlistWrites.recordRewrite(playlistId, { at, what, before: trackRevision(before) }, shown);
     return out;
   } catch (err) {
-    if (err instanceof UnconfirmedWriteError) rememberPlaylistWrite(s, playlistId, `${what}, unconfirmed`, before, at);
+    if (err instanceof UnconfirmedWriteError) {
+      s.client.playlistWrites.recordRewrite(playlistId, { at, what: `${what}, unconfirmed`, before: trackRevision(before) });
+    }
     throw err;
   }
-}
-
-/** Remember that a write sent at `at` replaced the order `before` (see PlaylistWriteLog). */
-export function rememberPlaylistWrite(s: MusicSession, playlistId: string, what: string, before: readonly AppleResource[], at: number): void {
-  s.client.playlistWrites.record(playlistId, { at, what, before: trackRevision(before) });
 }
 
 /** GET one playlist folder (404 → NOT_FOUND with a pointer to list_folders). */

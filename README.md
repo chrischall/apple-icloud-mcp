@@ -266,7 +266,7 @@ recorded on disk, so a shared secret does not let one be replayed.
 | `apple_music_get_recommendations` | Your personal Apple Music recommendations ("Made for You", "Recently Played" and similar groups), each with its title and the albums, playlists or stations in it (catalog ids). | read |  |
 | `apple_music_get_replay` | Apple Music Replay: your top songs, albums and artists for the latest Replay year, or for a given year (with play counts where Apple provides them). | read |  |
 | `apple_music_get_ratings` | Whether you have loved or disliked songs, albums, playlists, music videos or stations — catalog or library ids — returning love, dislike or none per id. | read |  |
-| `apple_music_create_playlist` | Create a new playlist in your Apple Music library, optionally with tracks (up to 500 catalog or library song ids; added 100 at a time), a description, a folder and public visibility. | additive |  |
+| `apple_music_create_playlist` | Create a new playlist in your Apple Music library, optionally with tracks (up to 500 catalog or library song ids; added 100 at a time), a description, a folder and public visibility (not in APPLE_WRITE_MODE=additive). | additive |  |
 | `apple_music_add_playlist_tracks` | Append songs (up to 500 catalog or library ids) to the end of one of your library playlists. | additive |  |
 | `apple_music_create_folder` | Create a playlist folder in your Apple Music library, at the top level or inside another folder. | additive |  |
 | `apple_music_add_to_library` | Add catalog songs, albums, playlists or music videos to your Apple Music library by catalog id (up to 100 per type). | additive |  |
@@ -348,7 +348,7 @@ recorded on disk, so a shared secret does not let one be replayed.
 | Value | What is registered |
 |---|---|
 | `none` | Read tools only. |
-| `additive` | Reads, plus writes that only **add** to your own account: create a playlist or folder, append tracks, add to library/favorites, create an event (without attendees, and not in a calendar shared with other people) or a contact. Nothing existing is modified or removed and nothing is sent to anyone. |
+| `additive` | Reads, plus writes that only **add** to your own account: create a (private) playlist or folder, append tracks, add to library/favorites, create an event (without attendees, and not in a calendar shared with other people) or a contact. Nothing existing is modified or removed and nothing is sent to anyone. |
 | `all` (default) | Everything. |
 
 Gated tools are not registered at all below their mode, so no prompt or injected instruction can call them.
@@ -472,7 +472,7 @@ source checkout, `node dist/index.js doctor` also reads the repo's `.env`.
 | iCloud "credentials rejected" | The app-specific password was revoked (Apple ID password changed) or the normal password was used. Generate a new app-specific password. |
 | Apple Music 401 | Developer key problem: wrong Team/Key ID, or the key lacks MusicKit. In web mode: the `media-user-token` cookie expired — copy a fresh one. |
 | Apple Music 403 | The Music User Token expired (≈6 months), was minted with a different key, or the account has no Apple Music subscription. Run `music-auth` again (without the developer key: ask its owner for `music-auth --print-developer-token`). |
-| `PLAYLIST_CHANGED` | Apple has not caught up with the previous playlist change yet (its reads lag writes by seconds), or the playlist was edited elsewhere. Re-read with `apple_music_get_playlist` and retry. |
+| `PLAYLIST_CHANGED` | Apple has not caught up with a recent change this server made to the playlist yet (its reads lag writes by seconds), or the playlist was edited elsewhere. Reorders, track removals, duplicate-checked adds and playlist updates refuse to act on such a read. Re-read with `apple_music_get_playlist` and retry. |
 | Times are off by hours | Set `DISPLAY_TZ` to your IANA zone. |
 | Mail times out on a hosted deployment | Check `imap.mail.me.com` / `smtp.mail.me.com` are in the egress allowlist. |
 

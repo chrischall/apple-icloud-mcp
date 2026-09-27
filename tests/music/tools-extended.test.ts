@@ -647,6 +647,252 @@ describe('playlist rewrites never rebuild from a read that lags the last write',
   });
 });
 
+describe('the write log keeps every recent write, not only the latest', () => {
+  const REORDER = 'apple_music_reorder_playlist';
+  const REMOVE = 'apple_music_remove_playlist_tracks';
+  const ADD = 'apple_music_add_playlist_tracks';
+  const errorOf = (r: { data: Record<string, unknown> }) => r.data.error as Record<string, string>;
+  function three(clock?: () => number) {
+    useWeb();
+    const l = new FakeLibrary();
+    l.addPlaylist('p.A', { name: 'Road Trip', tracks: [track(1), track(2), track(3)] });
+    const fetch = installFetch(l.handler());
+    const tools = captureTools(clock ? new MusicClient({ now: clock }) : undefined);
+    const h = (name: string): GatedHandler => (tools.get(name) as CapturedTool).cb as unknown as GatedHandler;
+    return { l, tools, h, ...fetch };
+  }
+
+  it('add, add, reverse while reads lag: the rewrite is refused while the read shows the first add but not the second', async () => {
+    const { l, tools } = three();
+    l.lag = true;
+    await callTool(tools, ADD, { playlistId: 'p.A', tracks: ['777'] });
+    // The default duplicate check would run against a list missing 777, so the second add is refused…
+    const dup = await callTool(tools, ADD, { playlistId: 'p.A', tracks: ['888'] });
+    expect(errorOf(dup)).toMatchObject({ code: 'PLAYLIST_CHANGED' });
+    expect(errorOf(dup).message).toMatch(/\(add tracks, 0 s ago\).*checking for duplicates against this read could add a track twice/);
+    // …and one without the check goes ahead, says why it cannot verify, and is logged alongside the first.
+    const blind = await callTool(tools, ADD, { playlistId: 'p.A', tracks: ['888'], skipDuplicates: false });
+    expect(blind.data).toMatchObject({ added: 1, verified: false });
+    expect(blind.data.warnings).toContainEqual(expect.stringMatching(/was not showing your last change to "Road Trip" yet \(add tracks\)/));
+    expect(ids(l)).toEqual(['i.T1', 'i.T2', 'i.T3', 'i.C777', 'i.C888']);
+    // The read now shows 777 but not 888: neither "the order before" nor complete — refused, 888 kept.
+    const r = await callTool(tools, REORDER, { playlistId: 'p.A', operation: 'reverse' }, NO_ELICIT_CTX);
+    expect(errorOf(r)).toMatchObject({ code: 'PLAYLIST_CHANGED' });
+    expect(errorOf(r).message).toMatch(/\(add tracks, 0 s ago\)/);
+    const g = await callTool(tools, 'apple_music_get_playlist', { playlistId: 'p.A', allTracks: true });
+    expect(g.data.notes).toContainEqual(expect.stringMatching(/does not show the change made 0 s ago \(add tracks\) yet/));
+    expect(ids(l)).toEqual(['i.T1', 'i.T2', 'i.T3', 'i.C777', 'i.C888']);
+  });
+
+  it('remove, add, reverse while reads lag: the added track is not dropped', async () => {
+    const { l, tools, h } = three();
+    l.lag = true;
+    await callConfirmed(h(REMOVE), { playlistId: 'p.A', positions: [1] });
+    const add = await callTool(tools, ADD, { playlistId: 'p.A', tracks: ['777'], skipDuplicates: false });
+    expect(add.data.warnings).toContainEqual(expect.stringMatching(/\(remove tracks\) when this read it/));
+    expect(ids(l)).toEqual(['i.T2', 'i.T3', 'i.C777']);
+    // The read shows the removal but not the add.
+    const r = await callTool(tools, REORDER, { playlistId: 'p.A', operation: 'reverse' }, NO_ELICIT_CTX);
+    expect(errorOf(r).message).toMatch(/\(add tracks, 0 s ago\)/);
+    expect(ids(l)).toEqual(['i.T2', 'i.T3', 'i.C777']);
+    l.lag = false;
+    expect(parse(await callConfirmed(h(REORDER), { playlistId: 'p.A', operation: 'reverse' }))).toMatchObject({ verified: true });
+    expect(ids(l)).toEqual(['i.C777', 'i.T3', 'i.T2']);
+  });
+
+  it('create with 150 tracks then add: the add does not overwrite what the create expects', async () => {
+    const { l, tools } = three();
+    l.lag = true;
+    const created = await callTool(tools, 'apple_music_create_playlist', { name: 'Big', tracks: Array.from({ length: 150 }, (_, i) => String(1000 + i)) });
+    const id = created.data.id as string;
+    // The read lists the first 100 only.
+    const add = await callTool(tools, ADD, { playlistId: id, tracks: ['777'], skipDuplicates: false });
+    expect(add.data).toMatchObject({ added: 1, verified: false });
+    l.lag = true; // reads now show the create in full, not the add
+    const r = await callTool(tools, REORDER, { playlistId: id, operation: 'reverse' }, NO_ELICIT_CTX);
+    expect(errorOf(r).message).toMatch(/\(add tracks, 0 s ago\)/);
+    expect(l.playlists.get(id)!.tracks).toHaveLength(151);
+  });
+
+  it('a rewrite that went through supersedes the entries its read showed; an unconfirmed one does not', async () => {
+    const { l, tools, h } = three();
+    await callTool(tools, ADD, { playlistId: 'p.A', tracks: ['777', '777'], skipDuplicates: false });
+    // Removing 777 (every copy) is legitimate: the add's "expects two 777s" must not refuse every later change.
+    expect(parse(await callConfirmed(h(REMOVE), { playlistId: 'p.A', trackIds: ['i.C777'] }))).toMatchObject({ removed: 2, verified: true });
+    expect(parse(await callConfirmed(h(REORDER), { playlistId: 'p.A', operation: 'reverse' }))).toMatchObject({ verified: true });
+    expect(ids(l)).toEqual(['i.T3', 'i.T2', 'i.T1']);
+
+    // An add expects one more copy than the earlier live add already expected, even from a read that lags it.
+    l.lag = true;
+    await callTool(tools, ADD, { playlistId: 'p.A', tracks: ['i.T1'], skipDuplicates: false });
+    await callTool(tools, ADD, { playlistId: 'p.A', tracks: ['i.T1'], skipDuplicates: false });
+    expect(ids(l)).toEqual(['i.T3', 'i.T2', 'i.T1', 'i.T1', 'i.T1']);
+    l.lag = false;
+    l.playlists.get('p.A')!.tracks.pop(); // a read with two copies still misses one
+    const short = await callTool(tools, REORDER, { playlistId: 'p.A', operation: 'dedupe' }, NO_ELICIT_CTX);
+    expect(errorOf(short).message).toMatch(/\(add tracks, 0 s ago\)/);
+  });
+
+  it('an unconfirmed rewrite is kept alongside the earlier entries', async () => {
+    const { l } = three();
+    installFetch((req: FakeReq) => (req.method === 'PUT' ? { status: 503, json: { errors: [{ status: '503', title: 'Nope' }] } } : undefined), l.handler());
+    const tools = captureTools();
+    const h = (name: string): GatedHandler => (tools.get(name) as CapturedTool).cb as unknown as GatedHandler;
+    l.lag = true;
+    await callTool(tools, ADD, { playlistId: 'p.A', tracks: ['777'] });
+    l.lag = false;
+    const r = parse(await callConfirmed(h(REORDER), { playlistId: 'p.A', operation: 'reverse' }));
+    expect(r.error).toMatchObject({ code: 'UNCONFIRMED_WRITE' });
+    // The PUT never landed and 777 vanishes elsewhere: the add's entry is still there to catch it.
+    l.playlists.get('p.A')!.tracks.pop();
+    const next = await callTool(tools, REORDER, { playlistId: 'p.A', operation: 'dedupe' }, NO_ELICIT_CTX);
+    expect(errorOf(next).message).toMatch(/\(add tracks, 0 s ago\)/);
+  });
+});
+
+describe('a prompt acceptance is bound to the playlist the user was shown', () => {
+  type Ask = { resultType?: string; requestState: string; inputRequests: { confirmation: { params: { message: string } } } };
+  const accepted = (requestState: string) => ({
+    mcpReq: { ...CAN_ASK_CTX.mcpReq, inputResponses: { confirmation: { action: 'accept', content: { confirmed: true } } }, requestState: () => requestState },
+  });
+  function prompted(tracks = [track(1), track(2), track(3)]) {
+    useWeb();
+    const l = new FakeLibrary();
+    l.addPlaylist('p.A', { name: 'Road Trip', tracks });
+    installFetch(l.handler());
+    const tools = captureTools();
+    const h = (name: string): GatedHandler => (tools.get(name) as CapturedTool).cb as unknown as GatedHandler;
+    return { l, h };
+  }
+
+  it('positional removal: a reorder between prompt and acceptance asks again instead of removing another track', async () => {
+    const { l, h } = prompted();
+    const tool = h('apple_music_remove_playlist_tracks');
+    const args = { playlistId: 'p.A', positions: [1] };
+    const ask = (await tool(args, CAN_ASK_CTX)) as unknown as Ask;
+    expect(ask.inputRequests.confirmation.params.message).toContain('Song 1');
+    // Reordered on the phone while the prompt is open: position 1 is now Song 3.
+    const pl = l.playlists.get('p.A')!;
+    pl.tracks = [pl.tracks[2]!, pl.tracks[1]!, pl.tracks[0]!];
+    const again = (await tool(args, accepted(ask.requestState))) as unknown as Ask;
+    expect(again.resultType).toBe('input_required');
+    expect(again.inputRequests.confirmation.params.message).toContain('Song 3');
+    expect(l.writes).toEqual([]);
+    expect(ids(l)).toEqual(['i.T3', 'i.T2', 'i.T1']);
+    // The acceptance of what IS shown now goes through.
+    const done = await tool(args, accepted(again.requestState));
+    expect(parse(done)).toMatchObject({ removed: 1, verified: true });
+    expect(ids(l)).toEqual(['i.T2', 'i.T1']);
+  });
+
+  it('delete_playlist: tracks added between prompt and acceptance ask again', async () => {
+    const { l, h } = prompted([track(1)]);
+    const tool = h('apple_music_delete_playlist');
+    const ask = (await tool({ playlistId: 'p.A' }, CAN_ASK_CTX)) as unknown as Ask;
+    l.playlists.get('p.A')!.tracks.push(track(7), track(8));
+    const again = (await tool({ playlistId: 'p.A' }, accepted(ask.requestState))) as unknown as Ask;
+    expect(again.resultType).toBe('input_required');
+    expect(again.inputRequests.confirmation.params.message).toContain('3 tracks');
+    expect(l.playlists.has('p.A')).toBe(true);
+    expect(l.writes).toEqual([]);
+  });
+});
+
+describe('apple_music_update_playlist never sends back what a lagging read still shows', () => {
+  const UPDATE = 'apple_music_update_playlist';
+  const errorOf = (r: { data: Record<string, unknown> }) => r.data.error as Record<string, string>;
+  function one(p: { name: string; description?: string; isPublic?: boolean }, clock?: () => number) {
+    useWeb();
+    const l = new FakeLibrary();
+    l.addPlaylist('p.A', p);
+    const fetch = installFetch(l.handler());
+    return { l, tools: captureTools(clock ? new MusicClient({ now: clock }) : undefined), ...fetch };
+  }
+
+  it('make private, then rename while reads lag: refused, never re-published', async () => {
+    const { l, tools, calls } = one({ name: 'Summer', description: 'beach', isPublic: true });
+    l.lag = true;
+    expect((await callTool(tools, UPDATE, { playlistId: 'p.A', isPublic: false })).data).toMatchObject({ changed: true, verified: false });
+    expect(l.playlists.get('p.A')!.isPublic).toBe(false);
+    const second = await callTool(tools, UPDATE, { playlistId: 'p.A', name: 'Beach' });
+    expect(second.isError).toBe(true);
+    expect(errorOf(second)).toMatchObject({ code: 'PLAYLIST_CHANGED', service: 'music', playlistId: 'p.A' });
+    expect(errorOf(second).message).toMatch(/^Apple is not showing your last change to "Summer" yet \(update playlist, 0 s ago: isPublic set to false but still reads true\)\..*would undo that change/);
+    expect(errorOf(second).hint).toMatch(/lapses 120 s/);
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1);
+    expect(l.playlists.get('p.A')).toMatchObject({ isPublic: false, name: 'Summer' });
+    // "Nothing to change" is not claimed from the stale read either (setting it back to what the read shows).
+    const back = await callTool(tools, UPDATE, { playlistId: 'p.A', isPublic: true });
+    expect(errorOf(back)).toMatchObject({ code: 'PLAYLIST_CHANGED' });
+    l.lag = false;
+    expect((await callTool(tools, UPDATE, { playlistId: 'p.A', name: 'Beach' })).data).toMatchObject({ changed: true, verified: true });
+    expect(l.playlists.get('p.A')).toMatchObject({ isPublic: false, name: 'Beach' });
+  });
+
+  it('rename, then change the description while reads lag: the rename survives; the check lapses after its TTL', async () => {
+    let clock = Date.parse('2026-09-27T12:00:00Z');
+    const { l, tools } = one({ name: 'Road Trip', description: 'loud', isPublic: false }, () => clock);
+    l.lag = true;
+    await callTool(tools, UPDATE, { playlistId: 'p.A', name: 'Summer' });
+    clock += 5000;
+    const second = await callTool(tools, UPDATE, { playlistId: 'p.A', description: 'beach' });
+    expect(errorOf(second).message).toMatch(/\(update playlist, 5 s ago: name set to "Summer" but still reads "Road Trip"\)/);
+    expect(l.playlists.get('p.A')!.name).toBe('Summer');
+    clock += PLAYLIST_WRITE_TTL_MS;
+    // Past the TTL the record is dropped: the update runs from what Apple shows.
+    expect((await callTool(tools, UPDATE, { playlistId: 'p.A', description: 'beach' })).data).toMatchObject({ changed: true });
+  });
+
+  it('an unconfirmed PATCH is remembered (it may have landed); a create remembers what it set', async () => {
+    const { l } = one({ name: 'Road Trip', isPublic: false });
+    installFetch((req: FakeReq) => (req.method === 'PATCH' ? { status: 503, json: { errors: [{ status: '503', title: 'Nope' }] } } : undefined), l.handler());
+    const tools = captureTools();
+    expect((await callTool(tools, UPDATE, { playlistId: 'p.A', description: 'new' })).data.error).toMatchObject({ code: 'UNCONFIRMED_WRITE' });
+    const next = await callTool(tools, UPDATE, { playlistId: 'p.A', name: 'X' });
+    expect(errorOf(next).message).toMatch(/\(update playlist, unconfirmed, 0 s ago: description set to "new" but still reads ""\)/);
+
+    installFetch(l.handler());
+    const created = await callTool(tools, 'apple_music_create_playlist', { name: 'Fresh', description: 'first' });
+    const id = created.data.id as string;
+    l.playlists.get(id)!.description = undefined; // a read that has not caught up with the description yet
+    const u = await callTool(tools, UPDATE, { playlistId: id, isPublic: true });
+    expect(errorOf(u).message).toMatch(/\(create playlist, 0 s ago: description set to "first" but still reads ""\)/);
+  });
+
+  it('verifies every field it sent: one sent back unchanged that reads differently is named', async () => {
+    const { l, tools } = one({ name: 'Road Trip', description: 'loud', isPublic: true });
+    installFetch((req: FakeReq) => {
+      if (req.method !== 'PATCH') return undefined;
+      l.playlists.get('p.A')!.name = 'Renamed';
+      l.playlists.get('p.A')!.isPublic = false; // Apple dropped the visibility it was sent back
+      return { status: 204 };
+    }, l.handler());
+    const r = await callTool(captureTools(), UPDATE, { playlistId: 'p.A', name: 'Renamed' });
+    expect(r.data).toMatchObject({ changed: true, verified: false, warnings: ['isPublic now reads false, not the true sent back unchanged — check it.'] });
+
+    // A description sent back unchanged that no longer reads at all; and a PATCH Apple refuses outright is not remembered.
+    let refuse = false;
+    installFetch((req: FakeReq) => {
+      if (req.method !== 'PATCH') return undefined;
+      if (refuse) return { status: 400, json: { errors: [{ status: '400', title: 'Bad' }] } };
+      l.playlists.get('p.A')!.description = undefined;
+      return { status: 204 };
+    }, l.handler());
+    const again = captureTools();
+    const d = await callTool(again, UPDATE, { playlistId: 'p.A', isPublic: true });
+    expect(d.data.warnings).toEqual([
+      'description now reads null, not the "loud" sent back unchanged — check it.',
+      'isPublic still reads false — Apple may not show the change yet.',
+    ]);
+    refuse = true;
+    l.addPlaylist('p.C', { name: 'C' });
+    expect((await callTool(again, UPDATE, { playlistId: 'p.C', name: 'D' })).data.error).toMatchObject({ code: 'UPSTREAM_ERROR', status: 400 });
+    // Not refused as "not showing your last change": nothing landed, so nothing was remembered.
+    refuse = false;
+    expect((await callTool(again, UPDATE, { playlistId: 'p.C', name: 'E' })).data).toMatchObject({ changed: true, previous: { name: 'C' } });
+  });
+});
+
 describe('apple_music_move_playlist', () => {
   it('moves into a folder and back to the root, verifying membership', async () => {
     const { l, tools, calls } = setup();
@@ -654,10 +900,37 @@ describe('apple_music_move_playlist', () => {
     expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ data: [{ id: 'p.F1', type: 'library-playlist-folders' }] });
     expect(r.data).toMatchObject({ backend: 'web', playlist: 'Road Trip', folderId: 'p.F1', folder: 'Chill', changed: true, verified: true });
     expect(l.playlists.get('p.A')!.parent).toBe('p.F1');
+    // A folder that already lists it is no reason to skip the move: that read can lag (see the next test).
     const again = await callTool(tools, 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'p.F1' });
-    expect(again.data).toMatchObject({ changed: false, notes: ['"Road Trip" is already in Chill.'] });
+    expect(again.data).toMatchObject({
+      changed: true,
+      // It listed the playlist before the move too, so the re-read proves nothing about this move.
+      verified: false,
+      warnings: ['Not verified: "Chill" listed "Road Trip" before the move too, so this read cannot confirm it — re-read it shortly.'],
+      notes: ['"Chill" already listed "Road Trip"; the move was sent anyway, since Apple\'s reads can lag a move made moments ago.'],
+    });
+    expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(2);
     const back = await callTool(tools, 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'root' });
     expect(back.data).toMatchObject({ folderId: 'p.playlistsroot', folder: 'the top level', verified: true });
+    const backAgain = await callTool(tools, 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'root' });
+    expect(backAgain.data).toMatchObject({
+      verified: false,
+      warnings: ['Not verified: the top level listed "Road Trip" before the move too, so this read cannot confirm it — re-read it shortly.'],
+    });
+    expect(back.data.notes).toBeUndefined();
+  });
+
+  it('moving a playlist back right after moving it out is sent, although the lagging read still lists it there', async () => {
+    const { l, tools, calls } = setup();
+    expect((await callTool(tools, 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'p.F1' })).data).toMatchObject({ changed: true, verified: true });
+    l.lag = true; // the root's children still list p.A
+    const back = await callTool(tools, 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'root' });
+    expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(2);
+    expect(l.playlists.get('p.A')!.parent).toBe('p.playlistsroot');
+    expect(back.data).toMatchObject({
+      changed: true,
+      notes: ['The top level already listed "Road Trip"; the move was sent anyway, since Apple\'s reads can lag a move made moments ago.'],
+    });
   });
 
   it('refuses a missing folder and moving into itself; lag and failures are warnings', async () => {
@@ -684,7 +957,7 @@ describe('apple_music_move_playlist', () => {
     l.addPlaylist('p.A', { name: 'A', tracks: [] });
     installFetch(route('GET', '/v1/me/library/playlist-folders/p.X', { json: { data: [{ id: 'p.X', type: 'library-playlist-folders' }] } }), route('GET', '/v1/me/library/playlist-folders/p.X/children', { json: { data: [{ id: 'p.A', type: 'library-playlists' }] } }), l.handler());
     const r = await callTool(captureTools(), 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'p.X' });
-    expect(r.data).toMatchObject({ folder: 'p.X', changed: false });
+    expect(r.data).toMatchObject({ folder: 'p.X', changed: true, verified: false, notes: [expect.stringMatching(/^"p\.X" already listed "A"/)] });
   });
 });
 

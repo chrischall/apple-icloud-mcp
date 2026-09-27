@@ -19,7 +19,7 @@ import {
 import { normalizeStorefront } from './ids.js';
 import { LABEL, isRecord, num, str, type AppleResource } from './project.js';
 import { WEB_ORIGIN, WebTokenSource, type HttpFn } from './web-token.js';
-import { PlaylistWriteLog } from './write-log.js';
+import { PlaylistAttributeLog, PlaylistWriteLog } from './write-log.js';
 
 /**
  * The Apple Music client: picks a backend for each tool call, attaches the
@@ -151,6 +151,8 @@ export class MusicClient {
   private readonly storefronts = new Map<string, string>();
   /** The playlist orders this process replaced recently, so a lagging read is not rewritten over them. */
   readonly playlistWrites = new PlaylistWriteLog();
+  /** The playlist names/descriptions/visibility this process set recently, so a lagging read is not PATCHed back. */
+  readonly playlistAttributes = new PlaylistAttributeLog();
 
   constructor(opts: MusicClientOptions = {}) {
     this.http = opts.http ?? (httpRequest as HttpFn);

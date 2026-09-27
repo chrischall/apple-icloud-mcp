@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { getDisplayTimeZone } from '../config.js';
-import { InvalidArgumentError, UnconfirmedWriteError, errorMessage } from '../errors.js';
+import { accessAllowed, getDisplayTimeZone } from '../config.js';
+import { AppleToolError, InvalidArgumentError, UnconfirmedWriteError, errorMessage } from '../errors.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonResponse } from '../tools/_shared.js';
 import { requireData, type AppleDoc, type MusicClient, type MusicSession } from './client.js';
 import { head, notesField, uniq } from './common.js';
@@ -21,15 +21,16 @@ import {
   appendWarnings,
   folderIdArg,
   playlistExists,
+  playlistStateRefusal,
   readAllLibraryTracks,
   readFolder,
   readLibraryPlaylist,
   readLibraryTracks,
   refuseReadOnly,
-  rememberPlaylistWrite,
 } from './playlists.js';
-import { attrs, catalogIdOf, compactResource, firstDataId, nameOf } from './project.js';
+import { attrs, catalogIdOf, compactResource, firstDataId, nameOf, type AppleResource } from './project.js';
 import { RATING_TYPES, assertRatingId, ratingWord, type RatingType } from './tools-library.js';
+import { unshownAppends } from './write-log.js';
 
 /**
  * Additive library writes (create, append, add, favourite) plus ratings.
@@ -92,7 +93,8 @@ export function typedIdsQuery(args: Partial<Record<TypedIdField, string[]>>, fie
 }
 
 
-async function verifyTrackCount(s: MusicSession, playlistId: string, expected: number, warnings: string[]): Promise<number | undefined> {
+/** Re-read the tracks after an append; undefined when the read stopped at the cap. */
+async function verifyTracks(s: MusicSession, playlistId: string, expected: number, warnings: string[]): Promise<AppleResource[] | undefined> {
   const after = await readLibraryTracks(s, playlistId, 0, MAX_TRACKS_READ);
   const count = after.tracks.length;
   if (!after.complete) {
@@ -103,7 +105,7 @@ async function verifyTrackCount(s: MusicSession, playlistId: string, expected: n
   if (count < expected) {
     warnings.push(`The playlist shows ${count} track(s) so far, ${expected} expected — Apple can take a while to show new tracks; re-read it later.`);
   }
-  return count;
+  return after.tracks;
 }
 
 export function registerLibraryWriteTools(server: McpServer, client: () => MusicClient): void {
@@ -115,17 +117,27 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     title: 'Create an Apple Music playlist',
     description:
       'Create a new playlist in your Apple Music library, optionally with tracks (up to 500 catalog or library song ids; ' +
-      'added 100 at a time), a description, a folder and public visibility. Returns the new playlist id (p.…) and checks ' +
-      'it by re-reading (Apple can take a few seconds to show it). Needs APPLE_MUSIC_USER_TOKEN or web-player mode.',
+      'added 100 at a time), a description, a folder and public visibility (not in APPLE_WRITE_MODE=additive). Returns ' +
+      'the new playlist id (p.…) and checks it by re-reading (Apple can take a few seconds to show it). Needs ' +
+      'APPLE_MUSIC_USER_TOKEN or web-player mode.',
     inputSchema: z.strictObject({
       name: z.string().trim().min(1).max(200).describe('Playlist name.'),
       description: z.string().max(1000).optional().describe('Playlist description.'),
       tracks: z.array(trackRefSchema).min(1).max(500).optional().describe('Songs to put in it, in order (up to 500).'),
       folderId: z.string().min(1).max(140).optional().describe('Create it inside this folder (p.… from apple_music_list_folders; default the top level).'),
-      isPublic: z.boolean().optional().describe('Show it on your Apple Music profile (default false).'),
+      isPublic: z.boolean().optional().describe('Show it on your Apple Music profile (default false; needs APPLE_WRITE_MODE=all).'),
     }),
     annotations: ANNOTATIONS.additive,
     handler: async (args) => {
+      // Read at call time, like the mode itself. A public playlist is shown to other people, which additive mode
+      // (only adds to your own account; nothing reaches anyone else) never allows — as calendar create refuses attendees.
+      if (args.isPublic === true && !accessAllowed('all')) {
+        throw new AppleToolError(
+          'UNSUPPORTED',
+          'A public playlist shows on your Apple Music profile to other people, which APPLE_WRITE_MODE=additive never allows. Nothing was created.',
+          { hint: 'Create it private (leave out isPublic), or set APPLE_WRITE_MODE=all.' },
+        );
+      }
       const refs = (args.tracks ?? []).map((r, i) => resolveTrackRef(r, `tracks[${i}]`));
       const parent = args.folderId !== undefined ? folderIdArg(args.folderId) : undefined;
       if (parent !== undefined) assertLibraryPlaylistId(parent, 'folderId', 'folder');
@@ -164,9 +176,10 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
         warnings.push(...appendWarnings(r));
       }
       // A reorder/remove must not rebuild the list from a read that shows only part of it yet (the first batch
-      // without the appended ones): that PUT would drop the rest. The new playlist has no prior order to match a
-      // stale read against, so its track count stands in for one.
-      if (added > 0) s.client.playlistWrites.record(id, { at: sentAt, what: `create playlist with ${added} tracks`, tracks: added });
+      // without the appended ones): that PUT would drop the rest. So the log expects every track that landed; and an
+      // update_playlist must not PATCH back a name/description/visibility a lagging read does not show yet.
+      s.client.playlistWrites.recordAppend(id, { at: sentAt, what: `create playlist with ${added} tracks` }, [], refs.slice(0, added), s.client.now());
+      s.client.playlistAttributes.record(id, { at: sentAt, what: 'create playlist' }, { name: args.name, description: args.description, isPublic: args.isPublic });
       let verified = false;
       let current: Record<string, unknown> | undefined;
       try {
@@ -175,7 +188,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
           warnings.push('The new playlist is not visible yet (Apple can take a few seconds); it was created — re-read it shortly.');
         } else {
           current = compactResource(seen, getDisplayTimeZone());
-          const count = refs.length > 0 ? await verifyTrackCount(s, id, added, warnings) : 0;
+          const count = refs.length > 0 ? (await verifyTracks(s, id, added, warnings))?.length : 0;
           verified = count === added && warnings.length === 0;
         }
       } catch (err) {
@@ -205,8 +218,9 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     title: 'Add tracks to an Apple Music playlist',
     description:
       'Append songs (up to 500 catalog or library ids) to the end of one of your library playlists. By default skips songs ' +
-      'already in the playlist (matched by catalog id) and reports what was skipped. Refuses playlists you cannot edit ' +
-      '(Apple-curated or collaborative). Verifies the new track count. Needs APPLE_MUSIC_USER_TOKEN or web-player mode.',
+      'already in the playlist (matched by catalog id; refused while Apple does not show your last change to it yet). ' +
+      'Refuses playlists you cannot edit (Apple-curated or collaborative). Verifies the new tracks show. Needs ' +
+      'APPLE_MUSIC_USER_TOKEN or web-player mode.',
     inputSchema: z.strictObject({
       playlistId: z.string().min(1).max(140).describe('Library playlist id (p.…) from apple_music_list_playlists.'),
       tracks: z.array(trackRefSchema).min(1).max(500).describe('Songs to append, in order (up to 500).'),
@@ -222,6 +236,14 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
       refuseReadOnly(pl, name);
       const before = await readAllLibraryTracks(s, args.playlistId);
       const skipDuplicates = args.skipDuplicates ?? true;
+      // A read that does not show this process's last change to the playlist yet (Apple's reads lag its writes)
+      // cannot be trusted as the duplicate check's list — a retried add would append its tracks a second time —
+      // nor as the baseline the new tracks are verified against.
+      if (before.complete && skipDuplicates) {
+        const stale = playlistStateRefusal(s.client, args.playlistId, name, before.tracks, undefined, 'checking for duplicates against this read could add a track twice');
+        if (stale) return stale;
+      }
+      const lagging = before.complete && !skipDuplicates ? s.client.playlistWrites.pending(args.playlistId, before.tracks, s.client.now()) : undefined;
       const notes: string[] = [...before.notes];
       const toAdd: TrackRef[] = [];
       const skipped: Array<{ id: string; reason: string }> = [];
@@ -255,16 +277,32 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
       const sentAt = s.client.now();
       const r = await appendTracks(s, args.playlistId, toAdd);
       if (r.added === 0 && r.failure && !r.failure.unconfirmed) throw r.failure.error;
-      // Something landed (or may have): a reorder/remove must not rebuild the list from a read that lags it.
-      if (before.complete) rememberPlaylistWrite(s, args.playlistId, 'add tracks', before.tracks, sentAt);
+      // Something landed (or may have — an unconfirmed batch counts): a reorder/remove must not rebuild the list from
+      // a read that does not show it.
+      const mayHaveLanded = r.failure?.unconfirmed ? r.failure.toTrack : r.added;
+      if (before.complete) {
+        s.client.playlistWrites.recordAppend(args.playlistId, { at: sentAt, what: 'add tracks' }, before.tracks, toAdd.slice(0, mayHaveLanded), s.client.now());
+      }
       const warnings = appendWarnings(r);
+      if (lagging) {
+        warnings.push(
+          `Apple was not showing your last change to "${name}" yet (${lagging.what}) when this read it, so the tracks were appended ` +
+            '(skipDuplicates: false) to a list this call cannot verify against — re-read it shortly.',
+        );
+      }
       let verified = false;
       let tracksNow: number | undefined;
       if (before.complete) {
         try {
           const expected = before.tracks.length + r.added;
-          tracksNow = await verifyTrackCount(s, args.playlistId, expected, warnings);
-          verified = tracksNow === expected && !r.failure;
+          const after = await verifyTracks(s, args.playlistId, expected, warnings);
+          tracksNow = after?.length;
+          // By presence, not only by count: under lag another write's track can make the count match.
+          const unseen = after && tracksNow! >= expected ? unshownAppends(before.tracks, toAdd.slice(0, r.added), after) : [];
+          if (unseen.length > 0) {
+            warnings.push(`Not showing in the playlist yet: ${unseen.join(', ')} — Apple can take a while to show new tracks; re-read it later.`);
+          }
+          verified = tracksNow === expected && unseen.length === 0 && !r.failure && !lagging;
         } catch (err) {
           warnings.push(`Added, but could not re-read the playlist to verify: ${errorMessage(err)}`);
         }
@@ -403,7 +441,8 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     title: 'Love or dislike an Apple Music item',
     description:
       'Set your rating on a song, album, playlist, music video or station (catalog or library id): love, dislike, or none ' +
-      'to clear it. Returns the previous rating and verifies the new one. Needs APPLE_MUSIC_USER_TOKEN or web-player mode.',
+      'to clear it. Always sends the rating (Apple\'s reads can lag its writes); returns the previous rating as read and ' +
+      'verifies the new one. Needs APPLE_MUSIC_USER_TOKEN or web-player mode.',
     inputSchema: z.strictObject({
       type: z.enum(RATING_TYPES).describe('What the id is: catalog types (songs, albums, …) or library-* types for library ids.'),
       id: z.string().min(1).max(140).describe('The item id.'),
@@ -414,9 +453,8 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
       assertRatingId(args.type, args.id, 'id');
       const s = client().session('library', 'change a rating');
       const previous = await readRating(s, args.type, args.id);
-      if (previous === args.rating) {
-        return jsonResponse({ ...head(s, { type: args.type, id: args.id }), previous, rating: args.rating, changed: false, verified: true, ...notesField(s.notes) });
-      }
+      // Sent even when the read already shows this rating: the read may lag a change made moments ago (an undo
+      // right after a love would otherwise be skipped and reported as done). PUT and DELETE are both idempotent.
       const path = `/v1/me/ratings/${args.type}/${args.id}`;
       if (args.rating === 'none') {
         await s.request({ method: 'DELETE', path, okStatuses: [404] });
@@ -427,8 +465,12 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
       let verified = false;
       try {
         const now = await readRating(s, args.type, args.id);
-        verified = now === args.rating;
-        if (!verified) warnings.push(`Apple still reports "${now}" — the change may not be visible yet.`);
+        // A read that showed this rating BEFORE the write too proves nothing about it.
+        verified = now === args.rating && previous !== args.rating;
+        if (now !== args.rating) warnings.push(`Apple still reports "${now}" — the change may not be visible yet.`);
+        else if (previous === args.rating) {
+          warnings.push(`Not verified: Apple read "${now}" before the change too, so this read cannot confirm it — re-read it shortly.`);
+        }
       } catch (err) {
         warnings.push(`Changed, but could not re-read the rating to verify: ${errorMessage(err)}`);
       }
@@ -436,10 +478,14 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
         ...head(s, { type: args.type, id: args.id }),
         previous,
         rating: args.rating,
-        changed: true,
+        // Unknown when the read already showed the new rating: it may lag the real one.
+        ...(previous !== args.rating ? { changed: true } : {}),
         verified,
         ...(warnings.length > 0 ? { warnings } : {}),
-        ...notesField(s.notes),
+        ...notesField([
+          ...s.notes,
+          previous === args.rating ? `Apple already read "${previous}"; it was sent anyway, since a read can lag a change made moments ago.` : undefined,
+        ]),
       });
     },
   });
