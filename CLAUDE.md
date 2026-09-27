@@ -162,7 +162,9 @@ won't match. A missing result list only means "empty" when the body has no other
 **Weather** — JWT header needs `id: <team>.<serviceId>` and `sub` = Services ID. Days roll over in `timeZone`
 (default: display zone) — a response warns when that zone is far from the location's solar time. Hourly
 ranges > 192 h may 400 → retried once at 192 with a note. Attribution + alert `source`/`detailsUrl` are
-mandatory and always included; alert text is never modified.
+mandatory and always included; alert text is never modified. A `weatherAlerts` set Apple didn't send is never
+turned into an empty alerts list (whether Apple omits it when none is active is [UNVERIFIED]); only a list
+Apple sent reads as "none", and not when its metadata says `temporarilyUnavailable`.
 
 **iTunes** — no auth, ~20 calls/min: one sliding-window limiter (fails fast with RATE_LIMITED past a 30 s
 wait) + 1 h response cache. No real paging upstream: tools fetch `offset+limit` (≤ 200) and slice; charts
