@@ -56,7 +56,8 @@ export interface DavClientOptions {
    * Called with the status and URL when iCloud answers 401, or 403/404/410
    * without a `<DAV:error>` body — a hint that cached discovery may be stale.
    * `getDavContext` uses it to drop its cache (on a refusal, or when the home
-   * itself is gone) so the next call rediscovers. Never called by `probe`.
+   * itself is gone) so the next call rediscovers. `probe` calls it only for a
+   * 401 (which also latches); its 403/404/410 answers never reach it.
    */
   onRefused?: (status: number, url: string) => void;
 }
@@ -124,14 +125,20 @@ class ProbeRefused extends Error {
   }
 }
 
-const PROBE_REFUSALS = new Set([401, 403, 404, 410]);
+/**
+ * Statuses a probe ANSWERS instead of throwing. Not 401: iCloud authenticates
+ * the same Apple ID on every host, so a 401 on the cached home is as definitive
+ * as one on a discovery host — it latches like any other request, and the
+ * revoked pair is not sent again to rediscover.
+ */
+const PROBE_REFUSALS = new Set([403, 404, 410]);
 
 interface SendOptions {
   headers?: Record<string, string>;
   body?: string;
   /** Conditional headers this request carries (a 412 then means one of them failed). */
   conditions?: DavPrecondition[];
-  /** Answer 401/403/404/410 with `ProbeRefused` instead of latching/throwing. */
+  /** Answer 403/404/410 with `ProbeRefused` instead of throwing (a 401 still latches). */
   probe?: boolean;
 }
 
@@ -344,11 +351,15 @@ export class DavClient {
 
   /**
    * PROPFIND Depth 0 `url` for its resourcetype and report whether it is
-   * reachable. Unlike every other method, a 401/403/404/410 is ANSWERED
+   * reachable. Unlike every other method, a 403/404/410 is ANSWERED
    * (`{ok: false, status}`) rather than thrown and does NOT latch the
    * credentials — it exists to validate a cached URL before trusting it
-   * (`getDavContext` rediscovers once on a refusal, and discovery's own
-   * requests latch). Do not use it to retry a rejected credential.
+   * (`getDavContext` rediscovers once on such an answer; a bare 403 on a
+   * partition host is ambiguous, and discovery's own requests latch). A 401
+   * is definitive on every iCloud host, so it latches and throws
+   * `CredentialsRejectedError` exactly as any other request would — a
+   * revoked pair is never re-sent to rediscover. Do not use it to retry a
+   * rejected credential.
    */
   async probe(url: string): Promise<DavProbeResult> {
     try {

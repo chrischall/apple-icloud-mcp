@@ -323,16 +323,14 @@ describe('getDavContext', () => {
     }
   });
 
-  it('a 401 from the cached home does not latch by itself; the rediscovery at the root does', async () => {
+  it('a 401 from the cached home latches at once: a revoked pair is sent ONCE on a cold start, not again to rediscover', async () => {
     setCreds();
     await getDavContext('calendar', { request: fake(...calendarDiscovery()).request });
-    forgetDavContext(undefined, { memoryOnly: true });
-    const f = fake(
-      { method: 'PROPFIND', url: HOME, status: 401 },
-      { method: 'PROPFIND', url: 'https://caldav.icloud.com/', status: 401 },
-    );
+    expect(existsSync(stateFile('calendar'))).toBe(true);
+    forgetDavContext(undefined, { memoryOnly: true }); // cold start: memory gone, disk record kept
+    const f = fake({ method: 'PROPFIND', url: HOME, status: 401 });
     await expect(getDavContext('calendar', { request: f.request })).rejects.toBeInstanceOf(CredentialsRejectedError);
-    expect(f.remaining).toHaveLength(0); // the root WAS asked: the probe's 401 did not latch
+    expect(f.calls.map((c) => `${c.method} ${String(c.url)}`)).toEqual([`PROPFIND ${HOME}`]); // the root was NOT asked
     expect(existsSync(stateFile('calendar'))).toBe(false);
     const again = fake();
     await expect(getDavContext('calendar', { request: again.request })).rejects.toThrow(/already rejected/);
