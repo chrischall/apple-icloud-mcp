@@ -540,6 +540,11 @@ describe('window helpers', () => {
     process.env.DISPLAY_TZ = 'europe/berlin';
     expect(resolveZone(undefined)).toBe('Europe/Berlin');
     expect(resolveZone('europe/london')).toBe('Europe/London');
+    expect(resolveZone('US/Eastern')).toBe('America/New_York');
     expect(() => resolveZone('-04:00')).toThrow(/not an IANA time zone/);
+    expect(() => resolveZone('+0530')).toThrow(/not an IANA time zone/);
+    // U+2212 MINUS SIGN: Intl accepts it and resolves it to "-04:00".
+    expect(() => resolveZone('\u221204:00')).toThrow(/not an IANA time zone/);
+    expect(() => resolveZone('Mars/Olympus_Mons')).toThrow(/not an IANA time zone/);
   });
 });

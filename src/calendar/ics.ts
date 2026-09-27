@@ -1,6 +1,7 @@
 import ICAL from 'ical.js';
 import { tzlib_get_ical_block, tzlib_get_timezones } from 'timezones-ical-library';
-import { UpstreamError } from '../errors.js';
+import { canonicalTimeZone } from '../config.js';
+import { InvalidArgumentError, UpstreamError } from '../errors.js';
 import { addDaysYmd, startOfDay, zonedParts, zonedToInstant } from '../time.js';
 
 /**
@@ -118,14 +119,28 @@ function zoneNames(): Set<string> {
 }
 
 /**
+ * The name the library knows `zone` by: the name itself, else the runtime's
+ * canonical spelling of it. The library's lookup is case-sensitive while
+ * `Intl` is not, so `america/new_york` — a zone every other layer accepts —
+ * would otherwise miss, and a write would silently fall back to UTC (a
+ * repeating event then drifts an hour at every DST change).
+ */
+function libraryZone(zone: string): string | undefined {
+  if (zoneNames().has(zone)) return zone;
+  const canonical = canonicalTimeZone(zone);
+  return canonical !== undefined && zoneNames().has(canonical) ? canonical : undefined;
+}
+
+/**
  * A VTIMEZONE component for an IANA zone, with its TZID set to `tzid` (the
  * library resolves aliases — `US/Eastern` comes back as `America/New_York` —
  * and a reference must find a definition under the name it used). Undefined
  * when the zone is unknown.
  */
 export function vtimezoneFor(zone: string, tzid: string = zone): Component | undefined {
-  if (!zoneNames().has(zone)) return undefined;
-  const [block] = tzlib_get_ical_block(zone) as string[];
+  const known = libraryZone(zone);
+  if (known === undefined) return undefined;
+  const [block] = tzlib_get_ical_block(known) as string[];
   const comp = ICAL.Component.fromString(block as string);
   comp.updatePropertyWithValue('tzid', tzid);
   return comp;
@@ -133,8 +148,9 @@ export function vtimezoneFor(zone: string, tzid: string = zone): Component | und
 
 /** The TZID the library uses for `zone` (its canonical name), or undefined when unknown. */
 function canonicalTzid(zone: string): string | undefined {
-  if (!zoneNames().has(zone)) return undefined;
-  const [, line] = tzlib_get_ical_block(zone) as string[];
+  const known = libraryZone(zone);
+  if (known === undefined) return undefined;
+  const [, line] = tzlib_get_ical_block(known) as string[];
   return (line as string).replace(/^TZID=/, '');
 }
 
@@ -339,10 +355,14 @@ export function textProp(comp: Component, name: string): string | undefined {
   return s.length > 0 ? s : undefined;
 }
 
-/** Set a text property; undefined or `''` removes it. */
+/**
+ * Set a text property; undefined or `''` removes it. A CRLF or a bare CR is
+ * stored as LF: ical.js escapes LF in a TEXT value but writes a CR raw, and a
+ * raw CR is a line break to a parser that splits on it.
+ */
 export function setTextProp(comp: Component, name: string, value: string | undefined): void {
   if (value === undefined || value === '') comp.removeAllProperties(name);
-  else comp.updatePropertyWithValue(name, value);
+  else comp.updatePropertyWithValue(name, value.replace(/\r\n?/g, '\n'));
 }
 
 /** Bump SEQUENCE and restamp DTSTAMP / LAST-MODIFIED — what calendar clients do on every change. */
@@ -650,6 +670,54 @@ export function serialize(vcal: Component): string {
   const [name, props, comps] = vcal.toJSON() as JCal;
   const zones = comps.filter((c) => c[0] === 'vtimezone');
   return ICAL.stringify([name, props, [...zones, ...comps.filter((c) => c[0] !== 'vtimezone')]]);
+}
+
+/** Properties whose VALUE decides who iCloud emails (and which event it is), compared by value, not just by name. */
+const IDENTITY_PROPS = new Set(['organizer', 'attendee', 'uid']);
+
+/**
+ * A comparable outline of a component tree: every component, and in each the
+ * names of its properties — with the value, for ORGANIZER / ATTENDEE / UID.
+ * Order-insensitive (serialize moves VTIMEZONEs first).
+ */
+function outline(comp: Component): string {
+  const props = comp
+    .getAllProperties()
+    .map((p) => (IDENTITY_PROPS.has(p.name) ? `${p.name}=${String(p.getFirstValue())}` : p.name))
+    .sort();
+  const children = comp.getAllSubcomponents().map(outline).sort();
+  return JSON.stringify([comp.name, props, children]);
+}
+
+/**
+ * `serialize` for a write, checked: the text is parsed back and must describe
+ * exactly the tree it was made from — the same components, the same
+ * properties, the same ORGANIZER / ATTENDEEs — with no line break inside a
+ * line. Every value is validated at the tool's schema, but ical.js writes a
+ * URI value (URL) unescaped and a CR in a TEXT value raw, so one that got
+ * through would end its line and start another property: an injected
+ * ATTENDEE is an invitation iCloud emails, which neither the confirm gate nor
+ * APPLE_WRITE_MODE=additive (both of which read the ATTENDEEs they were
+ * given) would ever see. Refused before anything is sent.
+ */
+export function serializeForWrite(vcal: Component): string {
+  const text = serialize(vcal);
+  let intact = !/\r(?!\n)|(?<!\r)\n/.test(text);
+  if (intact) {
+    try {
+      intact = outline(ICAL.Component.fromString(text)) === outline(vcal);
+    } catch {
+      intact = false;
+    }
+  }
+  if (!intact) {
+    throw new InvalidArgumentError(
+      'calendar: a value in this request contains a line break or control character that would change the event\'s structure ' +
+        '(it would add properties — such as an ATTENDEE, whom iCloud would email — or break the event). Nothing was written.',
+      'Remove line breaks and control characters from title, location, url and attendee names.',
+    );
+  }
+  return text;
 }
 
 export { ICAL };

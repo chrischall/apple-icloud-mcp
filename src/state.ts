@@ -25,13 +25,18 @@ export function isStateCacheEnabled(env: EnvSource = process.env): boolean {
 
 export interface StateCache<T> {
   load(): T | null;
-  save(value: T): void;
+  /**
+   * Write the record. Never throws; returns whether it was actually written
+   * (false when caching is off or the write failed), for the rare caller that
+   * must fall back to something else when it was not.
+   */
+  save(value: T): boolean;
   clear(): void;
 }
 
 const NOOP: StateCache<never> = {
   load: () => null,
-  save: () => undefined,
+  save: () => false,
   clear: () => undefined,
 };
 
@@ -53,8 +58,10 @@ export function stateCache<T>(
     save: (value) => {
       try {
         store.save(value);
+        return true;
       } catch (err) {
         console.error(`[aws-mcp] WARNING: could not write cache ${fileName}: ${err instanceof Error ? err.message : String(err)}`);
+        return false;
       }
     },
     clear: () => {

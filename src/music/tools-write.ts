@@ -26,6 +26,7 @@ import {
   readLibraryPlaylist,
   readLibraryTracks,
   refuseReadOnly,
+  rememberPlaylistWrite,
 } from './playlists.js';
 import { attrs, catalogIdOf, compactResource, firstDataId, nameOf } from './project.js';
 import { RATING_TYPES, assertRatingId, ratingWord, type RatingType } from './tools-library.js';
@@ -127,7 +128,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     handler: async (args) => {
       const refs = (args.tracks ?? []).map((r, i) => resolveTrackRef(r, `tracks[${i}]`));
       const parent = args.folderId !== undefined ? folderIdArg(args.folderId) : undefined;
-      if (parent !== undefined) assertLibraryPlaylistId(parent, 'folderId');
+      if (parent !== undefined) assertLibraryPlaylistId(parent, 'folderId', 'folder');
       const s = client().session('library', 'create a playlist');
       if (parent !== undefined && parent !== ROOT_FOLDER_ID) await readFolder(s, parent);
       const first = refs.slice(0, TRACK_WRITE_BATCH);
@@ -208,7 +209,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     }),
     annotations: ANNOTATIONS.additive,
     handler: async (args) => {
-      assertLibraryPlaylistId(args.playlistId, 'playlistId');
+      assertLibraryPlaylistId(args.playlistId, 'playlistId', 'edit');
       const refs = args.tracks.map((r, i) => resolveTrackRef(r, `tracks[${i}]`));
       const s = client().session('library', 'add tracks to a playlist');
       const pl = await readLibraryPlaylist(s, args.playlistId);
@@ -246,8 +247,11 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
           skipped,
         });
       }
+      const sentAt = s.client.now();
       const r = await appendTracks(s, args.playlistId, toAdd);
       if (r.added === 0 && r.failure && !r.failure.unconfirmed) throw r.failure.error;
+      // Something landed (or may have): a reorder/remove must not rebuild the list from a read that lags it.
+      if (before.complete) rememberPlaylistWrite(s, args.playlistId, 'add tracks', before.tracks, sentAt);
       const warnings = appendWarnings(r);
       let verified = false;
       let tracksNow: number | undefined;
@@ -294,7 +298,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     annotations: ANNOTATIONS.additive,
     handler: async (args) => {
       const parent = folderIdArg(args.parentFolderId ?? 'root');
-      assertLibraryPlaylistId(parent, 'parentFolderId');
+      assertLibraryPlaylistId(parent, 'parentFolderId', 'folder');
       const s = client().session('library', 'create a playlist folder');
       if (parent !== ROOT_FOLDER_ID) await readFolder(s, parent);
       const res = await s.request({

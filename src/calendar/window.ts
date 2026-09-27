@@ -1,4 +1,4 @@
-import { getDisplayTimeZone, isValidTimeZone } from '../config.js';
+import { canonicalTimeZone, getDisplayTimeZone } from '../config.js';
 import { InvalidArgumentError } from '../errors.js';
 import { addDaysYmd, formatInstant, parseDateInput, putInstant, startOfDay, ymdInZone, zonedParts, zonedToInstant } from '../time.js';
 
@@ -22,17 +22,21 @@ export interface Window {
   /** Exclusive. */
   to: Date;
   zone: string;
-  /** True when `fromDate` was not given (the window starts at the beginning of today). */
-  fromDefaulted: boolean;
 }
 
-/** The zone for a call: a validated `timeZone` argument, else DISPLAY_TZ (read now). */
+/**
+ * The zone for a call: the `timeZone` argument in its CANONICAL spelling,
+ * else DISPLAY_TZ (read now, already canonical). The name travels on — into
+ * TZIDs, VTIMEZONE lookups and responses — where `america/new_york` is not
+ * the identifier `America/New_York` is, although `Intl` accepts both.
+ */
 export function resolveZone(timeZone: string | undefined): string {
   if (timeZone === undefined) return getDisplayTimeZone();
-  if (!isValidTimeZone(timeZone)) {
+  const canonical = canonicalTimeZone(timeZone);
+  if (canonical === undefined) {
     throw new InvalidArgumentError(`timeZone "${timeZone}" is not a known IANA time zone.`, 'Use a zone like America/New_York or Europe/London.');
   }
-  return timeZone;
+  return canonical;
 }
 
 /** `instant` moved by `days` calendar days at the same wall-clock time in `zone` (DST-safe). */
@@ -74,7 +78,7 @@ export function resolveWindow(args: WindowArgs, opts: { zone: string; now: Date;
     // daysAhead is bounded by its schema (1 … maxDays), so this never exceeds the maximum.
     to = addDaysWall(from, args.daysAhead ?? defaultDays, zone);
   }
-  return { from, to, zone, fromDefaulted: args.fromDate === undefined };
+  return { from, to, zone };
 }
 
 /** `{from, fromDisplay, to, toDisplay, timeZone}` — stated on every windowed response. */

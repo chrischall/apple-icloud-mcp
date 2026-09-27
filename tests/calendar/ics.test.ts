@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { UpstreamError } from '../../src/errors.js';
+import { InvalidArgumentError, UpstreamError } from '../../src/errors.js';
 import {
   ICAL,
   addTimeProp,
@@ -27,6 +27,7 @@ import {
   readOrganizer,
   ruleOf,
   serialize,
+  serializeForWrite,
   setAlarms,
   setAttendees,
   setTextProp,
@@ -163,6 +164,17 @@ describe('time zones', () => {
     expect(vtimezoneFor('Nowhere/Land')).toBeUndefined();
     expect(vtimezoneFor('US/Eastern')?.getFirstPropertyValue('tzid')).toBe('US/Eastern');
     expect(vtimezoneFor(NY, 'X')?.getFirstPropertyValue('tzid')).toBe('X');
+    // The library's lookup is case-sensitive, Intl's is not: a mis-cased zone still finds its definition, under its own name.
+    expect(vtimezoneFor('america/new_york')?.getFirstPropertyValue('tzid')).toBe('america/new_york');
+    expect(vtimezoneFor('america/new_york')?.toString()).toContain('TZOFFSETTO:-0400');
+  });
+
+  it('writes a mis-cased zone with its real TZID, never as UTC (a series would drift an hour at DST)', () => {
+    const vcal = newCalendar();
+    const wz = zoneForWrite(vcal, 'america/new_york');
+    expect(wz.kind === 'tz' && wz.tz.tzid).toBe(NY);
+    expect(zoneForWrite(vcal, 'EUROPE/LONDON')).toMatchObject({ kind: 'tz' });
+    expect(vcal.getAllSubcomponents('vtimezone').map((z) => z.getFirstPropertyValue('tzid'))).toEqual([NY, 'Europe/London']);
   });
 
   it('chooses a write zone: UTC aliases and unknown zones as UTC, an IANA zone by its canonical TZID (added once)', () => {
@@ -442,6 +454,58 @@ describe('recurrence rules', () => {
     expect(buildRule({ frequency: 'yearly' }, dateValue('2030-01-01')).toString()).toBe('FREQ=YEARLY;UNTIL=20300101');
     expect(ruleOf(event('DTSTART:20261020T130000Z'))).toBeUndefined();
     expect(ruleOf(event('DTSTART:20261020T130000Z', 'RRULE:FREQ=DAILY'))?.freq).toBe('DAILY');
+  });
+});
+
+describe('serializeForWrite', () => {
+  const build = (edit: (ev: Component) => void): Component => {
+    const vcal = newCalendar();
+    const ev = newEvent('U1', new Date('2026-10-20T16:00:00Z'));
+    vcal.addSubcomponent(ev);
+    setTimeProp(ev, 'dtstart', timeAt(new Date('2026-10-20T13:00:00Z'), zoneForWrite(vcal, NY)));
+    edit(ev);
+    return vcal;
+  };
+
+  it('returns the serialized text when it reads back as the same event', () => {
+    const vcal = build((ev) => {
+      setTextProp(ev, 'summary', 'Lunch');
+      setTextProp(ev, 'description', 'line one\r\nline two\rline three');
+      setTextProp(ev, 'url', 'https://x.test/a?b=c');
+      ensureOrganizer(ev, 'me@icloud.com');
+      setAttendees(ev, [{ email: 'ann@x.com', name: 'Ann' }], new Set());
+    });
+    expect(serializeForWrite(vcal)).toBe(serialize(vcal));
+    // CR / CRLF in a text value is stored as an (escaped) LF, never as a raw CR.
+    expect(serialize(vcal)).toContain('DESCRIPTION:line one\\nline two\\nline three');
+  });
+
+  it('refuses text in which a value would start another property: an injected ATTENDEE is an email iCloud sends', () => {
+    const raw = (value: string) => build((ev) => ev.updatePropertyWithValue('url', value));
+    const injected = raw('https://x.test/\r\nATTENDEE;RSVP=TRUE:mailto:victim@x.com');
+    // ical.js writes a URI value unescaped: the text really does carry a second property.
+    expect(serialize(injected)).toContain('\r\nATTENDEE;RSVP=TRUE:mailto:victim@x.com');
+    expect(() => serializeForWrite(injected)).toThrow(InvalidArgumentError);
+    expect(() => serializeForWrite(injected)).toThrow(/would change the event's structure .* Nothing was written/);
+    // A replaced organizer, a second event, and a line that breaks the parse are all refused the same way.
+    const organizer = build((ev) => ensureOrganizer(ev, 'me@icloud.com\r\nORGANIZER:mailto:boss@x.com'));
+    expect(() => serializeForWrite(organizer)).toThrow(InvalidArgumentError);
+    expect(() => serializeForWrite(raw('https://x.test/\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:evil'))).toThrow(InvalidArgumentError);
+    expect(() => serializeForWrite(raw('https://x.test/\r\nnot a property'))).toThrow(InvalidArgumentError);
+    // Through setTextProp a CRLF becomes a bare LF, which is refused as a line break inside a line.
+    const viaSetter = build((ev) => setTextProp(ev, 'url', 'https://x.test/\r\nATTENDEE:mailto:victim@x.com'));
+    expect(serialize(viaSetter)).toContain('URL:https://x.test/\nATTENDEE');
+    expect(() => serializeForWrite(viaSetter)).toThrow(InvalidArgumentError);
+  });
+
+  it('refuses a raw CR or LF inside a line (a parser that splits on either would read a new property)', () => {
+    const cr = build((ev) => ev.updatePropertyWithValue('summary', 'a\rATTENDEE:mailto:victim@x.com'));
+    expect(serialize(cr)).toContain('SUMMARY:a\rATTENDEE');
+    expect(() => serializeForWrite(cr)).toThrow(InvalidArgumentError);
+    const lf = build((ev) => ev.updatePropertyWithValue('url', 'https://x.test/\nX-A:b'));
+    expect(() => serializeForWrite(lf)).toThrow(InvalidArgumentError);
+    const cn = build((ev) => setAttendees(ev, [{ email: 'ann@x.com', name: 'Ann\rX' }], new Set()));
+    expect(() => serializeForWrite(cn)).toThrow(InvalidArgumentError);
   });
 });
 

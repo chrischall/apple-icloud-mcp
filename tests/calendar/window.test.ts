@@ -16,6 +16,9 @@ describe('resolveZone', () => {
     process.env.DISPLAY_TZ = 'Asia/Tokyo';
     expect(resolveZone(undefined)).toBe('Asia/Tokyo');
     expect(resolveZone(NY)).toBe(NY);
+    // The canonical spelling, not the one typed: it travels on as an iCalendar TZID, where case matters.
+    expect(resolveZone('america/new_york')).toBe(NY);
+    expect(resolveZone('US/Eastern')).toBe(NY);
     expect(() => resolveZone('-04:00')).toThrow(InvalidArgumentError);
     expect(() => resolveZone('Nowhere/Land')).toThrow(/not a known IANA time zone/);
   });
@@ -31,7 +34,7 @@ describe('addDaysWall', () => {
 describe('resolveWindow', () => {
   it('defaults to the start of today plus defaultDays', () => {
     const w = resolveWindow({}, opts);
-    expect([w.from.toISOString(), w.to.toISOString(), w.fromDefaulted]).toEqual(['2026-10-20T04:00:00.000Z', '2026-10-27T04:00:00.000Z', true]);
+    expect([w.from.toISOString(), w.to.toISOString()]).toEqual(['2026-10-20T04:00:00.000Z', '2026-10-27T04:00:00.000Z']);
     expect(windowJson(w)).toEqual({
       from: '2026-10-20T00:00:00-04:00',
       fromDisplay: 'Tue, Oct 20, 2026, 12:00 AM EDT',
@@ -43,7 +46,7 @@ describe('resolveWindow', () => {
 
   it('takes fromDate + daysAhead or toDate (exclusive), offset-less input as wall clock in the zone', () => {
     const a = resolveWindow({ fromDate: '2026-11-01T08:00', daysAhead: 1 }, opts);
-    expect([a.from.toISOString(), a.to.toISOString(), a.fromDefaulted]).toEqual(['2026-11-01T13:00:00.000Z', '2026-11-02T13:00:00.000Z', false]);
+    expect([a.from.toISOString(), a.to.toISOString()]).toEqual(['2026-11-01T13:00:00.000Z', '2026-11-02T13:00:00.000Z']);
     const b = resolveWindow({ fromDate: '2026-10-01', toDate: '2026-11-01' }, opts);
     expect([b.from.toISOString(), b.to.toISOString()]).toEqual(['2026-10-01T04:00:00.000Z', '2026-11-01T04:00:00.000Z']);
   });

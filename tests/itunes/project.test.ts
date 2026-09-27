@@ -7,6 +7,7 @@ import {
   putAppleDate,
   recordType,
 } from '../../src/itunes/project.js';
+import { formatDuration as musicFormatDuration } from '../../src/music/project.js';
 import { ALBUM, ARTIST, AUDIOBOOK, CHART_EPISODE, CHART_PLAYLIST, EBOOK, PODCAST, SOFTWARE, SONG, chartSong, episode } from './fixtures.js';
 
 const NY = 'America/New_York';
@@ -52,11 +53,22 @@ describe('putAppleDate', () => {
 });
 
 describe('formatDuration', () => {
-  it('truncates to whole seconds, with hours when needed', () => {
-    expect(formatDuration(299_560)).toBe('4:59');
+  it('rounds to the nearest whole second, with hours when needed', () => {
+    expect(formatDuration(299_560)).toBe('5:00');
+    expect(formatDuration(239_500)).toBe('4:00');
+    expect(formatDuration(239_499)).toBe('3:59');
+    expect(formatDuration(200_600)).toBe('3:21');
     expect(formatDuration(4_644_000)).toBe('1:17:24');
+    expect(formatDuration(3_599_500)).toBe('1:00:00');
     expect(formatDuration(0)).toBe('0:00');
     expect(formatDuration(3_600_000)).toBe('1:00:00');
+    expect(formatDuration(-1_000)).toBe('0:00');
+  });
+
+  it('formats every duration exactly as the apple_music_* tools do (same catalog ids, same milliseconds)', () => {
+    const samples = [0, 1, 499, 500, 999, 59_499, 59_500, 200_600, 239_500, 239_999, 299_560, 3_599_499, 3_599_500, 4_644_000, 36_000_000, -1_000];
+    for (let ms = 0; ms < 7_300_000; ms += 1_237) samples.push(ms);
+    for (const ms of samples) expect(formatDuration(ms), `${ms} ms`).toBe(musicFormatDuration(ms));
   });
 });
 
@@ -91,7 +103,7 @@ describe('compactItunesRecord', () => {
       artistName: 'Radiohead',
       releaseDate: '1997-05-21',
       releaseDateDisplay: 'Wed, May 21, 1997',
-      duration: '4:59',
+      duration: '5:00',
       durationMs: 299560,
       trackNumber: 5,
       trackCount: 12,

@@ -1,7 +1,11 @@
+import type { CallToolResult } from '@modelcontextprotocol/server';
+import { z } from 'zod';
 import { AppleToolError, UnconfirmedWriteError, UpstreamError, errorMessage } from '../errors.js';
-import { requireData, type AppleDoc, type MusicSession } from './client.js';
+import { jsonErrorResponse } from '../tools/_shared.js';
+import { requireData, type AppleDoc, type MusicClient, type MusicSession } from './client.js';
 import { ROOT_FOLDER_ID, type TrackRef } from './ids.js';
 import { attrs, catalogIdOf, isRecord, nameOf, resourceName, str, type AppleResource } from './project.js';
+import { PLAYLIST_WRITE_TTL_MS, trackRevision } from './write-log.js';
 
 /**
  * Library playlist plumbing shared by the read and write tools.
@@ -170,6 +174,100 @@ export async function appendTracks(s: MusicSession, playlistId: string, refs: Tr
     }
   }
   return { added, notAttempted: 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Rewrites must start from the order the caller (and this process) last saw
+// ---------------------------------------------------------------------------
+
+/** The `expectedRevision` argument of the playlist-rewriting tools. */
+export const expectedRevisionParam = z
+  .string()
+  .regex(/^s\d+:[A-Za-z0-9_-]{10,64}$/, 'a revision from apple_music_get_playlist or a previous playlist write')
+  .optional()
+  .describe(
+    'The playlist revision you expect: from apple_music_get_playlist (a complete read) or from the previous change\'s ' +
+      'result. Refused if the playlist no longer reads as that revision. (A change is also refused, whatever this says, ' +
+      'while Apple still shows the list as it was before this server\'s last change to it.)',
+  );
+
+/** Error code of a refusal to rewrite a playlist from a read that is not the expected state. */
+export const PLAYLIST_CHANGED = 'PLAYLIST_CHANGED';
+
+/**
+ * Refuse to rewrite a playlist from `tracks` (a fresh, complete read) when
+ *  - it still shows the order a write from THIS process replaced moments ago
+ *    (Apple's reads lag its writes; a full-list rewrite from that read would
+ *    undo the change), or
+ *  - the caller passed `expectedRevision` and the read is a different order.
+ * Returns the error result to hand back, or undefined to proceed.
+ */
+export function playlistStateRefusal(
+  c: MusicClient,
+  playlistId: string,
+  name: string,
+  tracks: readonly AppleResource[],
+  expectedRevision: string | undefined,
+): CallToolResult | undefined {
+  const currentRevision = trackRevision(tracks);
+  const now = c.now();
+  const pending = c.playlistWrites.pending(playlistId, currentRevision, now);
+  const refuse = (message: string, hint: string): CallToolResult =>
+    jsonErrorResponse({
+      error: {
+        code: PLAYLIST_CHANGED,
+        service: 'music',
+        message,
+        hint,
+        playlistId,
+        currentRevision,
+        ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+      },
+    });
+  if (pending) {
+    const ago = Math.max(0, Math.round((now - pending.at) / 1000));
+    return refuse(
+      `Apple is not showing your last change to "${name}" yet (${pending.what}, ${ago} s ago): it still lists the tracks as ` +
+        'they were before that change, and rewriting the playlist from this read would undo it. Nothing was changed.',
+      `Wait a few seconds, re-read it with apple_music_get_playlist, and retry once it shows the change (this check lapses ${PLAYLIST_WRITE_TTL_MS / 1000} s after the change).`,
+    );
+  }
+  if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
+    return refuse(
+      `"${name}" no longer reads as revision ${expectedRevision}: the playlist changed since then, or Apple has not caught up ` +
+        'with your last change yet. Nothing was changed.',
+      'Re-read it with apple_music_get_playlist (allTracks), check the order, and retry with the revision it returns.',
+    );
+  }
+  return undefined;
+}
+
+/**
+ * Send a write that replaces `before` (the playlist's order as read) and
+ * remember it, so a lagging read is not rewritten over it. An UNCONFIRMED
+ * write is remembered too: it may have landed.
+ */
+export async function recordedPlaylistWrite<T>(
+  s: MusicSession,
+  playlistId: string,
+  what: string,
+  before: readonly AppleResource[],
+  send: () => Promise<T>,
+): Promise<T> {
+  const at = s.client.now();
+  try {
+    const out = await send();
+    rememberPlaylistWrite(s, playlistId, what, before, at);
+    return out;
+  } catch (err) {
+    if (err instanceof UnconfirmedWriteError) rememberPlaylistWrite(s, playlistId, `${what}, unconfirmed`, before, at);
+    throw err;
+  }
+}
+
+/** Remember that a write sent at `at` replaced the order `before` (see PlaylistWriteLog). */
+export function rememberPlaylistWrite(s: MusicSession, playlistId: string, what: string, before: readonly AppleResource[], at: number): void {
+  s.client.playlistWrites.record(playlistId, { at, what, before: trackRevision(before) });
 }
 
 /** GET one playlist folder (404 → NOT_FOUND with a pointer to list_folders). */

@@ -13,6 +13,10 @@ vi.mock('@chrischall/mcp-utils/session', async (importOriginal) => {
   return { ...actual, createFileStatePersistence: () => store };
 });
 
+// tests/_setup.ts already imported src/state.js (through src/icloud-auth.js,
+// whose latch persists through it) before this file's mock was registered, so
+// the cached instance holds the REAL store. Drop it and import a fresh one.
+vi.resetModules();
 const { stateCache } = await import('../src/state.js');
 
 afterEach(() => {
@@ -25,7 +29,7 @@ describe('stateCache (failure shapes)', () => {
       throw 'disk full';
     });
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    stateCache('x.json', 'b', (r) => r).save({ a: 1 });
+    expect(stateCache('x.json', 'b', (r) => r).save({ a: 1 })).toBe(false);
     expect(err).toHaveBeenCalledWith('[aws-mcp] WARNING: could not write cache x.json: disk full');
   });
 

@@ -28,8 +28,14 @@ describe('registration', () => {
     expect(tools.get('apple_calendar_create_event')!.cfg.annotations).toMatchObject({ destructiveHint: false, idempotentHint: false });
     expect(tools.get('apple_calendar_update_event')!.cfg.annotations).toMatchObject({ destructiveHint: true, idempotentHint: true });
     expect(tools.get('apple_calendar_delete_event')!.cfg.annotations).toMatchObject({ destructiveHint: true, idempotentHint: true });
-    for (const name of ['apple_calendar_create_event', 'apple_calendar_update_event', 'apple_calendar_delete_event']) {
-      expect(tools.get(name)!.cfg.description.endsWith(CONFIRM_NOTE), name).toBe(true);
+    // Delete always asks. Create and update ask only when iCloud will email attendees, and their descriptions must say
+    // so: the generic note ("the first call performs NO write") would have a model use a plain create as a dry run.
+    expect(tools.get('apple_calendar_delete_event')!.cfg.description.endsWith(CONFIRM_NOTE)).toBe(true);
+    for (const [name, verb] of [['apple_calendar_create_event', 'creates'], ['apple_calendar_update_event', 'changes']] as const) {
+      const description = tools.get(name)!.cfg.description;
+      expect(description.includes(CONFIRM_NOTE), name).toBe(false);
+      expect(description, name).toMatch(/attendees it asks first \(iCloud emails them\)/);
+      expect(description.endsWith(`Without attendees the first call ${verb} the event immediately.`), name).toBe(true);
     }
   });
 
@@ -82,6 +88,38 @@ describe('input schemas', () => {
     expect(ok('apple_calendar_find_free_time', { workdayStart: '8:30' })).toBe(false);
     expect(ok('apple_calendar_find_free_time', { workdayEnd: '24:00' })).toBe(false);
     expect(ok('apple_calendar_find_free_time', { minDurationMinutes: 4 })).toBe(false);
+    for (const tool of ['apple_calendar_list_events', 'apple_calendar_search_events']) {
+      const q = tool === 'apple_calendar_search_events' ? { query: 'x' } : {};
+      expect(ok(tool, { ...q, view: 'compact' }), tool).toBe(true);
+      expect(ok(tool, { ...q, view: 'full' }), tool).toBe(true);
+      expect(ok(tool, { ...q, view: 'raw' }), tool).toBe(false);
+    }
+    expect(ok('apple_calendar_get_event', { eventId: 'a/b.ics', view: 'compact' })).toBe(false);
+  });
+
+  it('refuse line breaks and control characters in anything written into the event (they would inject iCalendar lines)', () => {
+    const base = { title: 'T', startDate: '2026-10-20T09:00' };
+    const INJECT = '\r\nATTENDEE;RSVP=TRUE:mailto:victim@x.com';
+    for (const tool of ['apple_calendar_create_event', 'apple_calendar_update_event']) {
+      const b = tool === 'apple_calendar_create_event' ? base : { eventId: 'a/b.ics' };
+      // URL.canParse alone accepts every one of these (the WHATWG parser strips tab, CR and LF, and encodes the rest).
+      for (const url of [`https://x.test/${INJECT}`, 'https://x.test/\n', 'https://x.test/\tx', 'https://x.test/ x', 'https://x.test/\u0085', 'https://x.test/\u2028']) {
+        expect(URL.canParse(url), url).toBe(true);
+        expect(ok(tool, { ...b, url }), `${tool} ${JSON.stringify(url)}`).toBe(false);
+      }
+      for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,x', 'ftp://x.test/']) expect(ok(tool, { ...b, url }), url).toBe(false);
+      for (const url of ['https://x.test/a?b=c#d', 'http://x.test', 'mailto:ann@x.com']) expect(ok(tool, { ...b, url }), url).toBe(true);
+      for (const field of ['title', 'location']) {
+        expect(ok(tool, { ...b, [field]: `Lunch${INJECT}` }), field).toBe(false);
+        expect(ok(tool, { ...b, [field]: 'Lunch\rx' }), field).toBe(false);
+        expect(ok(tool, { ...b, [field]: 'Lunch\tx' }), field).toBe(false);
+        expect(ok(tool, { ...b, [field]: 'Lunch — Café ☕' }), field).toBe(true);
+      }
+      expect(ok(tool, { ...b, notes: 'Line one\r\nLine two\n\tindented\rthree' })).toBe(true);
+      for (const bad of ['a\u0000b', 'a\u0007b', 'a\u000bb', 'a\u000cb', 'a\u001bb', 'a\u007fb']) expect(ok(tool, { ...b, notes: bad }), JSON.stringify(bad)).toBe(false);
+      expect(ok(tool, { ...b, attendees: [{ email: 'a@x.com', name: 'Ann\r\nATTENDEE:mailto:v@x.com' }] })).toBe(false);
+      expect(ok(tool, { ...b, attendees: [{ email: 'a@x.com', name: 'Ann B.' }] })).toBe(true);
+    }
   });
 
   it('validate event fields', () => {

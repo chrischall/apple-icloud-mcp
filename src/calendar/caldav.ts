@@ -36,8 +36,10 @@ export interface CalendarInfo {
   order?: number;
   /** Whether the account may add/edit events here; undefined when iCloud did not say. */
   writable?: boolean;
-  /** Shared with this account by someone else. */
+  /** Shared with this account by someone else (`CS:shared`). */
   shared?: boolean;
+  /** This account shares it with other people (`CS:shared-owner`). */
+  sharedByYou?: boolean;
   /** The calendar's own zone (`calendar-timezone`), informational. */
   timeZone?: string;
 }
@@ -99,6 +101,7 @@ export async function listCalendars(ctx: CalendarContext): Promise<CalendarListi
         ? { writable: privs.includes(clark(NS.DAV, 'bind')) || privs.includes(clark(NS.DAV, 'write-content')) }
         : {}),
       ...(types.includes(clark(NS.CS, 'shared')) ? { shared: true } : {}),
+      ...(types.includes(clark(NS.CS, 'shared-owner')) ? { sharedByYou: true } : {}),
       ...(tzid ? { timeZone: tzid.trim() } : {}),
     });
   }
@@ -111,16 +114,21 @@ function available(all: readonly CalendarInfo[]): string {
   return all.length === 0 ? '(none)' : all.map((c) => `"${c.name}" (id ${c.id})`).join(', ');
 }
 
+/** The calendars a name or id refers to: an exact id first, then every case-insensitive name match. */
+function matchCalendars(all: readonly CalendarInfo[], ref: string): CalendarInfo[] {
+  const byId = all.find((c) => c.id === ref || decodeIdPart(c.id) === ref);
+  if (byId) return [byId];
+  const wanted = ref.trim().toLowerCase();
+  return all.filter((c) => c.name.trim().toLowerCase() === wanted);
+}
+
 /** The calendar a name or id refers to: an exact id first, then a case-insensitive name. */
 export function resolveCalendar(all: readonly CalendarInfo[], ref: string, argName: string): CalendarInfo {
-  const byId = all.find((c) => c.id === ref || decodeIdPart(c.id) === ref);
-  if (byId) return byId;
-  const wanted = ref.trim().toLowerCase();
-  const byName = all.filter((c) => c.name.trim().toLowerCase() === wanted);
-  if (byName.length === 1) return byName[0] as CalendarInfo;
-  if (byName.length > 1) {
+  const found = matchCalendars(all, ref);
+  if (found.length === 1) return found[0] as CalendarInfo;
+  if (found.length > 1) {
     throw new InvalidArgumentError(
-      `${argName} "${ref}" matches ${byName.length} calendars with that name: ${available(byName)}.`,
+      `${argName} "${ref}" matches ${found.length} calendars with that name: ${available(found)}.`,
       'Pass the calendar id instead of its name.',
     );
   }
@@ -138,23 +146,73 @@ export function resolveCalendars(all: readonly CalendarInfo[], refs: readonly st
   return out;
 }
 
+/** Whether other people see this calendar's events: it is shared with you, or you share it. */
+export function sharedWithOthers(c: CalendarInfo): boolean {
+  return c.shared === true || c.sharedByYou === true;
+}
+
+/** One sentence saying who else sees what is added to `c`, or undefined for a calendar nobody else sees. */
+export function sharingNote(c: CalendarInfo): string | undefined {
+  if (c.shared) return `"${c.name}" is shared with you by someone else: everyone it is shared with sees the events in it.`;
+  if (c.sharedByYou) return `"${c.name}" is a calendar you share with other people: they see the events in it.`;
+  return undefined;
+}
+
+export interface TargetChoice {
+  calendar: CalendarInfo;
+  reason: string;
+  /** Set when ICLOUD_DEFAULT_CALENDAR names no calendar of this account and the automatic default was used. */
+  warning?: string;
+}
+
+/**
+ * The automatic default: the first writable calendar nobody else sees, else
+ * (when every one is shared) the first writable one. A calendar iCloud gave
+ * no privileges for counts as writable, after the ones it said are.
+ */
+function automaticDefault(all: readonly CalendarInfo[]): TargetChoice {
+  const tiers: Array<(c: CalendarInfo) => boolean> = [
+    (c) => c.writable === true && !sharedWithOthers(c),
+    (c) => c.writable === undefined && !sharedWithOthers(c),
+    (c) => c.writable === true,
+    (c) => c.writable === undefined,
+  ];
+  for (const [i, tier] of tiers.entries()) {
+    const found = all.find(tier);
+    if (!found) continue;
+    return {
+      calendar: found,
+      reason:
+        i < 2
+          ? 'the first writable calendar not shared with other people (set ICLOUD_DEFAULT_CALENDAR or pass calendar to choose)'
+          : 'the first writable calendar — every writable one is shared with other people (set ICLOUD_DEFAULT_CALENDAR or pass calendar to choose)',
+    };
+  }
+  throw new AppleToolError('NOT_FOUND', `calendar: there is no writable event calendar to add the event to. Calendars: ${available(all)}.`, {
+    hint: 'Create a calendar in Apple Calendar, or pass calendar explicitly.',
+  });
+}
+
 /**
  * The calendar a new event goes into: `calendar` if given, else
- * ICLOUD_DEFAULT_CALENDAR (read now), else the first writable one. A named
- * calendar that does not exist is an error listing the real ones — never a
- * silent fall-back to another calendar.
+ * ICLOUD_DEFAULT_CALENDAR (read now), else the automatic default. A calendar
+ * named in the REQUEST that does not exist is an error listing the real ones
+ * — never a silent fall-back to another calendar. ICLOUD_DEFAULT_CALENDAR is
+ * deployment-wide while calendars are per account, so one that names no
+ * calendar of THIS account falls back to the automatic default with a
+ * warning instead of refusing every create (an ambiguous one still refuses:
+ * it does name a calendar, just not which).
  */
-export function chooseTargetCalendar(all: readonly CalendarInfo[], ref: string | undefined): { calendar: CalendarInfo; reason: string } {
+export function chooseTargetCalendar(all: readonly CalendarInfo[], ref: string | undefined): TargetChoice {
   if (ref !== undefined) return { calendar: resolveCalendar(all, ref, 'calendar'), reason: 'named in the request' };
   const fromEnv = readEnvVar('ICLOUD_DEFAULT_CALENDAR');
-  if (fromEnv !== undefined) return { calendar: resolveCalendar(all, fromEnv, 'ICLOUD_DEFAULT_CALENDAR'), reason: 'ICLOUD_DEFAULT_CALENDAR' };
-  const first = all.find((c) => c.writable === true) ?? all.find((c) => c.writable === undefined);
-  if (!first) {
-    throw new AppleToolError('NOT_FOUND', `calendar: there is no writable event calendar to add the event to. Calendars: ${available(all)}.`, {
-      hint: 'Create a calendar in Apple Calendar, or pass calendar explicitly.',
-    });
-  }
-  return { calendar: first, reason: 'the first writable calendar (set ICLOUD_DEFAULT_CALENDAR or pass calendar to choose)' };
+  if (fromEnv === undefined) return automaticDefault(all);
+  if (matchCalendars(all, fromEnv).length > 0) return { calendar: resolveCalendar(all, fromEnv, 'ICLOUD_DEFAULT_CALENDAR'), reason: 'ICLOUD_DEFAULT_CALENDAR' };
+  const auto = automaticDefault(all);
+  return {
+    ...auto,
+    warning: `ICLOUD_DEFAULT_CALENDAR "${fromEnv}" is not one of this account's event calendars, so the automatic default "${auto.calendar.name}" is used instead.`,
+  };
 }
 
 /** Refuse up front to write into a calendar iCloud says is read-only. */
@@ -250,6 +308,20 @@ export async function fetchEvent(ctx: CalendarContext, cal: CalendarInfo, name: 
     }
     throw err;
   }
+}
+
+/**
+ * The account's own addresses that are known WITHOUT a request: its
+ * principal (iCloud rewrites the owner's ATTENDEE to that path) and the Apple
+ * ID. A subset of `selfAddresses` — enough to recognise "me" on a list row
+ * without spending a PROPFIND per call; an alias it misses is simply not
+ * recognised.
+ */
+export function knownSelfAddresses(ctx: CalendarContext): Set<string> {
+  const out = new Set([normalizeAddress(ctx.principalUrl)]);
+  const username = ctx.client.username;
+  if (username.includes('@')) out.add(`mailto:${username.toLowerCase()}`);
+  return out;
 }
 
 /**

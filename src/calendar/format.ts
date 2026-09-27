@@ -5,6 +5,7 @@ import { formatOccurrenceId } from './ids.js';
 import {
   describeRule,
   instantOf,
+  isSelf,
   readAlarms,
   readAttendees,
   readOrganizer,
@@ -14,6 +15,7 @@ import {
   tzidOf,
   ymdOf,
   type Component,
+  type Person,
   type Time,
 } from './ics.js';
 
@@ -24,8 +26,11 @@ import {
  * exclusive all-day DTEND reads as one day too many to everyone else.
  */
 
-/** How much of an event's notes a list row carries. */
+/** How much of an event's notes a `full` list row carries. */
 export const LIST_NOTES_CHARS = 500;
+
+/** How much of an event's notes a `compact` list row carries. */
+export const COMPACT_NOTES_CHARS = 200;
 
 export interface FormatContext {
   calendar: { id: string; name: string };
@@ -104,6 +109,64 @@ export function formatOccurrence(o: Occurrence, fc: FormatContext): Record<strin
   const modified = comp.getFirstPropertyValue('last-modified') as Time | null;
   if (modified) putInstant(out, 'lastModified', instantOf(modified, fc.zone), fc.zone);
   return out;
+}
+
+/** Keys a `compact` list row leaves out (`full` and apple_calendar_get_event carry them). */
+const COMPACT_DROPS = ['url', 'organizer', 'attendees', 'alarms', 'lastModified', 'lastModifiedDisplay'];
+
+/**
+ * A `compact` list/search row: the full row minus the attendee list, the
+ * organizer, alerts, url, lastModified and the raw repeat rule (its
+ * plain-English summary stays), with notes cut to COMPACT_NOTES_CHARS.
+ * `attendeeCount` replaces the list, and `myStatus` is the account's own
+ * reply when its ATTENDEE entry can be recognised from `self` (the addresses
+ * known without another request) — absent, never guessed, when it cannot.
+ */
+export function formatCompactOccurrence(o: Occurrence, fc: FormatContext, self: ReadonlySet<string>): Record<string, unknown> {
+  const out = formatOccurrence(o, { ...fc, notesLimit: COMPACT_NOTES_CHARS });
+  for (const key of COMPACT_DROPS) delete out[key];
+  if (out.recurrence) out.recurrence = { summary: (out.recurrence as { summary: string }).summary };
+  const attendees = o.comp.getAllProperties('attendee');
+  if (attendees.length > 0) {
+    out.attendeeCount = attendees.length;
+    const mine = attendees.find((p) => isSelf(p, self));
+    if (mine) {
+      const partstat = mine.getFirstParameter('partstat');
+      out.myStatus = typeof partstat === 'string' ? partstat.toLowerCase() : 'needs-action';
+    }
+  }
+  return out;
+}
+
+/** A person as a preview shows them: `Name <email>`, else whichever of the two is known. */
+export function personLabel(p: Person): string {
+  if (p.name !== undefined && p.email !== undefined) return `${p.name} <${p.email}>`;
+  return p.email ?? p.name ?? '(no address)';
+}
+
+/**
+ * Everything iCloud's invitation (or update) email carries about an
+ * occurrence, for a confirm preview: title, time and zone, location, url,
+ * the WHOLE notes, how it repeats, organizer and attendees. The person
+ * approving an email must see all of what it sends — a preview without the
+ * notes approves a message whose body nobody read.
+ */
+export function invitationSummary(o: Occurrence, zone: string): Record<string, unknown> {
+  const comp = o.comp;
+  const organizer = readOrganizer(comp);
+  const attendees = readAttendees(comp);
+  const recurrence = o.master ? recurrenceOf(o.master, zone) : undefined;
+  return compactObject({
+    event: textProp(comp, 'summary') ?? '(untitled)',
+    when: whenLabel(o, zone),
+    timeZone: o.allDay ? undefined : zone,
+    location: textProp(comp, 'location'),
+    url: textProp(comp, 'url'),
+    notes: textProp(comp, 'description'),
+    repeats: recurrence?.summary,
+    organizer: organizer ? personLabel(organizer) : undefined,
+    attendees: attendees.length > 0 ? attendees.map(personLabel).join(', ') : undefined,
+  });
 }
 
 /** One-line "when" for previews: `Mon, Oct 20, 2026, 9:00 AM EDT – 10:00 AM EDT` or an all-day range. */

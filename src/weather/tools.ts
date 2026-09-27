@@ -1,7 +1,7 @@
 import { parseLenient, projectOrRaw, resolveView, viewParam, type View } from '@chrischall/mcp-utils';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { getDisplayTimeZone, isValidTimeZone } from '../config.js';
+import { canonicalTimeZone, getDisplayTimeZone } from '../config.js';
 import { InvalidArgumentError, UpstreamError, errorMessage } from '../errors.js';
 import { addDaysYmd, startOfDay, ymdInZone, zoneOffsetMs } from '../time.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonResponse } from '../tools/_shared.js';
@@ -75,20 +75,21 @@ function timeZoneParam(description: string) {
  * is an `InvalidArgumentError`.
  */
 export function resolveZone(input: string | undefined): string {
-  // Intl accepts fixed offsets ("+05:30"), but a fixed offset has no DST and
-  // Apple's `timezone` wants a named zone — refuse rather than mis-roll days.
-  if (input !== undefined && (FIXED_OFFSET_RE.test(input) || !isValidTimeZone(input))) {
+  // DISPLAY_TZ is canonicalized by getDisplayTimeZone, and never an offset.
+  if (input === undefined) return getDisplayTimeZone();
+  // Intl accepts fixed offsets ("+05:30", "−04:00" with U+2212), but a fixed
+  // offset has no DST and Apple's `timezone` wants a named zone — refuse
+  // rather than mis-roll days. canonicalTimeZone refuses whatever Intl
+  // RESOLVES to an offset, so no spelling of one slips past an input regex.
+  const zone = canonicalTimeZone(input);
+  if (zone === undefined) {
     throw new InvalidArgumentError(
       `timeZone "${input}" is not an IANA time zone name.`,
       'Use a name such as America/New_York, Europe/London or Asia/Tokyo (not a fixed offset: it would ignore daylight saving).',
     );
   }
-  // The default can never be an offset: getDisplayTimeZone only returns what
-  // isValidTimeZone accepts, and that refuses bare offsets.
-  return new Intl.DateTimeFormat('en-US', { timeZone: input ?? getDisplayTimeZone() }).resolvedOptions().timeZone;
+  return zone;
 }
-
-const FIXED_OFFSET_RE = /^[+-]/;
 
 /** Solar time moves one hour per 15° of longitude. */
 const DEGREES_PER_HOUR = 15;

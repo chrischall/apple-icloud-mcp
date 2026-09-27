@@ -31,7 +31,7 @@ describe('apple_calendar_create_event', () => {
     const r = await h.call('apple_calendar_create_event', { title: 'Lunch', startDate: '2026-10-22T12:30', alarms: [10], location: 'Cafe', url: 'https://x.test/' });
     expect(r.isError).toBe(false);
     expect(r.json).toMatchObject({ created: true, verified: true, eventId: 'work/UID-1.ics' });
-    expect(r.json.notes).toEqual(['Calendar: "Work" (the first writable calendar (set ICLOUD_DEFAULT_CALENDAR or pass calendar to choose)).']);
+    expect(r.json.notes).toEqual(['Calendar: "Work" (the first writable calendar not shared with other people (set ICLOUD_DEFAULT_CALENDAR or pass calendar to choose)).']);
     expect(r.json.event).toMatchObject({ title: 'Lunch', start: '2026-10-22T12:30:00-04:00', end: '2026-10-22T13:30:00-04:00', recurring: false, alarms: [10], location: 'Cafe' });
     const stored = unfold(h.dav.get('work', 'UID-1.ics')!.ics);
     expect(stored).toContain('DTSTART;TZID=America/New_York:20261022T123000');
@@ -98,10 +98,11 @@ describe('apple_calendar_create_event', () => {
     expect(preview.preview).toEqual({
       event: 'Party',
       when: 'Sat, Oct 24, 2026, 6:00 PM EDT – Sat, Oct 24, 2026, 7:00 PM EDT',
-      calendar: 'Work',
-      invitations: 'Ann <ann@x.com>, bob@x.com',
+      timeZone: 'America/New_York',
       organizer: 'me@icloud.com',
-      notice: 'iCloud will email each attendee an invitation as soon as the event is saved.',
+      attendees: 'Ann <ann@x.com>, bob@x.com',
+      calendar: 'Work',
+      notice: 'iCloud will email each attendee an invitation — with everything above — as soon as the event is saved.',
     });
     expect(h.dav.writes()).toEqual([]);
     const done = json(await callConfirmed(gated('apple_calendar_create_event'), args));
@@ -122,6 +123,100 @@ describe('apple_calendar_create_event', () => {
       attendees: [{ email: 'ann@x.com' }],
     });
     expect(preview.preview).toMatchObject({ location: 'Room 1', repeats: 'Every week' });
+  });
+
+  it('with attendees, the preview shows EVERYTHING the invitation carries: the whole notes and the url', async () => {
+    const notes = `Agenda: ${'private detail '.repeat(300)}`.trim();
+    const args = { title: 'Lunch with Sam', startDate: '2026-10-27T12:30', notes, url: 'https://evil.example/?d=SECRET', attendees: [{ email: 'sam@x.com' }] };
+    const preview = await callPreview(gated('apple_calendar_create_event'), args);
+    expect(preview.preview).toMatchObject({ notes, url: 'https://evil.example/?d=SECRET', attendees: 'sam@x.com', organizer: 'me@icloud.com' });
+    expect((preview.preview.notes as string).length).toBe(notes.length);
+  });
+
+  it('stores notes line breaks as line breaks (CRLF and CR as LF), never as a raw CR', async () => {
+    await h.call('apple_calendar_create_event', { title: 'N', startDate: '2026-10-24T18:00', notes: 'one\r\ntwo\rthree\nfour' });
+    const stored = h.dav.get('work', 'UID-1.ics')!.ics;
+    expect(unfold(stored)).toContain('DESCRIPTION:one\\ntwo\\nthree\\nfour\r\n');
+    expect(stored).not.toMatch(/\r(?!\n)/);
+    expect((await h.call('apple_calendar_get_event', { eventId: 'work/UID-1.ics' })).json.event.notes).toBe('one\ntwo\nthree\nfour');
+  });
+
+  it('refuses a value that would inject iCalendar lines — even past the schema — before any write or confirmation', async () => {
+    // The handler is called directly here, WITHOUT the schema (which refuses these first): this is the second line.
+    process.env.APPLE_WRITE_MODE = 'additive';
+    const inject = 'https://x.test/\r\nORGANIZER:mailto:me@icloud.com\r\nATTENDEE;RSVP=TRUE:mailto:victim@x.com';
+    const viaUrl = await h.call('apple_calendar_create_event', { title: 'Reminder', startDate: '2026-10-24T18:00', url: inject });
+    expect(viaUrl.json.error).toMatchObject({ code: 'INVALID_ARGUMENT', message: expect.stringMatching(/would change the event's structure/) });
+    expect(h.dav.writes()).toEqual([]);
+    // A CR in a TEXT value is stored as an escaped line break: it stays inside the title and cannot start a property.
+    const viaTitle = await h.call('apple_calendar_create_event', { title: 'Reminder\rATTENDEE:mailto:victim@x.com', startDate: '2026-10-24T18:00' });
+    expect(viaTitle.json).toMatchObject({ created: true, event: { title: 'Reminder\nATTENDEE:mailto:victim@x.com' } });
+    const stored = h.dav.get('work', 'UID-2.ics')!.ics;
+    expect(stored).toContain('SUMMARY:Reminder\\nATTENDEE:mailto:victim@x.com');
+    expect(stored).not.toMatch(/^ATTENDEE/m);
+    expect(stored).not.toMatch(/\r(?!\n)/);
+    h.dav.resources.clear();
+    h.dav.requests = [];
+    process.env.APPLE_WRITE_MODE = 'all';
+    // With real attendees the refusal comes before the confirm gate: the gate would have shown only the real ones.
+    const gated = await h.call('apple_calendar_create_event', { title: 'P', startDate: '2026-10-24T18:00', url: inject, attendees: [{ email: 'ann@x.com' }] }, NO_ELICIT_CTX);
+    expect(gated.json.error).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    const viaName = await h.call('apple_calendar_create_event', { title: 'P', startDate: '2026-10-24T18:00', attendees: [{ email: 'ann@x.com', name: 'Ann\rATTENDEE:mailto:v@x.com' }] }, NO_ELICIT_CTX);
+    expect(viaName.json.error).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(h.dav.writes()).toEqual([]);
+  });
+
+  it('writes a mis-cased timeZone as its real zone (TZID + VTIMEZONE), so a series follows DST', async () => {
+    const r = await h.call('apple_calendar_create_event', { title: 'Standup', startDate: '2026-10-22T09:00', timeZone: 'america/new_york', recurrence: { frequency: 'weekly', count: 4 } });
+    expect(r.json).toMatchObject({ created: true, verified: true });
+    const stored = unfold(h.dav.get('work', 'UID-1.ics')!.ics);
+    expect(stored).toContain('DTSTART;TZID=America/New_York:20261022T090000');
+    expect(stored).toContain('TZID:America/New_York');
+    const list = await h.call('apple_calendar_list_events', { fromDate: '2026-10-22', daysAhead: 21, timeZone: 'AMERICA/NEW_YORK' });
+    expect(list.json.window.timeZone).toBe('America/New_York');
+    expect(list.json.events.map((e: { start: string }) => e.start)).toEqual([
+      '2026-10-22T09:00:00-04:00',
+      '2026-10-29T09:00:00-04:00',
+      '2026-11-05T09:00:00-05:00',
+    ]);
+  });
+
+  it('names a shared target calendar, prefers one nobody else sees by default, and refuses shared ones in additive mode', async () => {
+    h.dav.calendars = [
+      { id: 'fam', name: 'Family (shared by Mom)', order: 0, extraTypes: '<cs:shared/>' },
+      { id: 'team', name: 'Team', order: 1, extraTypes: '<cs:shared-owner/>' },
+      { id: 'home', name: 'Home', order: 2 },
+    ];
+    const byDefault = await h.call('apple_calendar_create_event', { title: 'Therapy', startDate: '2026-10-27T12:30' });
+    expect(byDefault.json).toMatchObject({ created: true, eventId: 'home/UID-1.ics' });
+    expect(byDefault.json.notes).toEqual(['Calendar: "Home" (the first writable calendar not shared with other people (set ICLOUD_DEFAULT_CALENDAR or pass calendar to choose)).']);
+    const named = await h.call('apple_calendar_create_event', { title: 'Dinner', startDate: '2026-10-27T18:30', calendar: 'Family (shared by Mom)' });
+    expect(named.json.notes).toContain('"Family (shared by Mom)" is shared with you by someone else: everyone it is shared with sees the events in it.');
+    const preview = await callPreview(gated('apple_calendar_create_event'), { title: 'Sync', startDate: '2026-10-27T10:00', calendar: 'team', attendees: [{ email: 'ann@x.com' }] });
+    expect(preview.preview).toMatchObject({ calendar: 'Team', calendarShared: '"Team" is a calendar you share with other people: they see the events in it.' });
+
+    process.env.APPLE_WRITE_MODE = 'additive';
+    const before = h.dav.writes().length;
+    for (const calendar of ['Family (shared by Mom)', 'Team']) {
+      const r = await h.call('apple_calendar_create_event', { title: 'X', startDate: '2026-10-27T18:30', calendar });
+      expect(r.json.error, calendar).toMatchObject({ code: 'UNSUPPORTED', message: expect.stringMatching(/APPLE_WRITE_MODE=additive never allows\. Nothing was created\.$/) });
+    }
+    // When every writable calendar is shared, the default is one of them — and additive mode refuses it too.
+    h.dav.calendars = h.dav.calendars.filter((c) => c.id !== 'home');
+    const onlyShared = await h.call('apple_calendar_create_event', { title: 'X', startDate: '2026-10-27T18:30' });
+    expect(onlyShared.json.error.message).toMatch(/^"Family \(shared by Mom\)" is shared with you/);
+    expect(h.dav.writes().length).toBe(before);
+    h.dav.calendars.push({ id: 'home', name: 'Home', order: 2 });
+    expect((await h.call('apple_calendar_create_event', { title: 'Mine', startDate: '2026-10-27T18:30' })).json.eventId).toMatch(/^home\//);
+  });
+
+  it('falls back from an ICLOUD_DEFAULT_CALENDAR this account does not have, with a warning', async () => {
+    process.env.ICLOUD_DEFAULT_CALENDAR = 'Someone else\'s';
+    const r = await h.call('apple_calendar_create_event', { title: 'T', startDate: '2026-10-27T18:30' });
+    expect(r.json).toMatchObject({ created: true, verified: true, eventId: 'work/UID-1.ics' });
+    expect(r.json.warnings).toEqual(['ICLOUD_DEFAULT_CALENDAR "Someone else\'s" is not one of this account\'s event calendars, so the automatic default "Work" is used instead.']);
+    process.env.ICLOUD_DEFAULT_CALENDAR = 'home';
+    expect((await h.call('apple_calendar_create_event', { title: 'T', startDate: '2026-10-27T18:30' })).json).toMatchObject({ eventId: 'home/UID-2.ics', notes: ['Calendar: "Home" (ICLOUD_DEFAULT_CALENDAR).'] });
   });
 
   it('never sends invitations in APPLE_WRITE_MODE=additive', async () => {
@@ -213,7 +308,7 @@ describe('apple_calendar_update_event', () => {
     expect(h.dav.get('home', 'one.ics')!.ics).toContain('SEQUENCE:1');
   });
 
-  it('asks first when the event has attendees, listing them', async () => {
+  it('asks first when the event has attendees, listing them and the whole event as they will receive it', async () => {
     const preview = await callPreview(gated('apple_calendar_update_event'), { eventId: 'home/meet.ics', title: 'Review v2' });
     expect(preview.preview).toEqual({
       event: 'Review',
@@ -221,8 +316,15 @@ describe('apple_calendar_update_event', () => {
       calendar: 'Home',
       applies: 'this event',
       changes: ['title: "Review" → "Review v2"'],
-      attendees: 'Ann, bob@x.com, (unknown)',
-      notice: 'iCloud will email the attendees about this change.',
+      attendees: 'Ann <ann@x.com>, bob@x.com, (no address)',
+      sentToAttendees: {
+        event: 'Review v2',
+        when: 'Fri, Oct 23, 2026, 10:00 AM EDT – Fri, Oct 23, 2026, 11:00 AM EDT',
+        timeZone: 'America/New_York',
+        organizer: 'me@icloud.com',
+        attendees: 'Ann <ann@x.com>, bob@x.com, (no address)',
+      },
+      notice: 'iCloud will email the attendees about this change, with the event as shown in sentToAttendees.',
     });
     expect(h.dav.writes()).toEqual([]);
     const done = json(await callConfirmed(gated('apple_calendar_update_event'), { eventId: 'home/meet.ics', title: 'Review v2' }));
@@ -232,14 +334,59 @@ describe('apple_calendar_update_event', () => {
   it('replacing attendees reads the account identity and keeps existing replies', async () => {
     const args = { eventId: 'home/one.ics', attendees: [{ email: 'cy@x.com', name: 'Cy' }] };
     const preview = await callPreview(gated('apple_calendar_update_event'), args);
-    expect(preview.preview.attendees).toBe('Cy');
+    expect(preview.preview.attendees).toBe('Cy <cy@x.com>');
     const done = json(await callConfirmed(gated('apple_calendar_update_event'), args));
     expect(done.changes.attendees).toEqual({ before: null, after: [{ name: 'Cy', email: 'cy@x.com', status: 'needs-action', role: 'required' }] });
     expect(h.dav.get('home', 'one.ics')!.ics).toContain('ORGANIZER:mailto:me@icloud.com');
     expect(h.dav.requests.some((q) => q.method === 'PROPFIND' && q.body.includes('calendar-user-address-set'))).toBe(true);
-    // Clearing them: the preview shows who is being removed.
+    // Clearing them: the preview shows who is being removed (they get a cancellation).
     const clear = await callPreview(gated('apple_calendar_update_event'), { eventId: 'home/meet.ics', attendees: [] });
-    expect(clear.preview.attendees).toBe('Ann, bob@x.com, (unknown)');
+    expect(clear.preview.attendees).toBe('Ann <ann@x.com>, bob@x.com, (no address)');
+    expect((clear.preview.sentToAttendees as Record<string, unknown>).attendees).toBeUndefined();
+    // Replacing some: everyone emailed — the new list, then those it drops.
+    const swap = await callPreview(gated('apple_calendar_update_event'), { eventId: 'home/meet.ics', attendees: [{ email: 'ann@x.com' }, { email: 'di@x.com' }] });
+    expect(swap.preview.attendees).toBe('Ann <ann@x.com>, di@x.com, bob@x.com, (no address)');
+  });
+
+  it('inviting people to an event that already has notes and a link shows them — the new invitees receive both', async () => {
+    h.dav.put('home', 'notes.ics', ics(...vevent('UID:n', 'DTSTART:20261023T140000Z', 'DTEND:20261023T150000Z', 'SUMMARY:Plan', 'DESCRIPTION:layoffs list', 'URL:https://intra.example/doc')));
+    const p = await callPreview(gated('apple_calendar_update_event'), { eventId: 'home/notes.ics', attendees: [{ email: 'sam@x.com' }] });
+    expect(p.preview.changes).toEqual(['attendees: null → [{"email":"sam@x.com","status":"needs-action","role":"required"}]']);
+    expect(p.preview.sentToAttendees).toMatchObject({ event: 'Plan', notes: 'layoffs list', url: 'https://intra.example/doc', attendees: 'sam@x.com', organizer: 'me@icloud.com' });
+  });
+
+  it('refuses a value that would inject iCalendar lines on every update path — before any write', async () => {
+    // Called without the schema (which refuses these first): the checked serializer is the second line.
+    const url = 'https://x.test/\r\nORGANIZER:mailto:me@icloud.com\r\nATTENDEE:mailto:victim@x.com';
+    const cases: Array<Record<string, unknown>> = [
+      { eventId: 'home/one.ics', url }, // a plain event (no attendees: no confirm gate at all)
+      { eventId: 'work/s.ics#occ=2026-10-22T13:00:00Z', url }, // one occurrence → a new override
+      { eventId: 'work/s.ics', span: 'allEvents', url }, // the whole series
+      { eventId: 'work/s.ics#occ=2026-10-23T13:00:00Z', span: 'futureEvents', url }, // a split: both halves are checked
+      { eventId: 'home/one.ics', calendar: 'Work', url }, // a move plus a change
+      { eventId: 'home/one.ics', attendees: [{ email: 'ann@x.com', name: 'Ann\rATTENDEE:mailto:victim@x.com' }] }, // a raw CR in a CN parameter
+    ];
+    for (const args of cases) {
+      const r = await h.call('apple_calendar_update_event', args);
+      expect(r.json.error, JSON.stringify(args)).toMatchObject({ code: 'INVALID_ARGUMENT', message: expect.stringMatching(/Nothing was written/) });
+    }
+    expect(h.dav.writes()).toEqual([]);
+  });
+
+  it('keeps a series in its zone when timeZone is mis-cased (never rewritten as UTC)', async () => {
+    const r = await h.call('apple_calendar_update_event', { eventId: 'work/s.ics', span: 'allEvents', startDate: '2026-10-19T10:00', timeZone: 'america/new_york' });
+    expect(r.json).toMatchObject({ updated: true, verified: true });
+    const stored = unfold(h.dav.get('work', 's.ics')!.ics);
+    expect(stored).toContain('DTSTART;TZID=America/New_York:20261019T100000');
+    expect(stored).not.toMatch(/DTSTART:\d{8}T\d{6}Z/);
+  });
+
+  it('says so when it moves an event into a shared calendar', async () => {
+    h.dav.addCalendar({ id: 'fam', name: 'Family', order: 3, extraTypes: '<cs:shared/>' });
+    const r = await h.call('apple_calendar_update_event', { eventId: 'home/one.ics', calendar: 'Family' });
+    expect(r.json).toMatchObject({ eventId: 'fam/one.ics', notes: ['"Family" is shared with you by someone else: everyone it is shared with sees the events in it.'] });
+    const p = await callPreview(gated('apple_calendar_update_event'), { eventId: 'home/meet.ics', calendar: 'Family' });
+    expect(p.preview).toMatchObject({ calendar: 'Home → Family', calendarShared: '"Family" is shared with you by someone else: everyone it is shared with sees the events in it.' });
   });
 
   it('refuses to change the invitees of an event someone else organises', async () => {

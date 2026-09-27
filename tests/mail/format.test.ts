@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { FetchMessageObject } from 'imapflow';
 import {
+  addressEntries,
+  distinctReplyTo,
   formatAddress,
   formatAddressList,
   hasAttachment,
@@ -31,6 +33,32 @@ describe('addresses', () => {
         { address: 'd@x.com' },
       ]),
     ).toEqual(['b@x.com', 'C <c@x.com>', 'undisclosed-recipients:;', 'd@x.com']);
+  });
+
+  it('lists the comparable mailboxes: label plus lowercased bare address, groups flattened', () => {
+    expect(addressEntries(undefined)).toEqual([]);
+    expect(addressEntries({ name: 'Sam', address: ' Sam@X.com ' })).toEqual([{ label: 'Sam <Sam@X.com>', address: 'sam@x.com' }]);
+    expect(
+      addressEntries([{ name: 'Team', group: [{ address: 'b@x.com' }] }, { name: 'Only Name' }, { name: 'empty', group: [] }, { address: 'D@x.com' }]),
+    ).toEqual([
+      { label: 'b@x.com', address: 'b@x.com' },
+      { label: 'D@x.com', address: 'd@x.com' },
+    ]);
+  });
+
+  it('shows a Reply-To only when it names an address the From does not', () => {
+    const from = { name: 'Smith, Sam', address: 'sam@x.com' };
+    // Absent, or a copy of From (what an IMAP ENVELOPE holds when the header is absent): nothing to show.
+    expect(distinctReplyTo(undefined, from)).toEqual([]);
+    expect(distinctReplyTo([{ address: 'SAM@x.com' }], [from])).toEqual([]);
+    // Elsewhere: the whole Reply-To, so the reader sees every address replies should reach.
+    expect(distinctReplyTo([{ address: 'sam.personal@y.com' }], from)).toEqual([{ label: 'sam.personal@y.com', address: 'sam.personal@y.com' }]);
+    expect(distinctReplyTo([{ address: 'sam@x.com' }, { name: 'List', address: 'list@y.com' }], from).map((e) => e.label)).toEqual([
+      'sam@x.com',
+      'List <list@y.com>',
+    ]);
+    // No From at all: any Reply-To is news.
+    expect(distinctReplyTo([{ address: 'r@y.com' }], undefined)).toEqual([{ label: 'r@y.com', address: 'r@y.com' }]);
   });
 });
 
@@ -139,6 +167,18 @@ describe('toRow', () => {
       flagged: true,
       hasAttachments: false,
     });
+  });
+
+  it('carries the Reply-To when it differs from From, and not the ENVELOPE copy of From', () => {
+    const base = { seq: 1, uid: 3, envelope: { subject: 'Re: Dinner?', from: [{ name: 'Smith, Sam', address: 'sam@x.com' }], to: [] } };
+    expect(toRow({ ...base, envelope: { ...base.envelope, replyTo: [{ address: 'sam.personal@y.com' }] } }, 'UTC')).toMatchObject({
+      from: 'Smith, Sam <sam@x.com>',
+      replyTo: ['sam.personal@y.com'],
+    });
+    expect(toRow({ ...base, envelope: { ...base.envelope, replyTo: [{ name: 'Smith, Sam', address: 'sam@x.com' }] } }, 'UTC')).not.toHaveProperty(
+      'replyTo',
+    );
+    expect(toRow(base, 'UTC')).not.toHaveProperty('replyTo');
   });
 });
 

@@ -5,7 +5,21 @@ import { countRuleInstancesBefore, expandSeries, findOccurrence, seriesWalker, s
 import type { LoadedEvent } from './events.js';
 import { formatOccurrence, recurrenceOf, whenLabel } from './format.js';
 import { formatEventId, formatOccurrenceId } from './ids.js';
-import { addTimeProp, eventParts, instantOf, isRecurringMaster, isSelf, readAttendees, serialize, textProp, touch, type Component, type EventParts, type Time } from './ics.js';
+import {
+  addTimeProp,
+  eventParts,
+  instantOf,
+  isRecurringMaster,
+  isSelf,
+  readAttendees,
+  serialize,
+  serializeForWrite,
+  textProp,
+  touch,
+  type Component,
+  type EventParts,
+  type Time,
+} from './ics.js';
 import {
   applyField,
   changedFields,
@@ -110,8 +124,8 @@ export interface UpdatePlan {
   /** Writes in order; the first is always the loaded resource (re-targeted after a move). */
   puts: PutOp[];
   move?: CalendarInfo;
-  /** Where the edited occurrence ends up and what it should read back as. */
-  result: { calendar: CalendarInfo; resourceName: string; eventId: string; expected: Record<string, unknown> };
+  /** Where the edited occurrence ends up, what it should read back as, and the occurrence itself (for the preview). */
+  result: { calendar: CalendarInfo; resourceName: string; eventId: string; expected: Record<string, unknown>; occurrence: Occurrence };
   before: Record<string, unknown>;
   notes: string[];
   /** The event has attendees now or will after this change: iCloud emails them. */
@@ -210,12 +224,13 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
     resultName = `${uid}.ics`;
     newSeriesId = formatEventId(calendar.id, resultName);
     puts[0]!.label = 'the original series (ended just before this occurrence)';
-    puts.push({ url: childUrl(calendar.url, resultName), body: serialize(next.vcal), ifNoneMatch: '*', label: 'the new series (this occurrence onwards)' });
+    puts.push({ url: childUrl(calendar.url, resultName), body: serializeForWrite(next.vcal), ifNoneMatch: '*', label: 'the new series (this occurrence onwards)' });
     notes.push(`The series was split: earlier occurrences stay in ${id.baseId}; this occurrence and the rest now form the series ${newSeriesId}.`);
   }
-  puts[0]!.body = serialize(vcal);
-  // A move alone changes no content: the MOVE is the whole write.
+  // A move alone changes no content: the MOVE is the whole write. Any other change is serialized CHECKED (see
+  // serializeForWrite): the text iCloud stores must hold exactly the attendees the confirm gate was shown.
   if (!timeChange && fields.length === 0) puts.length = 0;
+  else puts[0]!.body = serializeForWrite(vcal);
 
   const baseId = formatEventId(destCal.id, resultName);
   const edited = occurrenceFor(eventParts(resultVcal), key, zone);
@@ -233,7 +248,7 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
     scope: SCOPE[effective],
     puts,
     ...(move ? { move } : {}),
-    result: { calendar: destCal, resourceName: resultName, eventId: key !== undefined ? formatOccurrenceId(baseId, key) : baseId, expected: after },
+    result: { calendar: destCal, resourceName: resultName, eventId: key !== undefined ? formatOccurrenceId(baseId, key) : baseId, expected: after, occurrence: edited },
     before,
     notes,
     notifiesAttendees,

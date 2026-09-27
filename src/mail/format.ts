@@ -39,6 +39,44 @@ export function formatAddressList(list: readonly AddressLike[] | AddressLike | u
   return out;
 }
 
+/** One mailbox of an address list: how to show it, and its bare address lowercased for comparing. */
+export interface AddressEntry {
+  label: string;
+  address: string;
+}
+
+/** Every mailbox that carries an address, groups flattened (name-only entries and empty groups have nothing to compare). */
+export function addressEntries(list: readonly AddressLike[] | AddressLike | undefined): AddressEntry[] {
+  if (!list) return [];
+  const items = Array.isArray(list) ? list : [list as AddressLike];
+  const out: AddressEntry[] = [];
+  for (const a of items) {
+    if (a.group) {
+      out.push(...addressEntries(a.group));
+      continue;
+    }
+    const address = a.address?.trim();
+    if (address) out.push({ label: formatAddress(a) as string, address: address.toLowerCase() });
+  }
+  return out;
+}
+
+/**
+ * The Reply-To worth showing beside From: the whole list when it names an address
+ * the From does not, else nothing. A reply that goes to From while the sender asked
+ * for another address is misrouted, and nothing else in a row or preview says so.
+ * A Reply-To that only repeats From is left out: IMAP's ENVELOPE copies From into
+ * reply-to when the header is absent, so showing it would only duplicate From.
+ */
+export function distinctReplyTo(
+  replyTo: readonly AddressLike[] | AddressLike | undefined,
+  from: readonly AddressLike[] | AddressLike | undefined,
+): AddressEntry[] {
+  const entries = addressEntries(replyTo);
+  const senders = new Set(addressEntries(from).map((e) => e.address));
+  return entries.some((e) => !senders.has(e.address)) ? entries : [];
+}
+
 /** A valid Date from a Date, an ISO string or an RFC 2822 string; undefined when it does not parse. */
 export function toDate(v: Date | string | undefined): Date | undefined {
   if (v === undefined || v === '') return undefined;
@@ -68,6 +106,8 @@ export interface MessageRow {
   date?: string;
   dateDisplay?: string;
   from?: string;
+  /** Only when it names an address the From does not (see distinctReplyTo). */
+  replyTo?: string[];
   to: string[];
   cc?: string[];
   subject: string;
@@ -86,6 +126,8 @@ export function toRow(msg: FetchMessageObject, zone: string): MessageRow {
   putInstant(row, 'date', toDate(env.date) ?? toDate(msg.internalDate), zone);
   const from = formatAddressList(env.from as MessageAddressObject[] | undefined);
   if (from.length > 0) row.from = from.join(', ');
+  const replyTo = distinctReplyTo(env.replyTo as MessageAddressObject[] | undefined, env.from as MessageAddressObject[] | undefined);
+  if (replyTo.length > 0) row.replyTo = replyTo.map((e) => e.label);
   row.to = formatAddressList(env.to as MessageAddressObject[] | undefined);
   const cc = formatAddressList(env.cc as MessageAddressObject[] | undefined);
   if (cc.length > 0) row.cc = cc;

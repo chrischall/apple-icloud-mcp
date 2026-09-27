@@ -7,12 +7,15 @@ import {
   chooseTargetCalendar,
   defaultContext,
   fetchEvent,
+  knownSelfAddresses,
   listCalendars,
   queryCalendar,
   queryCalendars,
   resolveCalendar,
   resolveCalendars,
   selfAddresses,
+  sharedWithOthers,
+  sharingNote,
   type CalendarInfo,
 } from '../../src/calendar/caldav.js';
 import { DSID, FakeCalDav, HOME, PASS, PRINCIPAL, USER, ics, vevent } from './fake-caldav.js';
@@ -35,6 +38,7 @@ describe('listCalendars', () => {
       .addCalendar({ id: 'home', name: 'Home', color: '#FF2D55FF', order: 2, description: 'mine', timezone: 'BEGIN:VCALENDAR\r\nBEGIN:VTIMEZONE\r\nTZID:Europe/Paris\r\nEND:VTIMEZONE\r\nEND:VCALENDAR' })
       .addCalendar({ id: 'work', name: 'Work', order: 1, color: 'blue' })
       .addCalendar({ id: 'shared', name: 'Team', privileges: ['read'], extraTypes: '<cs:shared/>', order: 1 })
+      .addCalendar({ id: 'fam', name: 'Family', extraTypes: '<cs:shared-owner/>', order: 3 })
       .addCalendar({ id: 'any', comps: null, privileges: null, order: 7.5 as never })
       .addCalendar({ id: 'todo', name: 'Reminders', comps: ['VTODO'] })
       .addCalendar({ id: 'sub', name: 'Holidays', extraTypes: '<cs:subscribed/>', isCalendar: false })
@@ -45,6 +49,7 @@ describe('listCalendars', () => {
       { id: 'shared', name: 'Team', url: `${HOME}shared/`, order: 1, writable: false, shared: true },
       { id: 'work', name: 'Work', url: `${HOME}work/`, order: 1, writable: true },
       { id: 'home', name: 'Home', url: `${HOME}home/`, color: '#FF2D55', description: 'mine', order: 2, writable: true, timeZone: 'Europe/Paris' },
+      { id: 'fam', name: 'Family', url: `${HOME}fam/`, order: 3, writable: true, sharedByYou: true },
       { id: 'any', name: 'any', url: `${HOME}any/` },
     ]);
     const [req] = dav.requests;
@@ -94,14 +99,54 @@ describe('resolving calendars', () => {
   it('chooses where a new event goes: the request, then ICLOUD_DEFAULT_CALENDAR, then the first writable', () => {
     const mixed = [cal('ro', 'Read only', { writable: false }), cal('unknown', 'Unknown'), cal('rw', 'Writable', { writable: true })];
     expect(chooseTargetCalendar(mixed, 'Unknown')).toEqual({ calendar: mixed[1], reason: 'named in the request' });
-    expect(chooseTargetCalendar(mixed, undefined).calendar.id).toBe('rw');
+    expect(chooseTargetCalendar(mixed, undefined)).toEqual({
+      calendar: mixed[2],
+      reason: 'the first writable calendar not shared with other people (set ICLOUD_DEFAULT_CALENDAR or pass calendar to choose)',
+    });
     expect(chooseTargetCalendar([mixed[0]!, mixed[1]!], undefined).calendar.id).toBe('unknown');
     process.env.ICLOUD_DEFAULT_CALENDAR = 'read ONLY';
     expect(chooseTargetCalendar(mixed, undefined)).toEqual({ calendar: mixed[0], reason: 'ICLOUD_DEFAULT_CALENDAR' });
-    process.env.ICLOUD_DEFAULT_CALENDAR = 'Gone';
-    expect(() => chooseTargetCalendar(mixed, undefined)).toThrow(/ICLOUD_DEFAULT_CALENDAR "Gone" is not one of your event calendars/);
     delete process.env.ICLOUD_DEFAULT_CALENDAR;
     expect(() => chooseTargetCalendar([mixed[0]!], undefined)).toThrow(/no writable event calendar/);
+    // A calendar named in the REQUEST that does not exist is still refused, never swapped for another.
+    expect(() => chooseTargetCalendar(mixed, 'Gone')).toThrow(/calendar "Gone" is not one of your event calendars/);
+  });
+
+  it('falls back from an ICLOUD_DEFAULT_CALENDAR this account does not have — with a warning — but not from an ambiguous one', () => {
+    const mixed = [cal('ro', 'Read only', { writable: false }), cal('rw', 'Writable', { writable: true }), cal('rw2', 'writable', { writable: true })];
+    process.env.ICLOUD_DEFAULT_CALENDAR = 'Gone';
+    expect(chooseTargetCalendar(mixed, undefined)).toEqual({
+      calendar: mixed[1],
+      reason: expect.stringMatching(/^the first writable calendar not shared/),
+      warning: 'ICLOUD_DEFAULT_CALENDAR "Gone" is not one of this account\'s event calendars, so the automatic default "Writable" is used instead.',
+    });
+    process.env.ICLOUD_DEFAULT_CALENDAR = 'WRITABLE';
+    expect(() => chooseTargetCalendar(mixed, undefined)).toThrow(/ICLOUD_DEFAULT_CALENDAR "WRITABLE" matches 2 calendars/);
+    process.env.ICLOUD_DEFAULT_CALENDAR = 'Gone';
+    expect(() => chooseTargetCalendar([mixed[0]!], undefined)).toThrow(/no writable event calendar/);
+    delete process.env.ICLOUD_DEFAULT_CALENDAR;
+  });
+
+  it('prefers a calendar nobody else sees for the automatic default, and says when every writable one is shared', () => {
+    const theirs = cal('fam', 'Family (shared by Mom)', { writable: true, shared: true });
+    const mine = cal('out', 'Shared out', { writable: true, sharedByYou: true });
+    const unknownPrivate = cal('u', 'Unknown private');
+    const home = cal('home', 'Home', { writable: true });
+    expect(chooseTargetCalendar([theirs, mine, home], undefined).calendar.id).toBe('home');
+    expect(chooseTargetCalendar([theirs, unknownPrivate, home], undefined).calendar.id).toBe('home');
+    expect(chooseTargetCalendar([theirs, unknownPrivate], undefined).calendar.id).toBe('u');
+    const allShared = chooseTargetCalendar([theirs, mine], undefined);
+    expect(allShared).toEqual({ calendar: theirs, reason: expect.stringMatching(/^the first writable calendar — every writable one is shared with other people/) });
+    expect(chooseTargetCalendar([cal('x', 'X', { shared: true })], undefined).calendar.id).toBe('x');
+  });
+
+  it('says who else sees a calendar', () => {
+    expect(sharedWithOthers(cal('a', 'A'))).toBe(false);
+    expect(sharedWithOthers(cal('a', 'A', { shared: true }))).toBe(true);
+    expect(sharedWithOthers(cal('a', 'A', { sharedByYou: true }))).toBe(true);
+    expect(sharingNote(cal('a', 'A'))).toBeUndefined();
+    expect(sharingNote(cal('a', 'Fam', { shared: true }))).toBe('"Fam" is shared with you by someone else: everyone it is shared with sees the events in it.');
+    expect(sharingNote(cal('a', 'Team', { sharedByYou: true }))).toBe('"Team" is a calendar you share with other people: they see the events in it.');
   });
 
   it('refuses writes to a read-only calendar up front', () => {
@@ -209,6 +254,15 @@ describe('selfAddresses', () => {
     const client = new DavClient({ service: 'calendar', username: 'plainname', password: PASS });
     const bare = await selfAddresses({ client, homeUrl: HOME, principalUrl: PRINCIPAL });
     expect(bare).toEqual({ addresses: new Set(), organizer: 'plainname' });
+  });
+});
+
+describe('knownSelfAddresses', () => {
+  it('knows the principal path and the Apple ID without a request', () => {
+    expect([...knownSelfAddresses(dav.context())]).toEqual([`/${DSID}/principal/`, 'mailto:me@icloud.com']);
+    const client = new DavClient({ service: 'calendar', username: 'plainname', password: PASS });
+    expect([...knownSelfAddresses({ client, homeUrl: HOME, principalUrl: PRINCIPAL })]).toEqual([`/${DSID}/principal/`]);
+    expect(dav.requests).toEqual([]);
   });
 });
 

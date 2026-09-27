@@ -60,11 +60,12 @@ describe('apple_maps_geocode', () => {
     expect(a.json).toEqual({
       returned: 0,
       query: { address: 'Nowhere 123', limitToCountries: ['FR'], near: { latitude: 1, longitude: 2 } },
-      note: 'Apple Maps found no match for "Nowhere 123" (countries FR; near 1,2).',
+      notes: ['Apple Maps found no match for "Nowhere 123" (countries FR; near 1,2).'],
       places: [],
     });
     const b = await h.call('apple_maps_geocode', { address: 'Nowhere' });
-    expect(b.json.note).toBe('Apple Maps found no match for "Nowhere".');
+    expect(b.json.notes).toEqual(['Apple Maps found no match for "Nowhere".']);
+    expect(b.json).not.toHaveProperty('note');
   });
 
   it('never renders a malformed upstream body as an empty result', async () => {
@@ -137,7 +138,9 @@ describe('apple_maps_reverse_geocode', () => {
     const h = harness({ '/v1/reverseGeocode': [() => ({ data: { results: [APPLE_PARK] } }), () => ({ data: { results: [] } })] });
     expect((await h.call('apple_maps_reverse_geocode', { latitude: 1, longitude: 2, view: 'full' })).json.places).toEqual([APPLE_PARK]);
     const empty = await h.call('apple_maps_reverse_geocode', { latitude: 0, longitude: -160 });
-    expect(empty.json.note).toBe('Apple Maps has no address at 0,-160 (open water or an unmapped area?).');
+    // `notes`, the key every other tool uses for "why is this empty" — never a singular `note`.
+    expect(empty.json.notes).toEqual(['Apple Maps has no address at 0,-160 (open water or an unmapped area?).']);
+    expect(empty.json).not.toHaveProperty('note');
     expect(empty.json.places).toEqual([]);
   });
 

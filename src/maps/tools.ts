@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { parseLenient, projectOrRaw, resolveView, viewParam } from '@chrischall/mcp-utils';
 import { z } from 'zod';
-import { getDisplayTimeZone, isValidTimeZone } from '../config.js';
+import { canonicalTimeZone, getDisplayTimeZone } from '../config.js';
 import { InvalidArgumentError, UpstreamError } from '../errors.js';
 import type { QueryValue } from '../http.js';
 import { parseDateInput, putInstant } from '../time.js';
@@ -159,12 +159,19 @@ function viewNote(note: string): ReturnType<typeof viewParam> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * The zone for this call — the argument, else the display zone — in its
+ * canonical spelling (`america/new_york` → `America/New_York`), the same
+ * spelling DISPLAY_TZ resolves to. Intl is case-insensitive, so validating
+ * alone echoed the caller's spelling back as the response's `timeZone`.
+ */
 function resolveZone(tz: string | undefined): string {
   if (tz === undefined) return getDisplayTimeZone();
-  if (!isValidTimeZone(tz)) {
+  const zone = canonicalTimeZone(tz);
+  if (zone === undefined) {
     throw new InvalidArgumentError(`timeZone "${tz}" is not a known IANA time zone.`, 'Use a zone name like America/New_York or Europe/London.');
   }
-  return tz;
+  return zone;
 }
 
 function nearValue(near: Coordinate | undefined): string | undefined {
@@ -376,7 +383,7 @@ export function registerMapsTools(server: McpServer, deps: MapsDeps = {}): void 
       const results = expectList(body, 'results', status, 'GET /v1/geocode');
       const query = compactObject({ address, limitToCountries: countries, near: args.near, lang: args.lang });
       const empty = results.length === 0
-        ? { note: `Apple Maps found no match for "${address}"${describeFilters([countries && `countries ${countries.join(',')}`, near && `near ${near}`])}.` }
+        ? { notes: [`Apple Maps found no match for "${address}"${describeFilters([countries && `countries ${countries.join(',')}`, near && `near ${near}`])}.`] }
         : {};
       return jsonResponse({ returned: results.length, query, ...empty, places: projectPlaces(results, view, 'GET /v1/geocode results') });
     },
@@ -409,7 +416,7 @@ export function registerMapsTools(server: McpServer, deps: MapsDeps = {}): void 
       return jsonResponse({
         returned: results.length,
         query: compactObject({ latitude: args.latitude, longitude: args.longitude, lang: args.lang }),
-        ...(results.length === 0 ? { note: `Apple Maps has no address at ${loc} (open water or an unmapped area?).` } : {}),
+        ...(results.length === 0 ? { notes: [`Apple Maps has no address at ${loc} (open water or an unmapped area?).`] } : {}),
         places: projectPlaces(results, view, 'GET /v1/reverseGeocode results'),
       });
     },

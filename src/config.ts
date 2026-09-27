@@ -25,16 +25,20 @@ export interface EnabledServices {
   unknown: string[];
 }
 
+let warnedServices: string | undefined;
+
 /**
  * `APPLE_SERVICES` narrows which services register tools (comma or space
  * separated, case-insensitive). Unset means all of them. It exists so a
  * deployment that only wants Apple Music does not hand the model fifty tools
  * it cannot use.
  *
- * An unknown entry is reported (healthcheck + stderr) and ignored rather than
- * failing the boot: this setting only ever REMOVES tools, so ignoring a typo
- * can at worst leave a service registered that the operator meant to drop —
- * and that service still refuses to act without its own credentials.
+ * It is an ALLOWLIST, so a misspelled entry does not fail open: the service
+ * the operator meant to KEEP (`calender`) is simply left UNREGISTERED, and its
+ * tools are missing from the menu. The unknown entry is ignored rather than
+ * failing the boot, but it is reported — once on stderr, naming the entry and
+ * the services that ARE registered, and in apple_healthcheck's
+ * `unknownServicesInAPPLE_SERVICES` — so a missing service is traceable to it.
  */
 export function getEnabledServices(env: EnvSource = process.env): EnabledServices {
   const raw = readEnvVar('APPLE_SERVICES', { env });
@@ -46,6 +50,14 @@ export function getEnabledServices(env: EnvSource = process.env): EnabledService
     if (!name) continue;
     if ((SERVICES as readonly string[]).includes(name)) enabled.add(name as ServiceName);
     else unknown.push(part.trim());
+  }
+  if (unknown.length > 0 && warnedServices !== raw) {
+    warnedServices = raw;
+    console.error(
+      `[aws-mcp] WARNING: APPLE_SERVICES names no such service: ${unknown.map((u) => `"${u}"`).join(', ')} — ignored, ` +
+        'so a misspelled service registers NO tools. ' +
+        `Registered services: ${enabled.size > 0 ? [...enabled].join(', ') : 'none'}. Valid names: ${SERVICES.join(', ')}.`,
+    );
   }
   return { enabled, unknown };
 }
@@ -203,6 +215,7 @@ export function isDebugLog(env: EnvSource = process.env): boolean {
 
 /** Test seam: forget which bad values were already warned about. */
 export function resetConfigWarnings(): void {
+  warnedServices = undefined;
   warnedWriteMode = undefined;
   warnedTz = undefined;
 }

@@ -238,6 +238,9 @@ describe('apple_contacts_update', () => {
     const h = harness(CARDS);
     const r = await h.call('apple_contacts_update', { contactId: 'JOHN-UID', jobTitle: 'Engineer', phones: [{ action: 'remove', target: '000-000-0000' }] });
     expect(r.json).toMatchObject({ updated: false, id: 'JOHN-UID', changes: [], contact: { jobTitle: 'Engineer' } });
+    expect(r.json.notes).toEqual(['Nothing was written: every requested value was already in place, or its target was not found.']);
+    // The explanation is `notes`, never a top-level `note` (which reads as the contact's own NOTE field).
+    expect(r.json).not.toHaveProperty('note');
     expect(r.json.noops).toHaveLength(1);
     expect(h.fake.calls.some((c) => c.method === 'PUT')).toBe(false);
     const quiet = await h.call('apple_contacts_update', { contactId: 'JOHN-UID', jobTitle: 'Engineer' });

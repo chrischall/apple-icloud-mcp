@@ -28,6 +28,15 @@ describe('registration', () => {
     expect(tools.get('apple_mail_send')?.cfg.annotations).toMatchObject({ destructiveHint: true, idempotentHint: false });
     expect(tools.get('apple_mail_move')?.cfg.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true });
     expect(tools.get('apple_mail_search')?.cfg.annotations.readOnlyHint).toBe(true);
+    // A read-only tool must not carry a state-changing argument: clients auto-approve readOnlyHint tools.
+    expect(tools.get('apple_mail_get_message')?.cfg.annotations.readOnlyHint).toBe(true);
+    expect(tools.get('apple_mail_get_message')?.cfg.description).toMatch(/Never marks the message read; to do that, use apple_mail_update_flags with seen:true/);
+    expect(tools.get('apple_mail_get_message')?.cfg.description).not.toMatch(/markRead/);
+    expect(tools.get('apple_mail_send')?.cfg.description).toMatch(/Body ≤ 20,000 chars, all shown for confirmation/);
+    expect(tools.get('apple_mail_send')?.cfg.description).toMatch(/inReplyTo \{mailbox, uid\} threads a reply .*Reply-To is not a recipient/);
+    expect(tools.get('apple_mail_search')?.cfg.description).toMatch(/replyTo \(when it differs from from; confirm which to answer\)/);
+    // A differing Reply-To can be phishing: nothing may tell the model to route replies there on its own.
+    expect(tools.get('apple_mail_search')?.cfg.description).not.toMatch(/replies belong/);
   });
 
   it('write modes none and additive register only the reads', () => {
@@ -61,7 +70,10 @@ describe('input schemas', () => {
     expect(ok('apple_mail_get_message', { uid: 0 })).toBe(false);
     expect(ok('apple_mail_get_message', { uid: 1, maxChars: 0 })).toBe(false);
     expect(ok('apple_mail_get_message', { uid: 1, maxChars: 100_001 })).toBe(false);
-    expect(ok('apple_mail_get_message', { uid: 1, uidValidity: 5, markRead: true, maxChars: 100_000 })).toBe(true);
+    expect(ok('apple_mail_get_message', { uid: 1, uidValidity: 5, maxChars: 100_000, timeZone: 'Europe/London' })).toBe(true);
+    // Marking read is apple_mail_update_flags' job: the read tool has no such argument.
+    expect(ok('apple_mail_get_message', { uid: 1, markRead: true })).toBe(false);
+    expect(ok('apple_mail_get_message', { uid: 1, markRead: false })).toBe(false);
   });
 
   it('flags and move', () => {
@@ -78,8 +90,13 @@ describe('input schemas', () => {
     expect(ok('apple_mail_send', { to: [], subject: 's', body: 'b' })).toBe(false);
     expect(ok('apple_mail_send', { to: ['a@b.com'], subject: 'x\r\nBcc: e@x.com', body: 'b' })).toBe(false);
     expect(ok('apple_mail_send', { to: ['a@b.com'], subject: 's', body: '' })).toBe(false);
-    expect(ok('apple_mail_send', { to: ['a@b.com'], body: 'b', replyTo: { uid: 1, extra: 1 } })).toBe(false);
-    expect(ok('apple_mail_send', { to: ['a@b.com'], body: 'b', replyTo: { uid: 1, mailbox: 'inbox' }, confirmToken: 't' })).toBe(true);
+    expect(ok('apple_mail_send', { to: ['a@b.com'], body: 'b', inReplyTo: { uid: 1, extra: 1 } })).toBe(false);
+    expect(ok('apple_mail_send', { to: ['a@b.com'], body: 'b', inReplyTo: { uid: 1, mailbox: 'inbox', uidValidity: 3 }, confirmToken: 't' })).toBe(true);
+    // The message being answered is `inReplyTo`; `replyTo` (the header's name) is not an argument, so it cannot be confused.
+    expect(ok('apple_mail_send', { to: ['a@b.com'], body: 'b', replyTo: { uid: 1 } })).toBe(false);
+    // The body is capped at what a confirmation can show in full: longer is refused, never cut.
+    expect(ok('apple_mail_send', { to: ['a@b.com'], subject: 's', body: 'x'.repeat(20_000) })).toBe(true);
+    expect(ok('apple_mail_send', { to: ['a@b.com'], subject: 's', body: 'x'.repeat(20_001) })).toBe(false);
   });
 });
 
@@ -252,6 +269,21 @@ describe('apple_mail_search', () => {
     expect(page2.json.messages[0]).toMatchObject({ uid: 1, from: 'Bob <bob@example.com>' });
   });
 
+  it('shows a Reply-To that differs from From on the row, so a reply can be addressed from search alone', async () => {
+    const h = harness();
+    h.imap.addMessage('INBOX', { from: 'sam@x.com', fromName: 'Smith, Sam', subject: 'Dinner?', replyTo: ['sam.personal@y.com'] });
+    h.imap.addMessage('INBOX', { from: 'sam@x.com', subject: 'No reply-to' });
+    h.imap.addMessage('INBOX', { from: 'sam@x.com', subject: 'Same as from', replyTo: ['SAM@x.com'] });
+    const { json } = await h.call('apple_mail_search', {});
+    const bySubject = new Map<string, Record<string, unknown>>(json.messages.map((m: { subject: string }) => [m.subject, m]));
+    expect(bySubject.get('Dinner?')).toMatchObject({ from: 'Smith, Sam <sam@x.com>', replyTo: ['sam.personal@y.com'] });
+    // The fake ENVELOPE copies From into reply-to when the header is absent, as real servers do.
+    expect(bySubject.get('No reply-to')).not.toHaveProperty('replyTo');
+    expect(bySubject.get('Same as from')).not.toHaveProperty('replyTo');
+    // Reply-To sits beside from, ahead of the recipients.
+    expect(Object.keys(bySubject.get('Dinner?') as object).slice(0, 6)).toEqual(['uid', 'date', 'dateDisplay', 'from', 'replyTo', 'to']);
+  });
+
   it('turns every criterion into IMAP SEARCH keys, dates in the chosen zone', async () => {
     vi.useFakeTimers({ now: new Date('2026-09-27T12:00:00Z'), toFake: ['Date'] });
     const h = seed();
@@ -355,7 +387,21 @@ describe('apple_mail_search', () => {
     expect(reversed.json.error.message).toMatch(/must be earlier/);
     const zone = await h.call('apple_mail_search', { timeZone: 'Mars/Olympus' });
     expect(zone.json.error.message).toMatch(/not a known IANA time zone/);
+    // A fixed offset resolves in Intl but is not a zone (no DST): refused like any unknown one.
+    expect((await h.call('apple_mail_search', { timeZone: '-04:00' })).json.error.message).toMatch(/not a known IANA time zone/);
     expect(h.imap.created).toHaveLength(0);
+  });
+
+  it('uses the canonical spelling of a mis-cased timeZone, like DISPLAY_TZ', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-27T12:00:00Z'), toFake: ['Date'] });
+    const h = seed();
+    // The zone is quoted back in hints: the canonical name, not the one typed.
+    const bad = await h.call('apple_mail_search', { since: 'soon', timeZone: 'europe/london' });
+    expect(bad.json.error.hint).toContain('local time in Europe/London');
+    expect(bad.json.error.hint).not.toContain('europe/london');
+    const { json } = await h.call('apple_mail_search', { since: '2026-09-15', timeZone: 'AMERICA/NEW_YORK' });
+    expect(json.criteria).toEqual({ since: '2026-09-15T00:00:00-04:00' });
+    expect(json.messages.map((m: { uid: number }) => m.uid)).toEqual([3]);
   });
 
   it('says what was searched when nothing matches, and when the page is past the end', async () => {
@@ -490,41 +536,34 @@ describe('apple_mail_get_message', () => {
     expect(empty.json.notes).toEqual(['The message has no text or HTML body.']);
   });
 
-  it('marks read only when asked and allowed', async () => {
+  it('never writes, even if a markRead argument slipped past the schema', async () => {
     const h = harness();
     h.imap.addMessage('INBOX', {});
+    // The SDK validates against the strict schema; calling the handler directly simulates one that did not.
+    const { json, isError } = await h.call('apple_mail_get_message', { uid: 1, markRead: true });
+    expect(isError).toBe(false);
+    expect(json).toMatchObject({ seen: false, text: 'Hi there.\nSecond line.' });
+    expect(json).not.toHaveProperty('markedRead');
+    expect(json).not.toHaveProperty('warnings');
+    expect(h.imap.callsOf('getMailboxLock')[0]?.[1]).toEqual({ readOnly: true });
+    expect(h.imap.callsOf('messageFlagsAdd')).toHaveLength(0);
+    expect(h.imap.mailboxes.get('INBOX')?.messages.get(1)?.flags.has('\\Seen')).toBe(false);
+  });
+
+  it('reports a message that is already read as seen', async () => {
+    const h = harness();
     h.imap.addMessage('INBOX', { flags: ['\\Seen'] });
-    const r = await h.call('apple_mail_get_message', { uid: 1, markRead: true });
-    expect(r.json).toMatchObject({ seen: true, markedRead: true });
-    expect(h.imap.clients[0]?.readOnly).toBe(false);
-    expect(h.imap.mailboxes.get('INBOX')?.messages.get(1)?.flags.has('\\Seen')).toBe(true);
-    const again = await h.call('apple_mail_get_message', { uid: 2, markRead: true });
-    expect(again.json).toMatchObject({ seen: true, markedRead: false, notes: ['The message was already marked read.'] });
+    const { json } = await h.call('apple_mail_get_message', { uid: 1 });
+    expect(json).toMatchObject({ seen: true, flagged: false, answered: false });
   });
 
-  it('reports a failed mark-read beside the content', async () => {
-    const h = harness();
-    h.imap.addMessage('INBOX', {});
-    h.imap.override('messageFlagsAdd', () => false, 1);
-    const refused = await h.call('apple_mail_get_message', { uid: 1, markRead: true });
-    expect(refused.json).toMatchObject({ seen: false, markedRead: false, warnings: ['The message could not be marked read.'] });
-    expect(refused.json.text).toContain('Hi there');
-    h.imap.override('messageFlagsAdd', () => {
-      throw imapError({ code: 'NoConnection' }, 'Connection not available');
-    }, 1);
-    const lost = await h.call('apple_mail_get_message', { uid: 1, markRead: true });
-    expect(lost.isError).toBe(false);
-    expect(lost.json).not.toHaveProperty('markedRead');
-    expect(lost.json.warnings[0]).toMatch(/^Marking the message read may or may not have been applied: iCloud Mail: the connection failed/);
-  });
-
-  it('refuses markRead unless APPLE_WRITE_MODE=all', async () => {
+  it('works under APPLE_WRITE_MODE=none: reading is not a write', async () => {
     const h = harness();
     process.env.APPLE_WRITE_MODE = 'none';
-    const { json, isError } = await h.call('apple_mail_get_message', { uid: 1, markRead: true });
-    expect(isError).toBe(true);
-    expect(json.error).toMatchObject({ code: 'UNSUPPORTED', hint: 'Set APPLE_WRITE_MODE=all to allow it.' });
-    expect(h.imap.created).toHaveLength(0);
+    h.imap.addMessage('INBOX', {});
+    const { json, isError } = await h.call('apple_mail_get_message', { uid: 1 });
+    expect(isError).toBe(false);
+    expect(json).toMatchObject({ uid: 1, seen: false });
   });
 
   it('errors for a missing uid, missing content and stale uidValidity', async () => {

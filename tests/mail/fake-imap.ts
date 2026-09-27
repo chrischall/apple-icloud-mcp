@@ -30,6 +30,7 @@ export interface FakeMessage {
     subject?: string;
     messageId?: string;
     from?: Array<{ name?: string; address?: string }>;
+    replyTo?: Array<{ name?: string; address?: string }>;
     to?: Array<{ name?: string; address?: string }>;
     cc?: Array<{ name?: string; address?: string }>;
   };
@@ -50,6 +51,8 @@ export interface FakeMailbox {
 export interface MessageSpec {
   from?: string;
   fromName?: string;
+  /** A Reply-To header (addresses as written). */
+  replyTo?: string[];
   to?: string[];
   cc?: string[];
   subject?: string;
@@ -70,6 +73,7 @@ export function rfc822(spec: MessageSpec): string {
   const lines: string[] = [];
   const from = spec.from ?? 'alice@example.com';
   lines.push(`From: ${spec.fromName ? `"${spec.fromName}" <${from}>` : from}`);
+  if (spec.replyTo?.length) lines.push(`Reply-To: ${spec.replyTo.join(', ')}`);
   lines.push(`To: ${(spec.to ?? ['me@icloud.com']).join(', ')}`);
   if (spec.cc?.length) lines.push(`Cc: ${spec.cc.join(', ')}`);
   lines.push(`Subject: ${spec.subject ?? 'Hello'}`);
@@ -167,6 +171,10 @@ export class FakeMailServer {
         subject: spec.subject ?? 'Hello',
         ...(spec.messageId !== '' ? { messageId: spec.messageId ?? '<orig-1@example.com>' } : {}),
         from: [{ ...(spec.fromName ? { name: spec.fromName } : {}), address: from }],
+        // RFC 3501: with no Reply-To header, the ENVELOPE's reply-to is a copy of From.
+        replyTo: spec.replyTo?.length
+          ? spec.replyTo.map((address) => ({ address }))
+          : [{ ...(spec.fromName ? { name: spec.fromName } : {}), address: from }],
         to: (spec.to ?? ['me@icloud.com']).map((address) => ({ address })),
         ...(spec.cc ? { cc: spec.cc.map((address) => ({ address })) } : {}),
       },

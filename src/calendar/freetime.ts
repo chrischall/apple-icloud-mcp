@@ -38,7 +38,7 @@ export interface FreeTimeOptions {
   from: Date;
   to: Date;
   zone: string;
-  /** Nothing before this instant is offered (the past, when the window starts today by default). */
+  /** Nothing before this instant is offered: the tool passes "now", because a slot in the past can never be booked. */
   notBefore?: Date;
   workdayStart: ClockTime;
   workdayEnd: ClockTime;

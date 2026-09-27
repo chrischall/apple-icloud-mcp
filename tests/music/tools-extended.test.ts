@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { callConfirmed, callPreview, NO_ELICIT_CTX, type GatedHandler } from '../tools/_confirm-helpers.js';
-import { dedupeTracks, moveTracks, replaceTracks, sortTracks } from '../../src/music/tools-extended.js';
+import { CAN_ASK_CTX, callConfirmed, callPreview, NO_ELICIT_CTX, type GatedHandler } from '../tools/_confirm-helpers.js';
+import { MusicClient } from '../../src/music/client.js';
+import { PREVIEW_LIST_CAP, dedupeTracks, moveTracks, replaceTracks, sortTracks } from '../../src/music/tools-extended.js';
+import { PLAYLIST_WRITE_TTL_MS } from '../../src/music/write-log.js';
+import { stateRevision } from '../../src/tools/_confirm.js';
 import { FakeLibrary, captureTools, callTool, installFetch, route, track, useOfficial, useWeb, type CapturedTool, type FakeReq } from './_helpers.js';
 
 beforeEach(() => {
@@ -154,6 +157,8 @@ describe('apple_music_remove_playlist_tracks (confirm-gated)', () => {
     expect(del.body).toBeUndefined();
     expect(r).toMatchObject({ backend: 'web', removed: 3, tracksBefore: 5, tracksAfter: 2, verified: true, notInPlaylist: ['i.NOPE'] });
     expect(ids(l)).toEqual(['i.T3', 'i.MV']);
+    // The revision of the order it left, for the next change's expectedRevision.
+    expect(r.revision).toBe(stateRevision(['i.T3', 'i.MV']));
   });
 
   it('a track with no artist is previewed by name alone', async () => {
@@ -291,6 +296,7 @@ describe('apple_music_reorder_playlist (confirm-gated)', () => {
     expect(put.body).toEqual({ data: [{ id: 'i.T3', type: 'library-songs' }, { id: 'i.T2', type: 'library-songs' }, { id: 'i.T1', type: 'library-songs' }] });
     expect(r).toMatchObject({ backend: 'web', operation: 'sort', changed: true, tracksBefore: 3, tracksAfter: 3, verified: true });
     expect(ids(l)).toEqual(['i.T3', 'i.T2', 'i.T1']);
+    expect(r.revision).toBe(stateRevision(['i.T3', 'i.T2', 'i.T1']));
   });
 
   it('move, reverse, dedupe and replace', async () => {
@@ -344,6 +350,7 @@ describe('apple_music_reorder_playlist (confirm-gated)', () => {
     const { l, tools } = setup();
     const r = await callTool(tools, 'apple_music_reorder_playlist', { playlistId: 'p.A', operation: 'move', fromPosition: 2, toPosition: 2, count: 2 }, NO_ELICIT_CTX);
     expect(r.data).toMatchObject({ changed: false, tracks: 5, notes: ['Nothing to change: the playlist is already in that order.'] });
+    expect(r.data.revision).toBe(stateRevision(ids(l)));
     l.playlists.get('p.A')!.tracks = [track(1)];
     const dd = await callTool(tools, 'apple_music_reorder_playlist', { playlistId: 'p.A', operation: 'dedupe' }, NO_ELICIT_CTX);
     expect(dd.data.notes).toEqual(['Nothing to change: the playlist is already in that order with no duplicates.']);
@@ -386,6 +393,234 @@ describe('apple_music_reorder_playlist (confirm-gated)', () => {
     const t2 = captureTools();
     const fail = parse(await callConfirmed((t2.get('apple_music_reorder_playlist') as CapturedTool).cb as unknown as GatedHandler, { playlistId: 'p.A', operation: 'reverse' }));
     expect((fail.warnings as string[])[0]).toMatch(/could not re-read/);
+  });
+});
+
+describe('reorder preview names the tracks it drops or moves', () => {
+  const REORDER = 'apple_music_reorder_playlist';
+  /** 13 tracks: Song 1–11, then second copies of Song 2 and Song 5 at positions 12 and 13 — past the first-10 rows. */
+  function thirteen() {
+    const env = setup();
+    env.l.playlists.get('p.A')!.tracks = [...Array.from({ length: 11 }, (_, i) => track(i + 1)), track(2), track(5)];
+    return env;
+  }
+
+  it('dedupe lists every copy it removes, with position and artist, even when the first rows do not change', async () => {
+    const { l, h } = thirteen();
+    const p1 = await callPreview(h(REORDER), { playlistId: 'p.A', operation: 'dedupe' });
+    expect(p1.preview).toMatchObject({
+      tracksBefore: 13,
+      tracksAfter: 11,
+      removed: 2,
+      removing: [
+        { position: 12, name: 'Song 2', artistName: 'Artist 2', id: 'i.T2' },
+        { position: 13, name: 'Song 5', artistName: 'Artist 5', id: 'i.T5' },
+      ],
+    });
+    // The first-10 rows alone could not show what goes: they are identical.
+    expect(p1.preview.firstAfter).toEqual(p1.preview.firstBefore);
+    expect(p1.preview.removingMore).toBeUndefined();
+    expect(p1.preview.moving).toBeUndefined();
+    const ask = await h(REORDER)({ playlistId: 'p.A', operation: 'dedupe' }, CAN_ASK_CTX);
+    expect(JSON.stringify(ask)).toContain('removing 2 track(s): \\"Song 2\\", \\"Song 5\\"');
+    expect(l.writes).toEqual([]);
+  });
+
+  it(`replace names every dropped track, up to ${PREVIEW_LIST_CAP}, then counts the rest`, async () => {
+    const { l, h } = setup();
+    l.playlists.get('p.A')!.tracks = Array.from({ length: 60 }, (_, i) => track(i + 1));
+    const args = { playlistId: 'p.A', operation: 'replace', trackIds: ['i.T1', 'i.T2'] };
+    const p1 = await callPreview(h(REORDER), args);
+    const removing = p1.preview.removing as Array<{ position: number; name: string }>;
+    expect(p1.preview).toMatchObject({ tracksBefore: 60, tracksAfter: 2, removed: 58, removingMore: 58 - PREVIEW_LIST_CAP });
+    expect(removing).toHaveLength(PREVIEW_LIST_CAP);
+    expect(removing[0]).toEqual({ position: 3, name: 'Song 3', artistName: 'Artist 3', id: 'i.T3' });
+    expect(removing.at(-1)).toMatchObject({ position: 52, name: 'Song 52' });
+    const ask = await h(REORDER)(args, CAN_ASK_CTX);
+    expect(JSON.stringify(ask)).toContain('removing 58 track(s): \\"Song 3\\", \\"Song 4\\", \\"Song 5\\" and 55 more');
+    expect(l.writes).toEqual([]);
+  });
+
+  it('move names the tracks it moves and where from and to', async () => {
+    const { h } = thirteen();
+    const one = await callPreview(h(REORDER), { playlistId: 'p.A', operation: 'move', fromPosition: 5, toPosition: 1 });
+    expect(one.preview).toMatchObject({
+      change: 'move "Song 5" from position 5 to 1',
+      fromPosition: 5,
+      toPosition: 1,
+      moving: [{ position: 5, name: 'Song 5', artistName: 'Artist 5', id: 'i.T5' }],
+    });
+    expect(one.preview.removed).toBeUndefined();
+    const block = await callPreview(h(REORDER), { playlistId: 'p.A', operation: 'move', fromPosition: 12, toPosition: 11, count: 2 });
+    expect(block.preview).toMatchObject({
+      change: 'move 2 tracks ("Song 2", "Song 5") from position 12 to 11',
+      moving: [
+        { position: 12, name: 'Song 2' },
+        { position: 13, name: 'Song 5' },
+      ],
+    });
+    const many = await callPreview(h(REORDER), { playlistId: 'p.A', operation: 'move', fromPosition: 1, toPosition: 4, count: 10 });
+    expect(many.preview.change).toBe('move 10 tracks ("Song 1", "Song 2" and 8 more) from position 1 to 4');
+  });
+});
+
+describe('playlist rewrites never rebuild from a read that lags the last write', () => {
+  const REORDER = 'apple_music_reorder_playlist';
+  const REMOVE = 'apple_music_remove_playlist_tracks';
+  const ORIGINAL = ['i.T1', 'i.T2', 'i.T3', 'i.T2', 'i.MV'];
+  const errorOf = (r: { data: Record<string, unknown> }) => r.data.error as Record<string, string>;
+
+  it('dedupe then sort: the sort is refused while Apple still shows the duplicates, and runs once it catches up', async () => {
+    const { l, h, tools } = setup();
+    l.lag = true;
+    const d = parse(await callConfirmed(h(REORDER), { playlistId: 'p.A', operation: 'dedupe' }));
+    const deduped = ['i.T1', 'i.T2', 'i.T3', 'i.MV'];
+    expect(d).toMatchObject({ changed: true, verified: false, revision: stateRevision(deduped) });
+    expect(ids(l)).toEqual(deduped);
+
+    const sortArgs = { playlistId: 'p.A', operation: 'sort', by: 'name', descending: true };
+    const refused = await callTool(tools, REORDER, sortArgs, NO_ELICIT_CTX);
+    expect(refused.isError).toBe(true);
+    expect(errorOf(refused)).toMatchObject({ code: 'PLAYLIST_CHANGED', service: 'music', playlistId: 'p.A', currentRevision: stateRevision(ORIGINAL) });
+    expect(errorOf(refused).message).toMatch(/^Apple is not showing your last change to "Road Trip" yet \(reorder \(dedupe\), 0 s ago\).*would undo it/);
+    expect(errorOf(refused).hint).toMatch(/re-read it with apple_music_get_playlist.*lapses 120 s/);
+    // Passing the dedupe's own revision does not get past it either: the read is still the old list.
+    const chained = await callTool(tools, REORDER, { ...sortArgs, expectedRevision: d.revision }, NO_ELICIT_CTX);
+    expect(errorOf(chained)).toMatchObject({ code: 'PLAYLIST_CHANGED', expectedRevision: d.revision });
+    expect(errorOf(chained).message).toMatch(/not showing your last change/);
+    expect(l.writes).toEqual(['replace p.A']);
+    expect(ids(l)).toEqual(deduped);
+
+    // A re-read says the same, so "re-read and retry" is not a loop that ends in a stale rewrite.
+    const g = await callTool(tools, 'apple_music_get_playlist', { playlistId: 'p.A', allTracks: true });
+    expect(g.data.revision).toBe(stateRevision(ORIGINAL));
+    expect(g.data.notes).toContainEqual(expect.stringMatching(/does not show the change made 0 s ago \(reorder \(dedupe\)\) yet/));
+
+    l.lag = false;
+    const g2 = await callTool(tools, 'apple_music_get_playlist', { playlistId: 'p.A', allTracks: true });
+    expect(g2.data.notes).toBeUndefined();
+    const sorted = parse(await callConfirmed(h(REORDER), { ...sortArgs, expectedRevision: g2.data.revision }));
+    expect(sorted).toMatchObject({ changed: true, verified: true, tracksBefore: 4, tracksAfter: 4 });
+    expect(ids(l)).toEqual(['i.MV', 'i.T3', 'i.T2', 'i.T1']);
+  });
+
+  it('add then reorder: the tracks just added are not dropped by a rewrite from the lagging read', async () => {
+    const { l, tools, h } = setup();
+    l.lag = true;
+    const add = await callTool(tools, 'apple_music_add_playlist_tracks', { playlistId: 'p.A', tracks: ['777'] });
+    expect(add.data).toMatchObject({ added: 1, verified: false });
+    const refused = await callTool(tools, REORDER, { playlistId: 'p.A', operation: 'reverse' }, NO_ELICIT_CTX);
+    expect(errorOf(refused)).toMatchObject({ code: 'PLAYLIST_CHANGED' });
+    expect(errorOf(refused).message).toMatch(/\(add tracks, 0 s ago\)/);
+    const rm = await callTool(tools, REMOVE, { playlistId: 'p.A', positions: [1] }, NO_ELICIT_CTX);
+    expect(errorOf(rm)).toMatchObject({ code: 'PLAYLIST_CHANGED' });
+    expect(ids(l)).toEqual([...ORIGINAL, 'i.C777']);
+    l.lag = false;
+    const r = parse(await callConfirmed(h(REORDER), { playlistId: 'p.A', operation: 'reverse' }));
+    expect(r).toMatchObject({ tracksBefore: 6, verified: true });
+    expect(ids(l)).toEqual(['i.C777', 'i.MV', 'i.T2', 'i.T3', 'i.T2', 'i.T1']);
+  });
+
+  it('remove then reorder, and the guard lapses after its TTL', async () => {
+    useWeb();
+    const l = new FakeLibrary();
+    l.addPlaylist('p.A', { name: 'Road Trip', tracks: [track(1), track(2), track(3)] });
+    installFetch(l.handler());
+    let clock = Date.parse('2026-09-27T12:00:00Z');
+    const tools = captureTools(new MusicClient({ now: () => clock }));
+    const h = (name: string): GatedHandler => (tools.get(name) as CapturedTool).cb as unknown as GatedHandler;
+    l.lag = true;
+    const rm = parse(await callConfirmed(h(REMOVE), { playlistId: 'p.A', positions: [1] }));
+    expect(rm).toMatchObject({ removed: 1, verified: false, revision: stateRevision(['i.T2', 'i.T3']) });
+    clock += PLAYLIST_WRITE_TTL_MS - 1000;
+    const refused = await callTool(tools, REORDER, { playlistId: 'p.A', operation: 'reverse' }, NO_ELICIT_CTX);
+    expect(errorOf(refused).message).toMatch(/\(remove tracks, 119 s ago\)/);
+    // A second removal from the stale list is refused the same way.
+    const again = await callTool(tools, REMOVE, { playlistId: 'p.A', positions: [2] }, NO_ELICIT_CTX);
+    expect(errorOf(again)).toMatchObject({ code: 'PLAYLIST_CHANGED' });
+    clock += 2000;
+    // Past the TTL the record is dropped (Apple has had its time); the change is previewed as usual.
+    const later = await callPreview(h(REORDER), { playlistId: 'p.A', operation: 'reverse' });
+    expect(later.preview.tracksBefore).toBe(3);
+  });
+
+  it('an UNCONFIRMED rewrite is remembered too (it may have landed); a refused one is not', async () => {
+    const { l } = setup();
+    let failPut: 503 | 400 = 503;
+    installFetch((req: FakeReq) => (req.method === 'PUT' ? { status: failPut, json: { errors: [{ status: String(failPut), title: 'Nope' }] } } : undefined), l.handler());
+    const tools = captureTools();
+    const h = (name: string): GatedHandler => (tools.get(name) as CapturedTool).cb as unknown as GatedHandler;
+    const r = parse(await callConfirmed(h(REORDER), { playlistId: 'p.A', operation: 'reverse' }));
+    expect(r.error).toMatchObject({ code: 'UNCONFIRMED_WRITE' });
+    const next = await callTool(tools, REORDER, { playlistId: 'p.A', operation: 'dedupe' }, NO_ELICIT_CTX);
+    expect(errorOf(next).message).toMatch(/\(reorder \(reverse\), unconfirmed, 0 s ago\)/);
+
+    failPut = 400;
+    const tools2 = captureTools();
+    const h2 = (name: string): GatedHandler => (tools2.get(name) as CapturedTool).cb as unknown as GatedHandler;
+    const bad = parse(await callConfirmed(h2(REORDER), { playlistId: 'p.A', operation: 'reverse' }));
+    expect(bad.error).toMatchObject({ code: 'UPSTREAM_ERROR', status: 400 });
+    // Nothing landed, so nothing is remembered: the next change is previewed normally.
+    const ok = await callPreview(h2(REORDER), { playlistId: 'p.A', operation: 'dedupe' });
+    expect(ok.preview.removed).toBe(1);
+  });
+
+  it('expectedRevision: a rewrite applies only to the order the caller read; results chain', async () => {
+    const { l, h, tools } = setup();
+    const read = await callTool(tools, 'apple_music_get_playlist', { playlistId: 'p.A', allTracks: true });
+    const r0 = read.data.revision as string;
+    expect(r0).toBe(stateRevision(ORIGINAL));
+    const rev = parse(await callConfirmed(h(REORDER), { playlistId: 'p.A', operation: 'reverse', expectedRevision: r0 }));
+    expect(rev).toMatchObject({ verified: true, revision: stateRevision([...ORIGINAL].reverse()) });
+
+    // The pre-reverse revision is stale now: refused, naming both revisions.
+    const stale = await callTool(tools, REORDER, { playlistId: 'p.A', operation: 'dedupe', expectedRevision: r0 }, NO_ELICIT_CTX);
+    expect(stale.isError).toBe(true);
+    expect(errorOf(stale)).toMatchObject({ code: 'PLAYLIST_CHANGED', expectedRevision: r0, currentRevision: rev.revision });
+    expect(errorOf(stale).message).toMatch(/^"Road Trip" no longer reads as revision s1:.*changed since then, or Apple has not caught up/);
+    expect(errorOf(stale).hint).toMatch(/apple_music_get_playlist \(allTracks\)/);
+
+    // The revision the reverse returned chains into the next change.
+    const rm = parse(await callConfirmed(h(REMOVE), { playlistId: 'p.A', trackIds: ['i.MV'], expectedRevision: rev.revision }));
+    expect(rm).toMatchObject({ removed: 1, verified: true, revision: stateRevision(['i.T2', 'i.T3', 'i.T2', 'i.T1']) });
+
+    // A change made elsewhere (the Music app) since the read is caught the same way, by either tool.
+    l.playlists.get('p.A')!.tracks.push(track(8));
+    for (const [name, args] of [
+      [REMOVE, { playlistId: 'p.A', positions: [1] }],
+      [REORDER, { playlistId: 'p.A', operation: 'reverse' }],
+    ] as const) {
+      const r = await callTool(tools, name, { ...args, expectedRevision: rm.revision }, NO_ELICIT_CTX);
+      expect(errorOf(r), name).toMatchObject({ code: 'PLAYLIST_CHANGED' });
+    }
+    expect(l.writes).toEqual(['replace p.A', 'remove p.A']);
+
+    // The schema takes only a revision's shape.
+    const schema = (tools.get(REORDER) as CapturedTool).cfg.inputSchema;
+    expect(schema.safeParse({ playlistId: 'p.A', operation: 'reverse', expectedRevision: 'latest' }).success).toBe(false);
+    expect(schema.safeParse({ playlistId: 'p.A', operation: 'reverse', expectedRevision: r0 }).success).toBe(true);
+  });
+
+  it('catalog playlist ids get a hint that fits the tool (editing tools never suggest adding it to the library)', async () => {
+    const { tools } = setup();
+    for (const [name, args] of [
+      [REORDER, { playlistId: 'pl.u-abc', operation: 'reverse' }],
+      [REMOVE, { playlistId: 'pl.u-abc', positions: [1] }],
+      ['apple_music_update_playlist', { playlistId: 'pl.u-abc', name: 'x' }],
+    ] as const) {
+      const hint = errorOf(await callTool(tools, name, args, NO_ELICIT_CTX)).hint!;
+      expect(hint, name).toMatch(/read-only.*apple_music_create_playlist/);
+      expect(hint, name).not.toMatch(/add_to_library/);
+    }
+    for (const [name, args] of [
+      ['apple_music_delete_playlist', { playlistId: 'pl.u-abc' }],
+      ['apple_music_remove_from_library', { type: 'playlists', ids: ['pl.u-abc'] }],
+      ['apple_music_move_playlist', { playlistId: 'pl.u-abc', folderId: 'root' }],
+    ] as const) {
+      const hint = errorOf(await callTool(tools, name, args, NO_ELICIT_CTX)).hint!;
+      expect(hint, name).toMatch(/p\.… id of your library copy/);
+    }
+    expect(errorOf(await callTool(tools, 'apple_music_move_playlist', { playlistId: 'p.A', folderId: 'pl.x' })).hint).toMatch(/not a folder/);
   });
 });
 

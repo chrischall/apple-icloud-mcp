@@ -73,6 +73,7 @@ describe('apple_music_list_playlists', () => {
     expect((missing.data.error as { hint: string }).hint).toMatch(/apple_music_list_folders/);
     const bad = await callTool(tools, 'apple_music_list_playlists', { folderId: 'pl.x' });
     expect((bad.data.error as { code: string }).code).toBe('INVALID_ARGUMENT');
+    expect((bad.data.error as { hint: string }).hint).toMatch(/not a folder/);
   });
 });
 

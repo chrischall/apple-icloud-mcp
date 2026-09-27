@@ -30,10 +30,35 @@ describe('getEnabledServices / isServiceEnabled', () => {
   });
 
   it('parses comma/space separated names case-insensitively and reports unknown entries verbatim', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const r = getEnabledServices({ APPLE_SERVICES: ' Music, calendar  WEATHER,,Musik ' });
     expect([...r.enabled].sort()).toEqual(['calendar', 'music', 'weather']);
     expect(r.unknown).toEqual(['Musik']);
     expect([...getEnabledServices({ APPLE_SERVICES: ',maps,' }).enabled]).toEqual(['maps']);
+    expect(err).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns once per value on stderr that a misspelled entry leaves the intended service UNREGISTERED', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const env = { APPLE_SERVICES: 'music,calender' };
+    expect([...getEnabledServices(env).enabled]).toEqual(['music']);
+    expect(isServiceEnabled('calendar', env)).toBe(false);
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(err.mock.calls[0]![0]).toBe(
+      '[aws-mcp] WARNING: APPLE_SERVICES names no such service: "calender" — ignored, so a misspelled service ' +
+        'registers NO tools. Registered services: music. Valid names: music, calendar, contacts, mail, maps, weather, itunes.',
+    );
+    // Every entry unknown: nothing but the healthcheck is registered, and it says so.
+    getEnabledServices({ APPLE_SERVICES: 'calender contcts' });
+    expect(err).toHaveBeenCalledTimes(2);
+    expect(String(err.mock.calls[1]![0])).toContain('"calender", "contcts"');
+    expect(String(err.mock.calls[1]![0])).toContain('Registered services: none.');
+    // A clean value never warns; a reset warns again.
+    getEnabledServices({ APPLE_SERVICES: 'music' });
+    expect(err).toHaveBeenCalledTimes(2);
+    resetConfigWarnings();
+    getEnabledServices(env);
+    expect(err).toHaveBeenCalledTimes(3);
   });
 
   it('reads process.env by default', () => {

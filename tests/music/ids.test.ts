@@ -13,7 +13,7 @@ import {
 
 describe('catalog ids', () => {
   it('accepts the documented shapes per type', () => {
-    expect(isCatalogId('songs', '1440833851')).toBe(true);
+    expect(isCatalogId('songs', '1616728064')).toBe(true);
     expect(isCatalogId('albums', '1')).toBe(true);
     expect(isCatalogId('playlists', 'pl.u-jV8990gT3bLqrj')).toBe(true);
     expect(isCatalogId('playlists', 'pl.cb4d1c09a2df4230a78d0395fe1f8fde')).toBe(true);
@@ -26,7 +26,7 @@ describe('catalog ids', () => {
     expect(() => assertCatalogId('songs', '../ratings', 'ids[0]')).toThrow(/ids\[0\] "..\/ratings" is not a numeric catalog songs id/);
     expect(() => assertCatalogId('playlists', 'pl./x', 'id')).toThrow(/catalog playlist id/);
     expect(() => assertCatalogId('stations', '12', 'id')).toThrow(/station id/);
-    expect(() => assertCatalogId('songs', '1440833851', 'id')).not.toThrow();
+    expect(() => assertCatalogId('songs', '1616728064', 'id')).not.toThrow();
   });
 
   it('hints when a library id is given where a catalog id is expected', () => {
@@ -57,21 +57,33 @@ describe('library ids', () => {
     }
   });
 
-  it('library playlist ids must be p.… and a catalog playlist gets a pointer', () => {
+  it('library playlist ids must be p.…, and a catalog playlist gets a pointer that fits what the argument is for', () => {
     expect(() => assertLibraryPlaylistId('p.abc', 'playlistId')).not.toThrow();
-    expect(() => assertLibraryPlaylistId(ROOT_FOLDER_ID, 'folderId')).not.toThrow();
-    try {
-      assertLibraryPlaylistId('pl.u-abc', 'playlistId');
-      expect.unreachable();
-    } catch (err) {
-      expect((err as { hint?: string }).hint).toMatch(/CATALOG playlist/);
-    }
-    try {
-      assertLibraryPlaylistId('i.abc', 'playlistId');
-      expect.unreachable();
-    } catch (err) {
-      expect((err as { hint?: string }).hint).toMatch(/apple_music_list_playlists/);
-    }
+    expect(() => assertLibraryPlaylistId(ROOT_FOLDER_ID, 'folderId', 'folder')).not.toThrow();
+    const refusal = (id: string, use?: 'edit' | 'library' | 'folder'): { message: string; hint?: string } => {
+      try {
+        assertLibraryPlaylistId(id, 'x', use);
+      } catch (err) {
+        return err as { message: string; hint?: string };
+      }
+      return expect.unreachable();
+    };
+    // Editing: Apple's playlists are read-only even in your library, so "add it to your library" is a dead end.
+    const edit = refusal('pl.u-abc', 'edit');
+    expect(edit.hint).toMatch(/CATALOG playlist.*read-only.*apple_music_get_playlist.*apple_music_create_playlist/);
+    expect(edit.hint).not.toMatch(/add_to_library/);
+    // Acting on your library's copy (the default): point at its p.… id, never at adding it.
+    const lib = refusal('pl.u-abc');
+    expect(lib.hint).toMatch(/p\.… id of your library copy.*apple_music_list_playlists/);
+    expect(lib.hint).not.toMatch(/add_to_library/);
+    expect(refusal('pl.u-abc', 'library').hint).toBe(lib.hint);
+    // A folder argument: neither kind of playlist.
+    const folder = refusal('pl.u-abc', 'folder');
+    expect(folder.message).toMatch(/is not a playlist folder id/);
+    expect(folder.hint).toMatch(/not a folder.*apple_music_list_folders/);
+    expect(refusal('i.abc', 'folder').hint).toMatch(/apple_music_list_folders/);
+    expect(refusal('i.abc').hint).toMatch(/apple_music_list_playlists/);
+    expect(refusal('i.abc', 'edit').message).toMatch(/is not a library playlist id/);
     expect(isCatalogPlaylistId('pl.a')).toBe(true);
     expect(isLibraryPlaylistId('p.a')).toBe(true);
     expect(isLibraryPlaylistId('pl.a')).toBe(false);
@@ -80,7 +92,7 @@ describe('library ids', () => {
 
 describe('resolveTrackRef', () => {
   it('infers catalog and library songs from bare strings', () => {
-    expect(resolveTrackRef('1440833851', 't')).toEqual({ id: '1440833851', type: 'songs' });
+    expect(resolveTrackRef('1616728064', 't')).toEqual({ id: '1616728064', type: 'songs' });
     expect(resolveTrackRef('i.abc', 't')).toEqual({ id: 'i.abc', type: 'library-songs' });
     expect(resolveTrackRef('a.1542568135', 't')).toEqual({ id: 'a.1542568135', type: 'library-songs' });
   });
@@ -96,7 +108,10 @@ describe('resolveTrackRef', () => {
     };
     expect(hintOf(() => resolveTrackRef('pl.u-abc', 'tracks[0]'))).toMatch(/Playlists cannot be added/);
     expect(hintOf(() => resolveTrackRef('p.abc', 'tracks[0]'))).toMatch(/Playlists cannot be added/);
-    expect(hintOf(() => resolveTrackRef('l.abc', 'tracks[0]'))).toMatch(/library ALBUM/);
+    // A library album: point at tools that take it (search_library for its songs, or its catalogId) — never at
+    // get_catalog_items with the l.… id, which refuses library ids.
+    const album = hintOf(() => resolveTrackRef('l.abc', 'tracks[0]'));
+    expect(album).toMatch(/library ALBUM.*apple_music_search_library.*i\.… ids.*catalogId.*apple_music_get_catalog_items/);
     expect(hintOf(() => resolveTrackRef('hello', 'tracks[0]'))).toMatch(/music video/);
   });
 

@@ -3,6 +3,7 @@ import PostalMime from 'postal-mime';
 import { SmtpPhaseError } from '../../src/mail/smtp.js';
 import { latchRejection } from '../../src/icloud-auth.js';
 import { NO_ELICIT_CTX, callConfirmed, callPreview, type GatedHandler } from '../tools/_confirm-helpers.js';
+import { MAX_BODY_CHARS } from '../../src/mail/tools.js';
 import { harness, useMailEnv } from './harness.js';
 import { PASS, imapError } from './fake-imap.js';
 
@@ -88,8 +89,8 @@ describe('apple_mail_send — new message', () => {
     const cb = gated(h);
     const err = async (args: Record<string, unknown>): Promise<any> => parse((await cb(args)).content[0]?.text as string).error;
     expect(await err({ to: ['bob'], subject: 's', body: 'b' })).toMatchObject({ code: 'INVALID_ARGUMENT', message: 'to[0]: "bob" is not a single email address.' });
-    expect((await err({ to: ['a@b.com'], body: 'b' })).message).toMatch(/subject is required/);
-    expect((await err({ to: ['a@b.com'], subject: 's', body: 'b', quoteOriginal: true })).message).toBe('quoteOriginal needs replyTo.');
+    expect((await err({ to: ['a@b.com'], body: 'b' })).message).toBe('subject is required (it may be omitted only when inReplyTo is given).');
+    expect((await err({ to: ['a@b.com'], subject: 's', body: 'b', quoteOriginal: true })).message).toBe('quoteOriginal needs inReplyTo.');
     const many = Array.from({ length: 60 }, (_, i) => `u${i}@x.com`);
     expect((await err({ to: many, cc: many, subject: 's', body: 'b' })).message).toMatch(/120 recipients/);
     expect((await err({ to: ['a@b.com'], subject: 's', body: 'b', timeZone: 'Nowhere/X' })).code).toBe('INVALID_ARGUMENT');
@@ -98,11 +99,18 @@ describe('apple_mail_send — new message', () => {
     expect(h.submit).not.toHaveBeenCalled();
   });
 
-  it('shows a long body cut in the preview', async () => {
+  it('shows the WHOLE body in the preview: nothing the token covers is hidden past a cut', async () => {
     const h = harness();
-    const p = await callPreview(gated(h), { to: ['a@b.com'], subject: 's', body: 'x'.repeat(2500) });
-    expect(p.preview.body).toBe(`${'x'.repeat(2000)}…`);
-    expect(p.preview).toMatchObject({ bodyChars: 2500, bodyTruncatedInPreview: true });
+    // Benign-looking head, something else at the very end: the user must see the end too.
+    const body = `${'x'.repeat(19_990)}SECRET-END`;
+    expect(body).toHaveLength(MAX_BODY_CHARS);
+    const p = await callPreview(gated(h), { to: ['a@b.com'], subject: 's', body });
+    expect(p.preview.body).toBe(body);
+    expect(p.preview.bodyChars).toBe(20_000);
+    expect(p.preview).not.toHaveProperty('bodyTruncatedInPreview');
+    await callConfirmed(gated(h), { to: ['a@b.com'], subject: 's', body });
+    const parsed = await PostalMime.parse(h.submitted[0]?.raw as Buffer);
+    expect(parsed.text?.trimEnd()).toBe(body);
   });
 
   it('tunnels SMTP through HTTPS_PROXY, and refuses a SOCKS proxy before asking the user to confirm', async () => {
@@ -190,7 +198,7 @@ describe('apple_mail_send — replies', () => {
 
   it('previews the reply target by name and threads the sent message', async () => {
     const h = seeded();
-    const args = { to: ['bob@example.com'], body: 'Yes!', replyTo: { uid: 1 } };
+    const args = { to: ['bob@example.com'], body: 'Yes!', inReplyTo: { uid: 1 } };
     const p = await callPreview(gated(h), args);
     expect(p.preview).toMatchObject({
       subject: 'Re: Dinner?',
@@ -209,7 +217,7 @@ describe('apple_mail_send — replies', () => {
 
   it('quotes the original on request and keeps an explicit subject', async () => {
     const h = seeded();
-    const args = { to: ['bob@example.com'], subject: 'Friday', body: 'Yes!  \n', replyTo: { mailbox: 'inbox', uid: 1, uidValidity: 1001 }, quoteOriginal: true };
+    const args = { to: ['bob@example.com'], subject: 'Friday', body: 'Yes!  \n', inReplyTo: { mailbox: 'inbox', uid: 1, uidValidity: 1001 }, quoteOriginal: true };
     const p = await callPreview(gated(h), args);
     expect(p.preview).toMatchObject({ subject: 'Friday', quotesOriginal: true });
     expect(p.preview.body).toBe('Yes!\n\nOn Mon, Sep 21, 2026, 10:30 AM EDT, Bob <bob@example.com> wrote:\n> Are you free Friday?\n> Bob\n');
@@ -218,41 +226,117 @@ describe('apple_mail_send — replies', () => {
     expect(parsed.text).toContain('> Are you free Friday?');
   });
 
-  it('warns about a very long quoted original', async () => {
+  it('warns about a very long quoted original, and previews all of what is sent', async () => {
     const h = harness();
     h.imap.addMessage('INBOX', { text: 'y'.repeat(25_000) });
-    const p = await callPreview(gated(h), { to: ['a@b.com'], body: 'ok', replyTo: { uid: 1 }, quoteOriginal: true });
+    const args = { to: ['alice@example.com'], body: 'z'.repeat(MAX_BODY_CHARS), inReplyTo: { uid: 1 }, quoteOriginal: true };
+    const p = await callPreview(gated(h), args);
     expect(p.preview.warnings).toEqual(['The quoted original was cut to its first 20,000 characters.']);
+    // The body AND the quote, whole: well past 20,000 characters, and exactly the text that goes out.
+    const shown = p.preview.body as string;
+    expect(shown.length).toBe(p.preview.bodyChars);
+    expect(shown.length).toBeGreaterThan(40_000);
+    expect(shown.startsWith('z'.repeat(MAX_BODY_CHARS))).toBe(true);
+    expect(shown.endsWith(`> ${'y'.repeat(20_000)}\n> […]\n`)).toBe(true);
+    await callConfirmed(gated(h), args);
+    const parsed = await PostalMime.parse(h.submitted[0]?.raw as Buffer);
+    expect(parsed.text?.replace(/\r\n/g, '\n')).toBe(shown);
   });
 
   it('warns when the original cannot be threaded, and handles a bare original', async () => {
     const h = harness();
     h.imap.addMessage('INBOX', { raw: 'Subject: \r\n\r\n' });
-    const p = await callPreview(gated(h), { to: ['a@b.com'], body: 'ok', replyTo: { uid: 1 }, quoteOriginal: true });
+    const p = await callPreview(gated(h), { to: ['a@b.com'], body: 'ok', inReplyTo: { uid: 1 }, quoteOriginal: true });
     expect(p.preview.subject).toBe('Re:');
     expect(p.preview.inReplyTo).toEqual({ mailbox: 'INBOX', uid: 1 });
     expect(p.preview.body).toBe('ok\n\nOn an earlier date, the sender wrote:\n>\n');
     expect(p.preview.warnings).toEqual(['The original message has no Message-ID, so mail apps may not thread this reply with it.']);
-    const r = await callConfirmed(gated(h), { to: ['a@b.com'], body: 'ok', replyTo: { uid: 1 } });
+    const r = await callConfirmed(gated(h), { to: ['a@b.com'], body: 'ok', inReplyTo: { uid: 1 } });
     expect(h.submitted[0]?.raw.toString()).not.toMatch(/^In-Reply-To:/m);
     expect(parse(r.content[0]?.text as string).warnings).toEqual(['The original message has no Message-ID, so mail apps may not thread this reply with it.']);
   });
 
+  describe("the original's Reply-To", () => {
+    function withReplyTo(replyTo: string[]): ReturnType<typeof harness> {
+      const h = harness();
+      h.imap.addMessage('INBOX', { from: 'sam@x.com', fromName: 'Smith, Sam', subject: 'Dinner?', messageId: '<d1@x.com>', replyTo });
+      return h;
+    }
+    const REPLY_TO_WARNING =
+      'The original asks for replies to go to sam.personal@y.com (its Reply-To, which differs from its From), but ' +
+      'sam.personal@y.com is not a recipient of this reply. Check which address the user means: a Reply-To can be ' +
+      'legitimate (a mailing list, a personal address) or a sign of phishing.';
+
+    it('is previewed, and a reply addressed to From instead is warned about — in the preview and the result', async () => {
+      const h = withReplyTo(['sam.personal@y.com']);
+      const args = { to: ['Smith, Sam <sam@x.com>'], body: 'Yes!', inReplyTo: { uid: 1 } };
+      const p = await callPreview(gated(h), args);
+      expect(p.preview.inReplyTo).toEqual({
+        mailbox: 'INBOX',
+        uid: 1,
+        subject: 'Dinner?',
+        from: 'Smith, Sam <sam@x.com>',
+        replyTo: ['sam.personal@y.com'],
+        date: 'Mon, Sep 21, 2026, 10:30 AM EDT',
+      });
+      expect(p.preview.warnings).toEqual([REPLY_TO_WARNING]);
+      const r = await callConfirmed(gated(h), args);
+      const out = parse(r.content[0]?.text as string);
+      expect(out.sent).toBe(true);
+      expect(out.warnings).toEqual([REPLY_TO_WARNING]);
+      // A warning only: the recipients are exactly the ones given, never re-routed.
+      expect(h.submitted[0]?.to).toEqual(['sam@x.com']);
+    });
+
+    it('is not warned about when the reply reaches it (any case, any of to/cc/bcc)', async () => {
+      const h = withReplyTo(['sam.personal@y.com']);
+      for (const extra of [{ to: ['Sam <Sam.Personal@Y.com>'] }, { to: ['sam@x.com'], cc: ['sam.personal@y.com'] }, { to: ['sam@x.com'], bcc: ['sam.personal@y.com'] }]) {
+        const p = await callPreview(gated(h), { ...extra, body: 'Yes!', inReplyTo: { uid: 1 } });
+        expect(p.preview).not.toHaveProperty('warnings');
+        expect((p.preview.inReplyTo as Record<string, unknown>).replyTo).toEqual(['sam.personal@y.com']);
+      }
+    });
+
+    it('names every Reply-To address the reply misses', async () => {
+      const h = withReplyTo(['sam@x.com', 'list@y.com', 'archive@y.com']);
+      const p = await callPreview(gated(h), { to: ['sam@x.com'], body: 'Yes!', inReplyTo: { uid: 1 } });
+      expect(p.preview.warnings).toEqual([
+        'The original asks for replies to go to sam@x.com, list@y.com, archive@y.com (its Reply-To, which differs from its From), ' +
+          'but list@y.com, archive@y.com are not a recipient of this reply. Check which address the user means: a Reply-To can ' +
+          'be legitimate (a mailing list, a personal address) or a sign of phishing.',
+      ]);
+    });
+
+    it('is left out when it only repeats From', async () => {
+      const h = withReplyTo(['SAM@x.com']);
+      const p = await callPreview(gated(h), { to: ['someone.else@z.com'], body: 'Yes!', inReplyTo: { uid: 1 } });
+      expect(p.preview.inReplyTo).not.toHaveProperty('replyTo');
+      expect(p.preview).not.toHaveProperty('warnings');
+    });
+
+    it('is read from the full source when quoting, too', async () => {
+      const h = withReplyTo(['sam.personal@y.com']);
+      const p = await callPreview(gated(h), { to: ['sam@x.com'], body: 'Yes!', inReplyTo: { uid: 1 }, quoteOriginal: true });
+      expect(h.imap.callsOf('fetchOne')[0]?.[1]).toEqual({ uid: true, source: { maxLength: expect.any(Number) } });
+      expect(p.preview.warnings).toEqual([REPLY_TO_WARNING]);
+    });
+  });
+
   it('errors when the original is gone or renumbered', async () => {
     const h = seeded();
-    const missing = await gated(h)({ to: ['a@b.com'], body: 'x', replyTo: { uid: 9 } });
-    expect(parse(missing.content[0]?.text as string).error).toMatchObject({ code: 'NOT_FOUND', message: 'replyTo: no message with uid 9 in "INBOX".' });
-    const stale = await gated(h)({ to: ['a@b.com'], body: 'x', replyTo: { uid: 1, uidValidity: 7 } });
+    const missing = await gated(h)({ to: ['a@b.com'], body: 'x', inReplyTo: { uid: 9 } });
+    expect(parse(missing.content[0]?.text as string).error).toMatchObject({ code: 'NOT_FOUND', message: 'inReplyTo: no message with uid 9 in "INBOX".' });
+    const stale = await gated(h)({ to: ['a@b.com'], body: 'x', inReplyTo: { uid: 1, uidValidity: 7 } });
     expect(parse(stale.content[0]?.text as string).error.code).toBe('INVALID_ARGUMENT');
     h.imap.override('fetchOne', () => false, 1);
-    const falsy = await gated(h)({ to: ['a@b.com'], body: 'x', replyTo: { uid: 1 } });
+    const falsy = await gated(h)({ to: ['a@b.com'], body: 'x', inReplyTo: { uid: 1 } });
     expect(parse(falsy.content[0]?.text as string).error.code).toBe('NOT_FOUND');
     expect(h.submit).not.toHaveBeenCalled();
   });
 
   it('refuses a confirm token once the original changed underneath it', async () => {
     const h = seeded();
-    const args = { to: ['bob@example.com'], body: 'Yes!', replyTo: { uid: 1 } };
+    const args = { to: ['bob@example.com'], body: 'Yes!', inReplyTo: { uid: 1 } };
     const { confirmToken } = await callPreview(gated(h), args);
     const box = h.imap.mailboxes.get('INBOX');
     if (box) box.uidValidity = 5000;
@@ -264,7 +348,7 @@ describe('apple_mail_send — replies', () => {
   it('a refused \\Answered flag is a warning', async () => {
     const h = seeded();
     h.imap.override('messageFlagsAdd', () => false);
-    const r = await callConfirmed(gated(h), { to: ['bob@example.com'], body: 'Yes!', replyTo: { uid: 1 } });
+    const r = await callConfirmed(gated(h), { to: ['bob@example.com'], body: 'Yes!', inReplyTo: { uid: 1 } });
     const out = parse(r.content[0]?.text as string);
     expect(out.repliedTo).toEqual({ mailbox: 'INBOX', uid: 1, markedAnswered: false });
     expect(out.warnings).toEqual(['The original could not be marked answered.']);
@@ -278,7 +362,7 @@ describe('apple_mail_send — replies', () => {
       if (connects === 3) throw imapError({ code: 'ECONNRESET' }, 'socket hang up');
       return PASS;
     });
-    const r = await callConfirmed(gated(h), { to: ['bob@example.com'], body: 'Yes!', replyTo: { uid: 1 } });
+    const r = await callConfirmed(gated(h), { to: ['bob@example.com'], body: 'Yes!', inReplyTo: { uid: 1 } });
     const out = parse(r.content[0]?.text as string);
     expect(out).toMatchObject({ sent: true, savedToSent: false, repliedTo: { mailbox: 'INBOX', uid: 1 } });
     expect(out.repliedTo).not.toHaveProperty('markedAnswered');
@@ -290,7 +374,7 @@ describe('apple_mail_send — replies', () => {
     h.imap.override('messageFlagsAdd', () => {
       throw imapError({ responseStatus: 'NO', responseText: 'read-only' });
     });
-    const r = await callConfirmed(gated(h), { to: ['bob@example.com'], body: 'Yes!', replyTo: { uid: 1 } });
+    const r = await callConfirmed(gated(h), { to: ['bob@example.com'], body: 'Yes!', inReplyTo: { uid: 1 } });
     const out = parse(r.content[0]?.text as string);
     expect(out.repliedTo).toEqual({ mailbox: 'INBOX', uid: 1, markedAnswered: false });
     expect(out.warnings).toEqual(['The original could not be marked answered: iCloud Mail refused marking the original answered: read-only.']);

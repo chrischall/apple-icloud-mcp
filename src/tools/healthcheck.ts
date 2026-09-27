@@ -11,6 +11,19 @@ import { ANNOTATIONS, defineTool, jsonResponse } from './_shared.js';
 export const PROBE_TIMEOUT_MS = 20_000;
 
 /**
+ * Services that sign in with the SAME credential (ICLOUD_USERNAME +
+ * ICLOUD_APP_PASSWORD). Their probes run one after another instead of in
+ * parallel: after a password change revokes the app-specific password, the
+ * first probe's rejection latches the pair (icloud-auth.ts) and the rest are
+ * refused locally, so a healthcheck sends a revoked password once, not once
+ * per protocol at the same moment — repeated failed sign-ins lock Apple IDs.
+ *
+ * Only while that question is OPEN, though (see `runProbes`): once one of
+ * them answers ok, or times out, the rest run together.
+ */
+export const ICLOUD_SERVICES: ReadonlySet<ServiceName> = new Set<ServiceName>(['calendar', 'contacts', 'mail']);
+
+/**
  * `apple_healthcheck` — "is this connector working, and which parts?".
  *
  * Seven services with three kinds of credential (developer key, user token,
@@ -43,7 +56,7 @@ export function registerHealthcheckTool(server: McpServer, probes: readonly Heal
       const { enabled, unknown } = getEnabledServices();
       const wanted = new Set<ServiceName>(args.services ?? SERVICES);
       const selected = probes.filter((p) => wanted.has(p.service) && enabled.has(p.service));
-      const results = await Promise.all(selected.map((p) => runWithTimeout(p)));
+      const results = await runProbes(selected);
       const disabled = [...wanted].filter((s) => !enabled.has(s));
       // An enabled service with no probe wired in must not vanish from the
       // report: a missing line reads as "nothing to check", not "not checked".
@@ -82,6 +95,24 @@ export function registerHealthcheckTool(server: McpServer, probes: readonly Heal
       });
     },
   });
+}
+
+/**
+ * Every probe, each under its own timeout, results in `probes` order: the
+ * iCloud ones in sequence (see ICLOUD_SERVICES), everything else alongside
+ * them in parallel.
+ */
+async function runProbes(probes: readonly HealthProbe[]): Promise<ServiceHealth[]> {
+  const results: ServiceHealth[] = new Array<ServiceHealth>(probes.length);
+  const icloud = probes.flatMap((p, i) => (ICLOUD_SERVICES.has(p.service) ? [i] : []));
+  const sequential = (async () => {
+    for (const i of icloud) results[i] = await runWithTimeout(probes[i]!);
+  })();
+  const parallel = probes.map(async (p, i) => {
+    if (!ICLOUD_SERVICES.has(p.service)) results[i] = await runWithTimeout(p);
+  });
+  await Promise.all([sequential, ...parallel]);
+  return results;
 }
 
 async function runWithTimeout(probe: HealthProbe): Promise<ServiceHealth> {

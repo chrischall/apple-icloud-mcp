@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { matchesQuery } from '../../src/contacts/tools.js';
+import { matchesQuery, resolveZone } from '../../src/contacts/tools.js';
 import { readContact } from '../../src/contacts/model.js';
 import { VCard } from '../../src/contacts/vcard.js';
 import { captureTools, harness, useContactsEnv, vcard } from './fake-icloud.js';
@@ -188,9 +188,11 @@ describe('apple_contacts_search', () => {
     const none = await h.call('apple_contacts_search', { query: 'nobody at all', offset: 3 });
     expect(none.isError).toBe(false);
     expect(none.json).toMatchObject({ returned: 0, total: 0, query: 'nobody at all', contacts: [] });
-    expect(none.json.note).toBe(
+    expect(none.json.notes).toEqual([
       'No contact matched "nobody at all" (searched all 4 contact(s) in the iCloud address book by name, nickname, organization, department, job title, email and phone digits).',
-    );
+    ]);
+    // One fleet-wide key for "why is this empty": `notes`, never a singular `note`.
+    expect(none.json).not.toHaveProperty('note');
   });
 
   it('filters by group (case-insensitive name), matching members by UID — or the id for a card without one', async () => {
@@ -215,12 +217,14 @@ describe('apple_contacts_search', () => {
   it('an empty address book or group says so; unreadable cards are reported, not silently dropped', async () => {
     const empty = harness({});
     const r = await empty.call('apple_contacts_search', {});
-    expect(r.json).toMatchObject({ total: 0, note: 'The iCloud address book has no contacts.' });
+    expect(r.json).toMatchObject({ total: 0, notes: ['The iCloud address book has no contacts.'] });
+    expect(r.json).not.toHaveProperty('note');
     const h = harness({ ...BOOK_CARDS, 'BROKEN.vcf': 'not a vcard' });
     const w = await h.call('apple_contacts_search', { query: 'john' });
     expect(w.json.warnings).toEqual(['1 card(s) in the address book could not be read and are not included.']);
     const g = await harness({ 'E.vcf': vcard('FN:Empty', 'X-ADDRESSBOOKSERVER-KIND:group') }).call('apple_contacts_search', { group: 'Empty' });
-    expect(g.json.note).toBe('The group "Empty" has no contacts.');
+    expect(g.json.notes).toEqual(['The group "Empty" has no contacts.']);
+    expect(g.json).not.toHaveProperty('note');
   });
 
   it('upstream failures are errors, never an empty result', async () => {
@@ -271,6 +275,19 @@ describe('apple_contacts_get', () => {
     expect(paris.json.lastModified).toBe('2023-01-15T11:20:30+01:00');
     const bad = await h.call('apple_contacts_get', { contactId: 'JOHN-UID', timeZone: 'Mars/Base' });
     expect(bad.json.error).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    const offset = await h.call('apple_contacts_get', { contactId: 'JOHN-UID', timeZone: '\u221204:00' });
+    expect(offset.json.error).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    const lower = await h.call('apple_contacts_get', { contactId: 'JOHN-UID', timeZone: 'europe/paris' });
+    expect(lower.json.lastModified).toBe('2023-01-15T11:20:30+01:00');
+  });
+
+  it('a timeZone argument resolves to its canonical IANA spelling, the one DISPLAY_TZ resolves to', () => {
+    expect(resolveZone('europe/paris')).toBe('Europe/Paris');
+    expect(resolveZone('AMERICA/NEW_YORK')).toBe('America/New_York');
+    expect(resolveZone('US/Eastern')).toBe('America/New_York');
+    process.env.DISPLAY_TZ = 'asia/tokyo'; // useContactsEnv resets it before each test
+    expect(resolveZone(undefined)).toBe('Asia/Tokyo');
+    expect(() => resolveZone('Mars/Base')).toThrow(/not a known IANA time zone/);
   });
 
   it('an unknown id is NOT_FOUND; a group id is refused with a pointer', async () => {
@@ -318,7 +335,7 @@ describe('apple_contacts_list_groups', () => {
     expect(r.json).toEqual({
       returned: 0,
       total: 0,
-      note: 'The iCloud address book has no contact groups.',
+      notes: ['The iCloud address book has no contact groups.'],
       warnings: ['1 card(s) in the address book could not be read and are not included.'],
       groups: [],
     });

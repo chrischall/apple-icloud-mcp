@@ -2,7 +2,16 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import * as http from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTH_TIMEOUT_MS, MAX_BODY_BYTES, openInBrowser, runMusicAuthCli, signInPage } from '../../src/music/auth-cli.js';
+import { createPrivateKey, createPublicKey, verify } from 'node:crypto';
+import {
+  AUTH_TIMEOUT_MS,
+  MAX_BODY_BYTES,
+  SHARED_TOKEN_DEFAULT_DAYS,
+  SHARED_TOKEN_MAX_DAYS,
+  openInBrowser,
+  runMusicAuthCli,
+  signInPage,
+} from '../../src/music/auth-cli.js';
 import { OFFICIAL_DEV, p256Pem } from './_helpers.js';
 
 const mocks = vi.hoisted(() => ({
@@ -88,6 +97,15 @@ describe('runMusicAuthCli: arguments and configuration', () => {
     const errs: string[] = [];
     expect(await runMusicAuthCli([], { stderr: (t) => errs.push(t), env: {} })).toBe(1);
     expect(errs[0]).toMatch(/^Cannot start Apple Music sign-in: .*APPLE_TEAM_ID.*\n.*Media Services/s);
+    // Someone without the key is told how to sign in without it — never to obtain the .p8.
+    expect(errs[0]).toMatch(/No Apple Developer key\? Ask whoever runs the server for a developer token .*--print-developer-token.*APPLE_MUSIC_DEVELOPER_TOKEN=<that token> npx @chrischall\/aws-mcp music-auth/);
+  });
+
+  it('a set-but-broken developer credential is reported as itself, without the "no key?" advice', async () => {
+    const errs: string[] = [];
+    expect(await runMusicAuthCli([], { stderr: (t) => errs.push(t), env: { APPLE_MUSIC_DEVELOPER_TOKEN: 'garbage' } })).toBe(1);
+    expect(errs[0]).toMatch(/not a JWT/);
+    expect(errs[0]).not.toMatch(/No Apple Developer key/);
   });
 
   it('a listener that cannot start exits 1', async () => {
@@ -99,6 +117,101 @@ describe('runMusicAuthCli: arguments and configuration', () => {
     const errs: string[] = [];
     expect(await runMusicAuthCli(['--no-open'], { stderr: (t) => errs.push(t), env: KEY_ENV() })).toBe(1);
     expect(errs[0]).toMatch(/Cannot start the local sign-in page: EACCES/);
+  });
+});
+
+describe('runMusicAuthCli --print-developer-token: a developer token to hand out instead of the .p8', () => {
+  function run(argv: string[], env: Record<string, string> = KEY_ENV(), now = Date.parse('2026-09-27T12:00:00Z')) {
+    const out: string[] = [];
+    const errs: string[] = [];
+    mocks.createServer = vi.fn();
+    const code = runMusicAuthCli(argv, { stdout: (t) => out.push(t), stderr: (t) => errs.push(t), env, now: () => now });
+    return { code, out, errs };
+  }
+  const decode = (part: string) => JSON.parse(Buffer.from(part, 'base64url').toString()) as Record<string, unknown>;
+
+  it(`prints APPLE_MUSIC_DEVELOPER_TOKEN=… signed by the key, valid ${SHARED_TOKEN_DEFAULT_DAYS} days by default, and starts no sign-in page`, async () => {
+    const env = KEY_ENV();
+    const { code, out, errs } = run(['--print-developer-token'], env);
+    expect(await code).toBe(0);
+    expect(out).toHaveLength(1);
+    const m = /^APPLE_MUSIC_DEVELOPER_TOKEN=(eyJ[\w-]+)\.([\w-]+)\.([\w-]+)\n$/.exec(out[0]!)!;
+    expect(m).not.toBeNull();
+    expect(decode(m[1]!)).toMatchObject({ alg: 'ES256', kid: 'KEY1234567' });
+    const payload = decode(m[2]!);
+    expect(payload).toMatchObject({ iss: 'TEAM123456', iat: Date.parse('2026-09-27T12:00:00Z') / 1000 });
+    expect((payload.exp as number) - (payload.iat as number)).toBe(SHARED_TOKEN_DEFAULT_DAYS * 86400);
+    // A real ES256 signature from the private key (what Apple checks).
+    const pub = createPublicKey(createPrivateKey(env.APPLE_PRIVATE_KEY));
+    expect(verify('sha256', Buffer.from(`${m[1]}.${m[2]}`), { key: pub, dsaEncoding: 'ieee-p1363' }, Buffer.from(m[3]!, 'base64url'))).toBe(true);
+    // One line of explanation on stderr; the key itself is never printed.
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.trimEnd().split('\n')).toHaveLength(1);
+    expect(errs[0]).toMatch(/valid until 2026-10-04T12:00:00\.000Z \(7 days\).*instead of the \.p8.*APPLE_MUSIC_DEVELOPER_TOKEN=<token> npx @chrischall\/aws-mcp music-auth/);
+    expect(errs[0]).not.toContain('PRIVATE KEY');
+    expect(mocks.createServer).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [['--days', '30'], 30, '(30 days)'],
+    [['--days=1'], 1, '(1 day)'],
+    [['--days', String(SHARED_TOKEN_MAX_DAYS)], SHARED_TOKEN_MAX_DAYS, `(${SHARED_TOKEN_MAX_DAYS} days)`],
+  ])('%j sets the lifetime', async (days, n, label) => {
+    const { code, out, errs } = run(['--print-developer-token', ...days]);
+    expect(await code).toBe(0);
+    const payload = decode(out[0]!.split('.')[1]!);
+    expect((payload.exp as number) - (payload.iat as number)).toBe(n * 86400);
+    expect(errs[0]).toContain(label);
+  });
+
+  it.each([['0'], [String(SHARED_TOKEN_MAX_DAYS + 1)], ['1.5'], ['abc'], ['-3'], ['']])('refuses --days %s (exit 2, nothing printed)', async (days) => {
+    const { code, out, errs } = run(['--print-developer-token', `--days=${days}`]);
+    expect(await code).toBe(2);
+    expect(out).toEqual([]);
+    expect(errs[0]).toMatch(new RegExp(`--days must be a whole number from 1 to ${SHARED_TOKEN_MAX_DAYS}`));
+  });
+
+  it('refuses flags that do not go together, and --days with no value', async () => {
+    for (const argv of [['--days', '3'], ['--print-developer-token', '--no-open'], ['--print-developer-token', '--days']]) {
+      const { code, out, errs } = run(argv);
+      expect(await code, argv.join(' ')).toBe(2);
+      expect(out).toEqual([]);
+      expect(errs[0]).toMatch(/--days applies only to --print-developer-token|--no-open does not apply|--days needs a number/);
+    }
+  });
+
+  it('needs the key: nothing configured, or only a pre-minted token, exits 1', async () => {
+    const none = run(['--print-developer-token'], {});
+    expect(await none.code).toBe(1);
+    expect(none.errs[0]).toMatch(/^Cannot mint a developer token: .*APPLE_TEAM_ID/s);
+    expect(none.out).toEqual([]);
+    const pre = run(['--print-developer-token'], { ...KEY_ENV(), APPLE_MUSIC_DEVELOPER_TOKEN: OFFICIAL_DEV });
+    expect(await pre.code).toBe(1);
+    expect(pre.errs[0]).toMatch(/APPLE_MUSIC_DEVELOPER_TOKEN is set, so this server signs with that token.*Share that token itself \(it expires 2100-01-01T00:00:00\.000Z\)/);
+    expect(pre.out).toEqual([]);
+  });
+
+  it('--help documents it', async () => {
+    const errs: string[] = [];
+    expect(await runMusicAuthCli(['--help'], { stderr: (t) => errs.push(t) })).toBe(0);
+    expect(errs[0]).toMatch(/music-auth --print-developer-token \[--days N\]/);
+    expect(errs[0]).toMatch(/never the \.p8/);
+  });
+
+  it('the printed token is enough for someone WITHOUT the key to run the sign-in', async () => {
+    const minted = run(['--print-developer-token'], KEY_ENV(), Date.now());
+    expect(await minted.code).toBe(0);
+    mocks.createServer = undefined;
+    const token = /^APPLE_MUSIC_DEVELOPER_TOKEN=(.+)\n$/.exec(minted.out[0]!)![1]!;
+    const { out, done, urlP } = start(['--no-open'], { env: { APPLE_MUSIC_DEVELOPER_TOKEN: token } });
+    const url = await urlP;
+    const page = await send(url);
+    expect(/var DEV = "([^"]+)"/.exec(page.body)![1]).toBe(token);
+    const tokenPath = /var TOKEN_URL = "([^"]+)"/.exec(page.body)![1]!;
+    await send(`${origin(url)}${tokenPath}`, { method: 'POST', headers: { Origin: origin(url), 'Content-Type': 'application/json' }, body: JSON.stringify({ token: TOKEN }) });
+    expect(await done).toBe(0);
+    expect(out).toEqual([`APPLE_MUSIC_USER_TOKEN=${TOKEN}\n`]);
   });
 });
 

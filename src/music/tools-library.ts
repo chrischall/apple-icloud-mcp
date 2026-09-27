@@ -3,7 +3,6 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { getDisplayTimeZone } from '../config.js';
 import { InvalidArgumentError, UpstreamError } from '../errors.js';
-import { stateRevision } from '../tools/_confirm.js';
 import { ANNOTATIONS, defineTool, jsonResponse, limitParam, offsetParam, pageInfo, pagedResponse } from '../tools/_shared.js';
 import { nextOf, requireData, type AppleDoc, type MusicClient, type MusicSession } from './client.js';
 import { head, musicViewParam, notesField, storefrontParam, uniq, viewOf, withPositions } from './common.js';
@@ -18,6 +17,7 @@ import {
 } from './ids.js';
 import { LABEL, attrs, compactResource, isRecord, nameOf, projectList, putDate, resourceName, str, type AppleResource } from './project.js';
 import { MAX_TRACKS_READ, folderIdArg, readFolderChildren, readLibraryPlaylist, readLibraryTracks } from './playlists.js';
+import { PLAYLIST_WRITE_TTL_MS, trackRevision } from './write-log.js';
 
 /**
  * Library read tools. Each needs a Music User Token (official) or web mode;
@@ -107,7 +107,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
       const view = viewOf(args.view);
       if (args.folderId !== undefined) {
         const folderId = folderIdArg(args.folderId);
-        assertLibraryPlaylistId(folderId, 'folderId');
+        assertLibraryPlaylistId(folderId, 'folderId', 'folder');
         const r = await readFolderChildren(s, folderId, { offset, want: limit });
         const page = pageInfo({ offset, limit, returned: r.items.length, hasMore: !r.complete, total: r.total });
         return jsonResponse({
@@ -143,8 +143,8 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     description:
       'Read one playlist — a library playlist (p.…) or a catalog playlist (pl.…) — with its tracks in order. Each track has ' +
       'its 1-based position, library id, catalogId, name, artist, album and duration. Paged (up to 300 per call), or ' +
-      `allTracks for the whole list (up to ${MAX_TRACKS_READ}); a complete read returns a revision. Library playlists need ` +
-      'APPLE_MUSIC_USER_TOKEN or web-player mode.',
+      `allTracks for the whole list (up to ${MAX_TRACKS_READ}); a complete read returns a revision (for reorder/remove ` +
+      "tracks' expectedRevision). Library playlists need APPLE_MUSIC_USER_TOKEN or web-player mode.",
     inputSchema: z.strictObject({
       playlistId: z.string().min(1).max(140).describe('Library playlist id (p.…, from apple_music_list_playlists) or catalog playlist id (pl.…).'),
       limit: limitParam(100, 300).describe('Tracks to return (default 100, max 300).'),
@@ -200,6 +200,14 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
       }
       const whole = offset === 0 && complete;
       if (whole && total === undefined) total = tracks.length;
+      const revision = whole ? trackRevision(tracks) : undefined;
+      const pending = revision !== undefined && !catalog ? c.playlistWrites.pending(id, revision, c.now()) : undefined;
+      if (pending) {
+        notes.push(
+          `This read does not show the change made ${Math.max(0, Math.round((c.now() - pending.at) / 1000))} s ago (${pending.what}) yet — ` +
+            `Apple can lag. Re-read it shortly: reordering it or removing tracks is refused while it reads like this (up to ${PLAYLIST_WRITE_TTL_MS / 1000} s after the change).`,
+        );
+      }
       if (args.allTracks && !complete) notes.push(`Stopped after ${MAX_TRACKS_READ} tracks; the playlist has more. Page on with offset ${MAX_TRACKS_READ}.`);
       if (tracks.length === 0 && offset > 0) notes.push(`No tracks at offset ${offset}.`);
       const page = pageInfo({ offset, limit: want, returned: tracks.length, hasMore: !complete, total });
@@ -207,7 +215,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
       return jsonResponse({
         ...head(s),
         ...page,
-        ...(whole ? { revision: stateRevision(tracks.map((t) => t.id)) } : {}),
+        ...(revision !== undefined ? { revision } : {}),
         ...notesField([...s.notes, ...notes]),
         playlist: view === 'compact' ? compactResource(pl, zone) : pl,
         tracks: projected,
@@ -232,7 +240,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     annotations: ANNOTATIONS.read,
     handler: async (args) => {
       const folderId = folderIdArg(args.folderId ?? 'root');
-      assertLibraryPlaylistId(folderId, 'folderId');
+      assertLibraryPlaylistId(folderId, 'folderId', 'folder');
       const s = client().session('library', 'list playlist folders');
       const r = await readFolderChildren(s, folderId);
       const zone = getDisplayTimeZone();

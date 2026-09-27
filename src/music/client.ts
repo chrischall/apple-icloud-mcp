@@ -7,6 +7,7 @@ import { describeErrorBody, httpRequest, type QueryValue } from '../http.js';
 import {
   ENV,
   OFFICIAL_SETUP,
+  USER_TOKEN_HOWTO,
   WEB_SETUP,
   officialUserToken,
   resolveOfficialDev,
@@ -18,6 +19,7 @@ import {
 import { normalizeStorefront } from './ids.js';
 import { LABEL, isRecord, num, str, type AppleResource } from './project.js';
 import { WEB_ORIGIN, WebTokenSource, type HttpFn } from './web-token.js';
+import { PlaylistWriteLog } from './write-log.js';
 
 /**
  * The Apple Music client: picks a backend for each tool call, attaches the
@@ -147,6 +149,8 @@ export class MusicClient {
   /** Official developer credentials Apple definitively refused on a catalog read (see class doc). */
   private readonly rejectedOfficial = new Set<string>();
   private readonly storefronts = new Map<string, string>();
+  /** The playlist orders this process replaced recently, so a lagging read is not rewritten over them. */
+  readonly playlistWrites = new PlaylistWriteLog();
 
   constructor(opts: MusicClientOptions = {}) {
     this.http = opts.http ?? (httpRequest as HttpFn);
@@ -197,8 +201,8 @@ export class MusicClient {
         'music',
         `To ${what}, Apple needs a Music User Token for your account; APPLE_MUSIC_USER_TOKEN is not set.`,
         [ENV.userToken, ENV.webUserToken],
-        'Run `npx @chrischall/aws-mcp music-auth` (with this same Apple Developer key set) to sign in once with MusicKit, then set ' +
-          `APPLE_MUSIC_USER_TOKEN to the value it prints (it lasts about 6 months). Or: ${WEB_SETUP}`,
+        `To sign in once with MusicKit, ${USER_TOKEN_HOWTO}; then set APPLE_MUSIC_USER_TOKEN to the value it prints (it lasts ` +
+          `about 6 months). Or: ${WEB_SETUP}`,
       );
     }
     if (official.status === 'broken') throw official.error;
@@ -393,7 +397,7 @@ function userTokenHint(b: Backend, method: string, path: string): string {
   const base =
     b.name === 'web'
       ? 'Apple refused the media-user-token (APPLE_MUSIC_WEB_USER_TOKEN): copy a fresh media-user-token cookie from a signed-in music.apple.com tab.'
-      : 'Apple refused the Music User Token (APPLE_MUSIC_USER_TOKEN): it lasts about 6 months and an Apple ID password change revokes it — run `npx @chrischall/aws-mcp music-auth` again with the same developer key.';
+      : `Apple refused the Music User Token (APPLE_MUSIC_USER_TOKEN): it lasts about 6 months, an Apple ID password change revokes it, and it works only with the developer key that minted it. For a new one, ${USER_TOKEN_HOWTO}.`;
   const more =
     ' HTTP 403 also means the account has not accepted Apple Music\'s privacy prompt (open the Music app once) or has no Apple Music subscription.';
   const playlistWrite =

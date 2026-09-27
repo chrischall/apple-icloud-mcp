@@ -85,14 +85,19 @@ export function putAppleDate(out: Record<string, unknown>, field: string, value:
   putInstant(out, field, date, zone);
 }
 
-/** `4:59`, or `1:17:24` from an hour up — whole seconds, truncated the way Apple's apps show them. */
+/**
+ * `4:59`, or `1:17:24` from an hour up — whole seconds, ROUNDED to the nearest
+ * one, exactly as the apple_music_* tools format a duration
+ * (src/music/project.ts). A trackId here is the same catalog id Apple Music
+ * uses and both APIs report the same milliseconds, so one song must not read
+ * `4:00` from one tool and `3:59` from the other.
+ */
 export function formatDuration(ms: number): string {
-  const total = Math.floor(ms / 1000);
+  const total = Math.max(0, Math.round(ms / 1000));
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const ss = String(s).padStart(2, '0');
-  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+  const s = String(total % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
 /** `song`, `album`, `artist`, `podcast`, `podcast-episode`, `software`, `ebook`, `audiobook`, … */

@@ -32,7 +32,7 @@ describe('stateCache', () => {
   it('round-trips a record under $MCP_DATA_DIR/.aws-mcp/, 0600, bound to the credential (never written)', () => {
     const cache = stateCache<Rec>('rt.json', 'credential-value-1', validate);
     expect(cache.load()).toBeNull();
-    cache.save({ token: 't1', exp: 5 });
+    expect(cache.save({ token: 't1', exp: 5 })).toBe(true);
     expect(cache.load()).toEqual({ token: 't1', exp: 5 });
     const file = join(process.env.MCP_DATA_DIR!, STATE_SUBDIR, 'rt.json');
     expect(existsSync(file)).toBe(true);
@@ -66,7 +66,11 @@ describe('stateCache', () => {
       writeFileSync(notADir, 'x');
       const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const cache = stateCache<Rec>('fail.json', 'b', validate, { MCP_DATA_DIR: notADir });
-      expect(() => cache.save({ token: 't', exp: 1 })).not.toThrow();
+      let wrote: boolean | undefined;
+      expect(() => {
+        wrote = cache.save({ token: 't', exp: 1 });
+      }).not.toThrow();
+      expect(wrote).toBe(false); // the caller can tell it was NOT written
       expect(err).toHaveBeenCalledTimes(1);
       expect(String(err.mock.calls[0]![0])).toMatch(/^\[aws-mcp\] WARNING: could not write cache fail\.json: /);
       expect(cache.load()).toBeNull();
@@ -78,7 +82,7 @@ describe('stateCache', () => {
   it('is a no-op when APPLE_STATE_CACHE=false', () => {
     const env = { MCP_DATA_DIR: process.env.MCP_DATA_DIR, APPLE_STATE_CACHE: 'false' };
     const cache = stateCache<Rec>('off.json', 'b', validate, env);
-    cache.save({ token: 't', exp: 1 });
+    expect(cache.save({ token: 't', exp: 1 })).toBe(false);
     expect(cache.load()).toBeNull();
     cache.clear();
     expect(existsSync(join(process.env.MCP_DATA_DIR!, STATE_SUBDIR, 'off.json'))).toBe(false);

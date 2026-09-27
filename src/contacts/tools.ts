@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { getDisplayTimeZone, isValidTimeZone } from '../config.js';
+import { canonicalTimeZone, getDisplayTimeZone } from '../config.js';
 import { VCARD_CONTENT_TYPE, childUrl } from '../dav/client.js';
 import { InvalidArgumentError, UnconfirmedWriteError, errorMessage } from '../errors.js';
 import { formatDateOnly, parseDateInput, putInstant } from '../time.js';
@@ -181,12 +181,19 @@ const MAX_CHANGES = 50;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function resolveZone(tz: string | undefined): string {
+/**
+ * The zone for this call — the argument, else the display zone — in its
+ * canonical spelling (`europe/paris` → `Europe/Paris`), the same spelling
+ * DISPLAY_TZ resolves to: Intl is case-insensitive, so validating alone let
+ * the caller's spelling through where a zone NAME is an identifier.
+ */
+export function resolveZone(tz: string | undefined): string {
   if (tz === undefined) return getDisplayTimeZone();
-  if (!isValidTimeZone(tz)) {
+  const zone = canonicalTimeZone(tz);
+  if (zone === undefined) {
     throw new InvalidArgumentError(`timeZone "${tz}" is not a known IANA time zone.`, 'Use a zone like America/New_York or Europe/London.');
   }
-  return tz;
+  return zone;
 }
 
 /** Fold case and accents: `José` matches `jose`. */
@@ -501,19 +508,19 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
         args.group !== undefined
           ? `the ${pool.length} contact(s) in the group "${args.group}"`
           : `all ${book.contacts.length} contact(s) in the iCloud address book`;
-      let note: string | undefined;
+      const notes: string[] = [];
       if (total === 0) {
         if (query.trim() !== '') {
-          note = `No contact matched "${query}" (searched ${scope} by name, nickname, organization, department, job title, email and phone digits).`;
+          notes.push(`No contact matched "${query}" (searched ${scope} by name, nickname, organization, department, job title, email and phone digits).`);
         } else {
-          note = args.group !== undefined ? `The group "${args.group}" has no contacts.` : 'The iCloud address book has no contacts.';
+          notes.push(args.group !== undefined ? `The group "${args.group}" has no contacts.` : 'The iCloud address book has no contacts.');
         }
       }
       const extra: Record<string, unknown> = {
         ...(query.trim() !== '' ? { query } : {}),
         ...(args.group !== undefined ? { group: args.group } : {}),
         searched: scope,
-        ...(note !== undefined ? { note } : {}),
+        ...(notes.length > 0 ? { notes } : {}),
         ...bookWarnings(book),
       };
       return jsonResponse(pagedResponse(pageInfo({ offset, limit, returned: page.length, total }), 'contacts', page.map(summaryRow), extra));
@@ -565,7 +572,7 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
       return jsonResponse({
         returned: groups.length,
         total: groups.length,
-        ...(groups.length === 0 ? { note: 'The iCloud address book has no contact groups.' } : {}),
+        ...(groups.length === 0 ? { notes: ['The iCloud address book has no contact groups.'] } : {}),
         ...bookWarnings(book),
         groups,
       });
@@ -717,7 +724,7 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
         return jsonResponse({
           updated: false,
           id,
-          note: 'Nothing was written: every requested value was already in place, or its target was not found.',
+          notes: ['Nothing was written: every requested value was already in place, or its target was not found.'],
           changes: [],
           ...(noops.length ? { noops } : {}),
           contact: contactDetail(current, zone),

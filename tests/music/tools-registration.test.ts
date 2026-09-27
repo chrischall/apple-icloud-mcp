@@ -112,6 +112,13 @@ describe('registration', () => {
     for (const n of ADDITIVE) expect(ann(n)).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     for (const n of ['apple_music_set_rating', 'apple_music_move_playlist', 'apple_music_remove_favorites']) expect(ann(n)).toMatchObject({ destructiveHint: false, idempotentHint: true });
     for (const n of ['apple_music_update_playlist', 'apple_music_reorder_playlist', ...GATED]) expect(ann(n).destructiveHint, n).toBe(true);
+    // Positional removal and move/reverse change a different track, or undo themselves, when repeated: a client
+    // that retries or auto-approves "idempotent" tools must not be told they are safe to repeat.
+    for (const n of ['apple_music_remove_playlist_tracks', 'apple_music_reorder_playlist']) {
+      expect(ann(n), n).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
+    }
+    // Repeating these IS a no-op (the item is already renamed / gone).
+    for (const n of ['apple_music_update_playlist', 'apple_music_delete_playlist', 'apple_music_remove_from_library']) expect(ann(n).idempotentHint, n).toBe(true);
   });
 });
 

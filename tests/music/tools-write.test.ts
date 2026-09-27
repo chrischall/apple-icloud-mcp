@@ -48,10 +48,16 @@ describe('apple_music_create_playlist', () => {
     const tools = captureTools();
     const bad = await callTool(tools, 'apple_music_create_playlist', { name: 'x', tracks: ['l.album'] });
     expect((bad.data.error as { code: string }).code).toBe('INVALID_ARGUMENT');
+    // get_catalog_items refuses l.… ids, so the hint must not send the album id there.
+    expect((bad.data.error as { hint: string }).hint).toMatch(/apple_music_search_library/);
+    const followed = await callTool(tools, 'apple_music_get_catalog_items', { type: 'albums', ids: ['l.album'] });
+    expect((followed.data.error as { hint: string }).hint).toMatch(/LIBRARY id/);
     const nofolder = await callTool(tools, 'apple_music_create_playlist', { name: 'x', folderId: 'p.NOPE' });
     expect(nofolder.data.error).toMatchObject({ code: 'NOT_FOUND' });
     const badFolder = await callTool(tools, 'apple_music_create_playlist', { name: 'x', folderId: 'i.x' });
     expect((badFolder.data.error as { code: string }).code).toBe('INVALID_ARGUMENT');
+    const plFolder = await callTool(tools, 'apple_music_create_playlist', { name: 'x', folderId: 'pl.x' });
+    expect((plFolder.data.error as { hint: string }).hint).toMatch(/not a folder.*apple_music_list_folders/);
     expect(l.writes).toEqual([]);
     const root = await callTool(tools, 'apple_music_create_playlist', { name: 'x', folderId: 'root' });
     expect(root.data.verified).toBe(true);
@@ -177,6 +183,9 @@ describe('apple_music_add_playlist_tracks', () => {
     expect(l.writes).toEqual([]);
     const bad = await callTool(tools, 'apple_music_add_playlist_tracks', { playlistId: 'pl.x', tracks: ['5'] });
     expect((bad.data.error as { code: string }).code).toBe('INVALID_ARGUMENT');
+    // Adding an Apple playlist to your library would only lead to the canEdit:false refusal above.
+    expect((bad.data.error as { hint: string }).hint).toMatch(/read-only.*apple_music_create_playlist/);
+    expect((bad.data.error as { hint: string }).hint).not.toMatch(/add_to_library/);
   });
 
   it('a first batch refused outright is an error; a later failure is a partial result', async () => {

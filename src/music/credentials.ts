@@ -27,10 +27,18 @@ export const ENV = {
   storefront: 'APPLE_MUSIC_STOREFRONT',
 } as const;
 
+/**
+ * How to get a Music User Token. It only works with the developer key that minted it, so someone without the
+ * server's key asks its owner for a short-lived developer token from it — never for the `.p8` itself.
+ */
+export const USER_TOKEN_HOWTO =
+  "run `npx @chrischall/aws-mcp music-auth` with the server's Apple Developer key set — or, without the key, with " +
+  'APPLE_MUSIC_DEVELOPER_TOKEN set to a token its owner mints with `music-auth --print-developer-token`';
+
 /** What to tell someone who has configured neither profile. */
 export const OFFICIAL_SETUP =
   'Official API: set APPLE_TEAM_ID, APPLE_KEY_ID and APPLE_PRIVATE_KEY (a key with Media Services / MusicKit) or ' +
-  'APPLE_MUSIC_DEVELOPER_TOKEN; for your library also APPLE_MUSIC_USER_TOKEN (run `npx @chrischall/aws-mcp music-auth`).';
+  `APPLE_MUSIC_DEVELOPER_TOKEN; for your library also APPLE_MUSIC_USER_TOKEN (${USER_TOKEN_HOWTO}).`;
 export const WEB_SETUP =
   'Web-player mode (unofficial): set APPLE_MUSIC_WEB_USER_TOKEN to the media-user-token cookie of a signed-in ' +
   'music.apple.com browser session (DevTools → Application → Cookies).';

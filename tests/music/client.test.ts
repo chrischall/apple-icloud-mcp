@@ -54,6 +54,8 @@ describe('routing', () => {
     })();
     expect(e?.missing).toEqual(['APPLE_MUSIC_USER_TOKEN', 'APPLE_MUSIC_WEB_USER_TOKEN']);
     expect(e?.hint).toMatch(/music-auth/);
+    // Someone without the server's key is pointed at a developer token from its owner, never at the .p8.
+    expect(e?.hint).toMatch(/without the key, with APPLE_MUSIC_DEVELOPER_TOKEN set to a token its owner mints with `music-auth --print-developer-token`/);
     useWeb();
     expect(c.route('library', 'x').name).toBe('web');
     process.env.APPLE_MUSIC_USER_TOKEN = USER_TOKEN;
@@ -253,7 +255,9 @@ describe('requests', () => {
     installFetch(route('GET', '/429', { status: 429, text: '' }), route('GET', '/403', { status: 403, text: '' }));
     const s = new MusicClient().session('library', 'x');
     expect(((await s.request({ path: '/429' }).catch((e: unknown) => e)) as { hint: string }).hint).toMatch(/this developer token/);
-    expect(((await s.request({ path: '/403' }).catch((e: unknown) => e)) as { hint: string }).hint).toMatch(/APPLE_MUSIC_USER_TOKEN.*music-auth/);
+    const refused = ((await s.request({ path: '/403' }).catch((e: unknown) => e)) as { hint: string }).hint;
+    expect(refused).toMatch(/APPLE_MUSIC_USER_TOKEN.*music-auth/);
+    expect(refused).toMatch(/works only with the developer key that minted it.*--print-developer-token/);
   });
 
   it('refuses a non-JSON body and treats an empty body as no data', async () => {

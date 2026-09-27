@@ -103,6 +103,20 @@ describe('apple_maps_directions', () => {
     expect(json.notes).toEqual(['Apple did not say whether route(s) 3 have tolls.']);
   });
 
+  it('a mis-cased timeZone is read as its IANA zone and echoed in canonical spelling', async () => {
+    const h = harness({ '/v1/directions': () => ({ data: DIRECTIONS }), '/v1/etas': () => ({ data: { etas: [] } }) });
+    const { json } = await h.call('apple_maps_directions', {
+      origin: 'A',
+      destination: 'B',
+      departureDate: '2026-10-05T08:30',
+      timeZone: 'europe/london',
+    });
+    expect(h.dataCalls()[0]!.query).toMatchObject({ departureDate: '2026-10-05T07:30:00Z' });
+    expect(json).toMatchObject({ departure: '2026-10-05T08:30:00+01:00', timeZone: 'Europe/London' });
+    const etas = await h.call('apple_maps_etas', { origin: '1,2', destinations: ['3,4'], timeZone: 'US/Eastern' });
+    expect(etas.json.timeZone).toBe('America/New_York');
+  });
+
   it('arrivalDate: sends arrivalDate and derives leave-by times', async () => {
     const h = harness({ '/v1/directions': () => ({ data: DIRECTIONS }) });
     const { json } = await h.call('apple_maps_directions', {
@@ -125,6 +139,7 @@ describe('apple_maps_directions', () => {
       [{ departureDate: '2026-10-05' }, /departureDate "2026-10-05" has no time of day/],
       [{ arrivalDate: '2026-02-30T10:00' }, /arrivalDate "2026-02-30T10:00" is not a valid date/],
       [{ timeZone: 'Mars/Olympus' }, /timeZone "Mars\/Olympus" is not a known IANA time zone/],
+      [{ timeZone: '\u221204:00' }, /timeZone "\u221204:00" is not a known IANA time zone/],
       [{ origin: '91,0' }, /origin "91,0" has latitude 91/],
       [{ origin: ' ' }, /origin is empty/],
     ];

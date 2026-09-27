@@ -7,7 +7,7 @@ import { InvalidArgumentError } from '../errors.js';
  * endpoint than the one the tool — and the confirmation preview — named.
  *
  * Shapes (Apple's documentation and observed payloads):
- *  - catalog songs / albums / artists / music videos: numeric (`1440833851`)
+ *  - catalog songs / albums / artists / music videos: numeric (`1616728064`)
  *  - catalog playlists: `pl.` (`pl.u-…` user-shared, `pl.pm-…` personal mix)
  *  - stations: `ra.` (`ra.u-…` for a personal station)
  *  - library items: one lowercase letter and a dot — `i.` songs and music
@@ -62,16 +62,39 @@ export function assertLibraryId(id: string, field: string): void {
   }
 }
 
+/**
+ * What a library playlist id argument is for — it decides where a caller who
+ * passed a CATALOG playlist (`pl.…`) is sent:
+ *  - `edit`: changes the playlist's tracks or details. Apple's playlists are
+ *    read-only even once saved to a library (`canEdit: false`), so adding one
+ *    to the library would only lead to a second refusal.
+ *  - `library`: acts on your library's copy (move, delete, remove) — its own p.… id.
+ *  - `folder`: a folder argument; a playlist of either kind is the wrong thing.
+ */
+export type PlaylistIdUse = 'edit' | 'library' | 'folder';
+
+const CATALOG_PLAYLIST_HINTS: Record<PlaylistIdUse, string> = {
+  edit:
+    "pl.… is a CATALOG playlist, and Apple's playlists are read-only (even saved to your library). Read its tracks with " +
+    'apple_music_get_playlist and put them in a playlist of your own (apple_music_create_playlist).',
+  library:
+    'pl.… is a CATALOG playlist id; this takes the p.… id of your library copy, listed by apple_music_list_playlists ' +
+    '(it has one only once it is in your library).',
+  folder: 'pl.… is a catalog playlist, not a folder. Use a folder id from apple_music_list_folders (or "root").',
+};
+
 /** Throws unless `id` is a library playlist (or folder) id: `p.…`. */
-export function assertLibraryPlaylistId(id: string, field: string): void {
+export function assertLibraryPlaylistId(id: string, field: string, use: PlaylistIdUse = 'library'): void {
   if (!LIBRARY_PLAYLIST_RE.test(id)) {
     bad(
       field,
       id,
-      'a library playlist id (p.…)',
+      use === 'folder' ? 'a playlist folder id (p.…)' : 'a library playlist id (p.…)',
       CATALOG_PLAYLIST_RE.test(id)
-        ? 'pl.… is a CATALOG playlist. Add it to your library first (apple_music_add_to_library), then use the p.… id from apple_music_list_playlists.'
-        : 'Use the id from apple_music_list_playlists.',
+        ? CATALOG_PLAYLIST_HINTS[use]
+        : use === 'folder'
+          ? 'Use a folder id from apple_music_list_folders (or "root").'
+          : 'Use the id from apple_music_list_playlists.',
     );
   }
 }
@@ -115,7 +138,14 @@ export function resolveTrackRef(ref: TrackRefInput, field: string): TrackRef {
       bad(field, ref, 'a song', 'Playlists cannot be added as tracks. Read the playlist (apple_music_get_playlist) and add its songs.');
     }
     if (/^l\./.test(ref)) {
-      bad(field, ref, 'a song', 'l.… is a library ALBUM. Read its tracks (apple_music_get_catalog_items with type albums) and add those.');
+      bad(
+        field,
+        ref,
+        'a song',
+        "l.… is a library ALBUM; add its songs instead. Find them with apple_music_search_library (types songs, the album's " +
+          'name) and use their i.… ids — or, when apple_music_list_library / apple_music_search_library shows the album ' +
+          'with a catalogId, read that numeric id with apple_music_get_catalog_items (type albums) and add its songs.',
+      );
     }
     return bad(
       field,
