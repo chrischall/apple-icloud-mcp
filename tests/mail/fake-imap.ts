@@ -20,6 +20,19 @@ import type { ImapClientLike } from '../../src/mail/imap.js';
  * refusal into `false` for COPY/STORE/EXPUNGE/SEARCH.
  */
 
+/**
+ * What real imapflow does when the connection dies with a COPY/MOVE/STORE/EXPUNGE in
+ * flight: close() rejects the command with NoConnection, the command's own catch logs it
+ * through the client's logger and returns `false` — it never throws. Use as an override body.
+ */
+export function droppedMidCommand(this: FakeImapClient): false {
+  this.usable = false;
+  (this.options.logger as { warn: (o: unknown) => void }).warn({
+    err: Object.assign(new Error('Connection not available'), { code: 'NoConnection', rejectedFrom: 'pendingRequest' }),
+  });
+  return false;
+}
+
 export interface FakeMessage {
   uid: number;
   source: Buffer;
@@ -230,6 +243,8 @@ export class FakeImapClient implements ImapClientLike {
   readOnly = true;
   loggedOut = false;
   closed = false;
+  /** imapflow's `usable`: false once the connection has closed. */
+  usable = true;
   errorListeners: Array<(err: Error) => void> = [];
 
   constructor(
@@ -276,6 +291,7 @@ export class FakeImapClient implements ImapClientLike {
   close(): void {
     this.hook('close', []);
     this.closed = true;
+    this.usable = false;
   }
 
   async list(): Promise<ListResponse[]> {

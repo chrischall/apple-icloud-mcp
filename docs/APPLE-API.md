@@ -86,6 +86,14 @@ build environment had no Apple credentials. The first live run is the real verif
   `smtp.mail.me.com:587` STARTTLS, user = full address; app-specific password. [DOC: support.apple.com/102525]
 - No MOVE / SPECIAL-USE; folders are "Sent Messages", "Deleted Messages", "Junk", "Archive".
   SMTP does not file a copy in Sent, so the server APPENDs one. [3P: Mozilla bug 1611624, imapflow]
+- iCloud advertises UIDPLUS, which the COPY-then-`UID EXPUNGE` move depends on (without MOVE or
+  UIDPLUS `apple_mail_move` refuses rather than expunge other deleted mail). [UNVERIFIED]
+- imapflow 2.0.7's COPY, MOVE, STORE and EXPUNGE catch EVERY error — a tagged NO and a
+  connection that died with the command already sent (socket timeout, reset, cancel) alike — log
+  it and return `false`; they never throw for it. Only the logged error (`responseStatus`
+  NO/BAD vs. `code: NoConnection`, …) and `client.usable` tell "refused" from "unknown", so the
+  tools read both (`swallowedWriteFailure`). [3P: imapflow 2.0.7 `commands/copy.js`, `store.js`,
+  `expunge.js`, `move.js`; reproduced in tests/mail/real-imapflow.test.ts]
 - Limits: 1,000 messages/day, 500 recipients per message, 20 MB per message. [DOC]
 - On a hosted runner raw TCP only leaves through an HTTP CONNECT tunnel, so both clients are
   handed `HTTPS_PROXY` explicitly. [mcp-host docs/SECURITY.md]

@@ -12,9 +12,11 @@ import {
   openMailbox,
   resolveMailbox,
   safeLogout,
+  swallowedWriteFailure,
   uidSet,
   withImap,
   type ImapClientLike,
+  type ImapSession,
 } from '../../src/mail/imap.js';
 import {
   AppleToolError,
@@ -84,13 +86,18 @@ describe('makeImapLogger', () => {
   it('is silent on stdout, remembers the server text, mirrors to stderr only in debug mode', () => {
     const log = vi.spyOn(console, 'log');
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const state: { lastServerText?: string } = {};
+    const state: { lastServerText?: string; lastError?: unknown } = {};
     const logger = makeImapLogger(state);
     logger.trace?.({ msg: 'x' });
     logger.debug({ msg: 'x' });
     logger.info({ msg: 'x' });
-    logger.warn({ err: { responseText: 'Mailbox is full' } });
+    logger.warn({ err: null });
+    expect(state.lastError).toBeUndefined();
+    const full = { responseText: 'Mailbox is full' };
+    logger.warn({ err: full });
     expect(state.lastServerText).toBe('Mailbox is full');
+    // The whole error is kept too: whether it was a server NO or a lost connection decides what a `false` meant.
+    expect(state.lastError).toBe(full);
     logger.error({ err: { message: 'boom' } });
     expect(state.lastServerText).toBe('boom');
     logger.warn(undefined);
@@ -159,6 +166,33 @@ describe('isAuthRejection / mapImapError', () => {
   });
 });
 
+describe('swallowedWriteFailure', () => {
+  const session = (lastError: unknown, usable = true): ImapSession =>
+    ({ client: { usable } as ImapClientLike, loginAs: 'local', lastServerText: () => undefined, lastError: () => lastError, clearLastError: () => undefined });
+
+  it('a tagged NO/BAD, or no failure on a live connection, is a definitive "not applied"', () => {
+    expect(swallowedWriteFailure(session(imapError({ responseStatus: 'NO', responseText: 'no such mailbox' })), 'copying')).toBeUndefined();
+    expect(swallowedWriteFailure(session(imapError({ responseStatus: 'BAD' }), false), 'copying')).toBeUndefined();
+    expect(swallowedWriteFailure(session(undefined), 'copying')).toBeUndefined();
+  });
+
+  it('a connection lost with the command in flight is a transport failure (an unknown outcome)', () => {
+    const lost = swallowedWriteFailure(session(imapError({ code: 'NoConnection' }, 'Connection not available')), 'copying');
+    expect(lost).toBeInstanceOf(TransportError);
+    expect(lost?.message).toBe('iCloud Mail (imap.mail.me.com:993) connection failed during copying: Connection not available.');
+    expect(mapImapWriteError(lost, 'copying')).toBeInstanceOf(UnconfirmedWriteError);
+    expect((swallowedWriteFailure(session(imapError({ code: 'ETIMEOUT' })), 'x') as TransportError).code).toBe('TIMEOUT');
+    // No recorded failure, but the connection is gone: not known either way.
+    expect(swallowedWriteFailure(session(undefined, false), 'storing')?.message).toBe(
+      'iCloud Mail (imap.mail.me.com:993) connection failed during storing.',
+    );
+    // A failure that is neither a server answer nor a known transport code is still not a refusal.
+    expect(swallowedWriteFailure(session(new Error('odd')), 'storing')?.message).toBe(
+      'iCloud Mail (imap.mail.me.com:993) connection failed during storing: odd.',
+    );
+  });
+});
+
 describe('withImap', () => {
   it('signs in with the name part, runs, logs out, and remembers the form', async () => {
     const server = new FakeMailServer();
@@ -166,6 +200,11 @@ describe('withImap', () => {
     const out = await withImap(server.factory, account, async (s) => {
       expect(s.loginAs).toBe('local');
       expect(s.lastServerText()).toBeUndefined();
+      (server.created[0]?.logger as { warn: (o: unknown) => void }).warn({ err: { responseText: 'nope' } });
+      expect(s.lastError()).toEqual({ responseText: 'nope' });
+      s.clearLastError();
+      expect(s.lastError()).toBeUndefined();
+      expect(s.lastServerText()).toBe('nope');
       return 'done';
     });
     expect(out).toBe('done');
