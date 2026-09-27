@@ -145,8 +145,9 @@ npm run dev
    Mail address (Mail only).
 
 Changing your Apple ID password revokes every app-specific password — the usual reason a working setup
-suddenly returns "credentials rejected". After a definitive rejection the server stops retrying that password
-until it changes, because repeated failed sign-ins can lock an Apple ID.
+suddenly returns "credentials rejected". After a definitive rejection the server stops sending that password —
+for 24 hours or until you change it, across restarts too (it records a digest of the rejected pair, never the
+password) — because repeated failed sign-ins can lock an Apple ID.
 
 **Reminders are not available**: since iOS 13, iCloud Reminders no longer sync over CalDAV (see
 [Not supported](#not-supported-and-why)).
@@ -181,6 +182,12 @@ It opens a page on `127.0.0.1`, you click **Sign in with Apple Music**, and it p
 `APPLE_MUSIC_USER_TOKEN=…`. Put that value in `APPLE_MUSIC_USER_TOKEN`. It lasts about six months, is tied to
 the developer key that minted it, and changing your Apple ID password revokes it.
 
+**Someone without the developer key** (another person on a shared deployment) never needs the `.p8`. The key's
+owner runs `npx @chrischall/aws-mcp music-auth --print-developer-token --days 7` and sends them the short-lived
+token it prints; they run `APPLE_MUSIC_DEVELOPER_TOKEN=<that token> npx @chrischall/aws-mcp music-auth` on their
+own machine, sign in, and keep the user token it prints. The developer token expires on its own; the user token
+keeps working with the server's key.
+
 ### Apple Music — web-player mode (opt-in, unofficial)
 
 Apple's official API cannot rename or delete playlists, remove or reorder tracks, or remove anything from your
@@ -200,22 +207,23 @@ served them.
 
 The package ships a [`mint.yaml`](mint.yaml) that mcp-host reads when you register `@chrischall/aws-mcp`:
 
-- **Owner settings** (your developer key, `DISPLAY_TZ`, `APPLE_WRITE_MODE`, `MCP_CONFIRM_SECRET`, …) go in the
-  registration's environment — store the private key and confirm secret as secrets.
-- **Personal credentials** (Apple ID, app-specific password, Music tokens) are declared as `auth.fields`, so
-  mcp-host asks each person for them when they connect and remembers them per person; each caller gets their
-  own process and data directory.
-- **State**: `dataDir` holds two small caches (the web-player token and iCloud discovery results) so a
-  scale-to-zero cold start stays cheap.
+- **Owner settings** (the developer key, `APPLE_WRITE_MODE`, `APPLE_SERVICES`, `MCP_CONFIRM_SECRET`, …) go in
+  the registration's environment — store the private key and confirm secret as secrets.
+- **Everything personal** (Apple ID, app-specific password, Music tokens, iCloud Mail address, time zone,
+  default calendar, Apple Music storefront) is declared as `auth.fields`, so mcp-host asks each person when they
+  connect and remembers the answers per person; each caller gets their own process and data directory.
+- **State**: `dataDir` holds a few small files (see [Security](#security)) that keep a scale-to-zero cold start
+  cheap and stop a revoked password or a spent confirmation token from being reused after a restart.
 - **Egress**: only the Apple hosts this server calls (`api.music.apple.com`, `amp-api.music.apple.com`,
   `music.apple.com`, `caldav.icloud.com`, `contacts.icloud.com`, `*.icloud.com`, `imap.mail.me.com`,
   `smtp.mail.me.com`, `maps-api.apple.com`, `weatherkit.apple.com`, `itunes.apple.com`,
   `rss.marketingtools.apple.com`). HTTPS goes through the runner's proxy via Node's built-in fetch; IMAP and
   SMTP are tunnelled through the same proxy with HTTP CONNECT.
 
-Set **`DISPLAY_TZ`** on a hosted deployment: the runner is on UTC, and times you give without an offset
-("3pm") are read in `DISPLAY_TZ`. Set **`MCP_CONFIRM_SECRET`** too, so a confirmation token survives the child
-idling out between the preview and the confirmed call.
+Give it your time zone (`DISPLAY_TZ`): the runner is on UTC, and times you give without an offset ("3pm") are
+read in `DISPLAY_TZ`. Set **`MCP_CONFIRM_SECRET`** too: without it, a confirmation token issued just before the
+child restarts (a redeploy, a machine move) stops working and you have to preview again. Spent tokens are
+recorded on disk, so a shared secret never lets one be replayed.
 
 ## Tools
 
@@ -346,7 +354,7 @@ target changed in between.
 |---|---|
 | `MCP_CONFIRM_MODE` | `ask-user` (default — the model must get your OK before repeating the call), `auto` (the model may confirm after reviewing the preview), `refuse` (never). Unknown values mean `refuse`. |
 | `MCP_CONFIRM_TTL_SECONDS` | How long a token is valid (default 600). |
-| `MCP_CONFIRM_SECRET` | Token signing key; random per process by default. |
+| `MCP_CONFIRM_SECRET` | Token signing key; random per process by default. Set it so a token survives a restart; spent tokens are recorded on disk (`$MCP_DATA_DIR/.aws-mcp`), so none can be replayed. |
 
 ## Environment variables
 

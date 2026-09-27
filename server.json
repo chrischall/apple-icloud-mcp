@@ -95,7 +95,7 @@
         },
         {
           "name": "APPLE_MUSIC_USER_TOKEN",
-          "description": "Music User Token for your library, from a one-time MusicKit sign-in: run `npx @chrischall/aws-mcp music-auth` with the Apple Developer key set. Lasts about 6 months.",
+          "description": "Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx @chrischall/aws-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months.",
           "isRequired": false,
           "format": "string",
           "isSecret": true
@@ -165,7 +165,7 @@
         },
         {
           "name": "APPLE_UNITS",
-          "description": "\"metric\" (default) or \"imperial\" for weather and distances.",
+          "description": "\"metric\" (default) or \"imperial\" units for weather (Maps distances always show both).",
           "isRequired": false,
           "format": "string"
         },
@@ -189,7 +189,7 @@
         },
         {
           "name": "MCP_CONFIRM_MODE",
-          "description": "What a confirm-gated write (send mail, delete an event/contact/playlist, remove tracks, invite attendees) does on a client that cannot show a prompt, like claude.ai: \"ask-user\" (default: first call previews and returns a confirmToken, the model must get your OK), \"auto\", or \"refuse\". Unknown values mean \"refuse\".",
+          "description": "How confirm-gated writes (send mail, deletes, removing tracks, invitations) behave on a client with no prompt, like claude.ai: \"ask-user\" (default: preview + confirmToken, the model must get your OK), \"auto\", or \"refuse\". Unknown values mean refuse.",
           "isRequired": false,
           "format": "string"
         },
@@ -201,7 +201,7 @@
         },
         {
           "name": "MCP_CONFIRM_SECRET",
-          "description": "Signing key for confirmTokens. Random per process by default; set it on a hosted server so a restart between preview and confirm does not void the token.",
+          "description": "Signing key for confirmTokens. Random per process by default; set it so a token issued just before a restart or redeploy still works (spent tokens are recorded on disk, so none can be replayed).",
           "isRequired": false,
           "format": "string",
           "isSecret": true
