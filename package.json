@@ -1,6 +1,6 @@
 {
   "name": "apple-icloud-mcp",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "mcpName": "io.github.chrischall/apple-icloud-mcp",
   "description": "Unofficial MCP server for Apple's services — Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search — that runs anywhere, no Mac needed. Not affiliated with Apple. Developed and maintained by AI (Claude Code)",
