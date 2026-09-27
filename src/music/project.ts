@@ -23,7 +23,7 @@ export interface AppleResource {
   meta?: Record<string, unknown>;
 }
 
-export const LABEL = 'apple-cloud-mcp';
+export const LABEL = 'apple-icloud-mcp';
 
 export function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);

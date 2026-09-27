@@ -100,7 +100,7 @@ export function confirmWrite(
  * that replayed the whole write: a second email nobody approved.
  *
  * The store below records each spent token on disk as well
- * (`$MCP_DATA_DIR/.apple-cloud-mcp/confirm-spent.json`, 0600): a SHA-256 of its nonce
+ * (`$MCP_DATA_DIR/.apple-icloud-mcp/confirm-spent.json`, 0600): a SHA-256 of its nonce
  * and the time it would have expired anyway — nothing that could be replayed.
  * The file is bound to (a digest of) the HMAC key, so rotating the secret
  * discards it, and so does a restart without a secret — every earlier token is
@@ -141,7 +141,7 @@ function warnOnce(kind: 'disabled' | 'write', env: EnvSource): void {
   if (warned.has(kind) || readEnvVar('MCP_CONFIRM_SECRET', { env }) === undefined) return;
   warned.add(kind);
   console.error(
-    `[apple-cloud-mcp] WARNING: ${kind === 'disabled' ? 'APPLE_STATE_CACHE=false, so a' : 'could not record a'} used confirmToken ` +
+    `[apple-icloud-mcp] WARNING: ${kind === 'disabled' ? 'APPLE_STATE_CACHE=false, so a' : 'could not record a'} used confirmToken ` +
       `${kind === 'disabled' ? 'is' : 'on disk; it is'} remembered by this process only. With MCP_CONFIRM_SECRET set, ` +
       'a restart before it expires would accept it again.',
   );

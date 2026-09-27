@@ -593,7 +593,7 @@ export function setRev(card: VCard, now: Date): void {
 // ---------------------------------------------------------------------------
 
 /** PRODID written on cards this server creates. */
-export const PRODID = '-//chrischall//apple-cloud-mcp//EN';
+export const PRODID = '-//chrischall//apple-icloud-mcp//EN';
 
 export interface NewContact extends ScalarEdits {
   emails?: Array<{ value: string; label?: string }>;

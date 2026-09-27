@@ -9,7 +9,7 @@ import { VERSION } from '../version.js';
 import { ENV, resolveOfficialDev, type OfficialDevResolution } from './credentials.js';
 
 /**
- * `apple-cloud-mcp music-auth` — get an official Music User Token.
+ * `apple-icloud-mcp music-auth` — get an official Music User Token.
  *
  * Apple mints a Music User Token only through an interactive Apple ID sign-in
  * in MusicKit (there is no OAuth grant to script). So this starts a tiny page
@@ -59,12 +59,12 @@ export const SHARED_TOKEN_MAX_DAYS = 180;
 
 const HOW_TO_GET_ONE =
   'No Apple Developer key? Ask whoever runs the server for a developer token (they run ' +
-  '`npx apple-cloud-mcp music-auth --print-developer-token`), then run ' +
-  '`APPLE_MUSIC_DEVELOPER_TOKEN=<that token> npx apple-cloud-mcp music-auth`.';
+  '`npx apple-icloud-mcp music-auth --print-developer-token`), then run ' +
+  '`APPLE_MUSIC_DEVELOPER_TOKEN=<that token> npx apple-icloud-mcp music-auth`.';
 
 const USAGE =
-  'Usage: apple-cloud-mcp music-auth [--no-open]\n' +
-  '       apple-cloud-mcp music-auth --print-developer-token [--days N]\n\n' +
+  'Usage: apple-icloud-mcp music-auth [--no-open]\n' +
+  '       apple-icloud-mcp music-auth --print-developer-token [--days N]\n\n' +
   'Signs in to Apple Music in your browser and prints APPLE_MUSIC_USER_TOKEN=… for the official API.\n' +
   'Needs the Apple Developer key the server uses (APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY), or\n' +
   'APPLE_MUSIC_DEVELOPER_TOKEN set to a developer token minted from that key — the key never has to be shared.\n' +
@@ -101,12 +101,12 @@ function json(v: unknown): string {
 export function signInPage(developerToken: string, tokenPath: string): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>apple-cloud-mcp · Apple Music sign-in</title>
+<title>apple-icloud-mcp · Apple Music sign-in</title>
 <style>body{font-family:system-ui,sans-serif;max-width:36rem;margin:3rem auto;padding:0 1rem;line-height:1.5}button{font-size:1rem;padding:.6rem 1.2rem}#status{margin-top:1rem;color:#555}</style>
 <script src="${MUSICKIT_URL}" async></script>
 </head><body>
 <h1>Sign in to Apple Music</h1>
-<p>This page gets a Music User Token for apple-cloud-mcp. Click the button, sign in with your Apple ID and allow access. The token goes only to the apple-cloud-mcp command running on this computer.</p>
+<p>This page gets a Music User Token for apple-icloud-mcp. Click the button, sign in with your Apple ID and allow access. The token goes only to the apple-icloud-mcp command running on this computer.</p>
 <button id="go" disabled>Sign in with Apple Music</button>
 <p id="status">Loading MusicKit…</p>
 <script>
@@ -117,7 +117,7 @@ export function signInPage(developerToken: string, tokenPath: string): string {
   var status = document.getElementById('status');
   function say(t) { status.textContent = t; }
   function start() {
-    Promise.resolve(MusicKit.configure({ developerToken: DEV, app: { name: 'apple-cloud-mcp', build: ${json(VERSION)} } })).then(
+    Promise.resolve(MusicKit.configure({ developerToken: DEV, app: { name: 'apple-icloud-mcp', build: ${json(VERSION)} } })).then(
       function () { go.disabled = false; say('Ready.'); },
       function (e) { say('MusicKit could not start: ' + e); }
     );
@@ -139,7 +139,7 @@ export function signInPage(developerToken: string, tokenPath: string): string {
 }
 
 const DONE_PAGE =
-  '<h1>Done — you can close this tab.</h1><p>Your Music User Token was handed to the apple-cloud-mcp command. Set it as APPLE_MUSIC_USER_TOKEN.</p>';
+  '<h1>Done — you can close this tab.</h1><p>Your Music User Token was handed to the apple-icloud-mcp command. Set it as APPLE_MUSIC_USER_TOKEN.</p>';
 
 function reply(res: ServerResponse, status: number, type: string, body: string, extra: Record<string, string> = {}): void {
   res.writeHead(status, {
@@ -207,7 +207,7 @@ function printDeveloperToken(
   err(
     `Apple Music developer token from key ${official.dev.key.keyId} (team ${official.dev.key.teamId}), valid until ` +
       `${new Date(expiresAt).toISOString()} (${days} day${days === 1 ? '' : 's'}). Hand the line on stdout to the person ` +
-      'instead of the .p8: they run `APPLE_MUSIC_DEVELOPER_TOKEN=<token> npx apple-cloud-mcp music-auth` and get ' +
+      'instead of the .p8: they run `APPLE_MUSIC_DEVELOPER_TOKEN=<token> npx apple-icloud-mcp music-auth` and get ' +
       'their own APPLE_MUSIC_USER_TOKEN for this server.\n',
   );
   return 0;

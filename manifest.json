@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/anthropics/dxt/main/dist/mcpb-manifest.schema.json",
   "manifest_version": "0.3",
-  "name": "apple-cloud-mcp",
-  "display_name": "Apple Cloud",
+  "name": "apple-icloud-mcp",
+  "display_name": "Apple iCloud",
   "version": "0.0.0",
   "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search — through Apple's web services, so it runs anywhere. Unofficial; not affiliated with Apple.",
   "author": {
@@ -12,10 +12,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/chrischall/apple-cloud-mcp"
+    "url": "https://github.com/chrischall/apple-icloud-mcp"
   },
-  "homepage": "https://github.com/chrischall/apple-cloud-mcp",
-  "support": "https://github.com/chrischall/apple-cloud-mcp/issues",
+  "homepage": "https://github.com/chrischall/apple-icloud-mcp",
+  "support": "https://github.com/chrischall/apple-icloud-mcp/issues",
   "license": "MIT",
   "keywords": [
     "apple",
@@ -82,7 +82,7 @@
     "apple_music_user_token": {
       "type": "string",
       "title": "Apple Music user token",
-      "description": "Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx apple-cloud-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months.",
+      "description": "Music User Token for your library (official API), from a one-time MusicKit sign-in: `npx apple-icloud-mcp music-auth`. Without the Apple Developer key, ask the owner for a developer token (music-auth --print-developer-token) and run it with APPLE_MUSIC_DEVELOPER_TOKEN set. Lasts ~6 months.",
       "required": false,
       "sensitive": true
     },

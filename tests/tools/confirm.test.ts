@@ -321,7 +321,7 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
     expect(write).toHaveBeenCalledTimes(3);
     expect(err).toHaveBeenCalledTimes(1);
     expect(String(err.mock.calls[0]![0])).toBe(
-      '[apple-cloud-mcp] WARNING: APPLE_STATE_CACHE=false, so a used confirmToken is remembered by this process only. ' +
+      '[apple-icloud-mcp] WARNING: APPLE_STATE_CACHE=false, so a used confirmToken is remembered by this process only. ' +
         'With MCP_CONFIRM_SECRET set, a restart before it expires would accept it again.',
     );
     expect(() => statSync(spentPath())).toThrow(); // nothing written
@@ -330,7 +330,7 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
 
   it('falls back to the in-memory mirror when the file cannot be written, with a warning', () => {
     process.env.MCP_CONFIRM_SECRET = SECRET;
-    const dir = mkdtempSync(join(tmpdir(), 'apple-cloud-mcp-spent-'));
+    const dir = mkdtempSync(join(tmpdir(), 'apple-icloud-mcp-spent-'));
     try {
       const notADir = join(dir, 'file');
       writeFileSync(notADir, 'x');
@@ -343,7 +343,7 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
       expect(store.has('n2')).toBe(true);
       const ours = err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('confirmToken'));
       expect(ours).toEqual([
-        '[apple-cloud-mcp] WARNING: could not record a used confirmToken on disk; it is remembered by this process only. ' +
+        '[apple-icloud-mcp] WARNING: could not record a used confirmToken on disk; it is remembered by this process only. ' +
           'With MCP_CONFIRM_SECRET set, a restart before it expires would accept it again.',
       ]);
       vi.restoreAllMocks();

@@ -83,7 +83,7 @@ describe('runMusicAuthCli: arguments and configuration', () => {
   it('--help prints usage (to real stderr by default) and exits 0', async () => {
     const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     expect(await runMusicAuthCli(['-h'])).toBe(0);
-    expect(String(write.mock.calls[0]?.[0])).toMatch(/Usage: apple-cloud-mcp music-auth \[--no-open\]/);
+    expect(String(write.mock.calls[0]?.[0])).toMatch(/Usage: apple-icloud-mcp music-auth \[--no-open\]/);
     write.mockRestore();
   });
 
@@ -98,7 +98,7 @@ describe('runMusicAuthCli: arguments and configuration', () => {
     expect(await runMusicAuthCli([], { stderr: (t) => errs.push(t), env: {} })).toBe(1);
     expect(errs[0]).toMatch(/^Cannot start Apple Music sign-in: .*APPLE_TEAM_ID.*\n.*Media Services/s);
     // Someone without the key is told how to sign in without it — never to obtain the .p8.
-    expect(errs[0]).toMatch(/No Apple Developer key\? Ask whoever runs the server for a developer token .*--print-developer-token.*APPLE_MUSIC_DEVELOPER_TOKEN=<that token> npx apple-cloud-mcp music-auth/);
+    expect(errs[0]).toMatch(/No Apple Developer key\? Ask whoever runs the server for a developer token .*--print-developer-token.*APPLE_MUSIC_DEVELOPER_TOKEN=<that token> npx apple-icloud-mcp music-auth/);
   });
 
   it('a set-but-broken developer credential is reported as itself, without the "no key?" advice', async () => {
@@ -147,7 +147,7 @@ describe('runMusicAuthCli --print-developer-token: a developer token to hand out
     // One line of explanation on stderr; the key itself is never printed.
     expect(errs).toHaveLength(1);
     expect(errs[0]!.trimEnd().split('\n')).toHaveLength(1);
-    expect(errs[0]).toMatch(/valid until 2026-10-04T12:00:00\.000Z \(7 days\).*instead of the \.p8.*APPLE_MUSIC_DEVELOPER_TOKEN=<token> npx apple-cloud-mcp music-auth/);
+    expect(errs[0]).toMatch(/valid until 2026-10-04T12:00:00\.000Z \(7 days\).*instead of the \.p8.*APPLE_MUSIC_DEVELOPER_TOKEN=<token> npx apple-icloud-mcp music-auth/);
     expect(errs[0]).not.toContain('PRIVATE KEY');
     expect(mocks.createServer).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();

@@ -22,7 +22,7 @@ build environment had no Apple credentials. The first live run is the real verif
   (≤ 15 777 000 s). This server mints 12-hour tokens from the `.p8` and re-mints. [DOC]
 - Music User Token (`Music-User-Token` header) can only be obtained interactively with
   MusicKit JS `authorize()` in a browser; it lasts ~6 months and a password change revokes it.
-  `npx apple-cloud-mcp music-auth` runs that sign-in on localhost. [DOC; lifetime: Apple
+  `npx apple-icloud-mcp music-auth` runs that sign-in on localhost. [DOC; lifetime: Apple
   staff forum post, 2020]
 - A user token must be used with a developer token from the SAME key: a different key from
   the same team returned 403. [3P report — UNVERIFIED here]

@@ -366,7 +366,7 @@ export class DavClient {
     const parsed = parseMultistatus(res.text, { baseUrl: res.url, service: this.service, status: res.status });
     if (parsed.skipped > 0) {
       console.error(
-        `[apple-cloud-mcp] WARNING: ${this.service}: a ${method} answer held ${parsed.skipped} malformed <response> element(s); they were ignored.`,
+        `[apple-icloud-mcp] WARNING: ${this.service}: a ${method} answer held ${parsed.skipped} malformed <response> element(s); they were ignored.`,
       );
     }
     return parsed;
@@ -386,7 +386,7 @@ export class DavClient {
       service: this.service,
       method,
       url: target,
-      headers: { Authorization: this.#authorization, 'User-Agent': `apple-cloud-mcp/${VERSION}`, ...opts.headers },
+      headers: { Authorization: this.#authorization, 'User-Agent': `apple-icloud-mcp/${VERSION}`, ...opts.headers },
       ...(opts.body !== undefined ? { body: opts.body } : {}),
       responseType: 'text',
       classifyError: (status, text) => this.classify(method, target, status, text, opts),

@@ -45,7 +45,7 @@ describe('getEnabledServices / isServiceEnabled', () => {
     expect(isServiceEnabled('calendar', env)).toBe(false);
     expect(err).toHaveBeenCalledTimes(1);
     expect(err.mock.calls[0]![0]).toBe(
-      '[apple-cloud-mcp] WARNING: APPLE_SERVICES names no such service: "calender" — ignored, so a misspelled service ' +
+      '[apple-icloud-mcp] WARNING: APPLE_SERVICES names no such service: "calender" — ignored, so a misspelled service ' +
         'registers NO tools. Registered services: music. Valid names: music, calendar, contacts, mail, maps, weather, itunes.',
     );
     // Every entry unknown: nothing but the healthcheck is registered, and it says so.

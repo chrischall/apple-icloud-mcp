@@ -61,7 +61,7 @@ describe('imapOptions / default client', () => {
       connectionTimeout: 30_000,
       greetingTimeout: 30_000,
       socketTimeout: 30_000,
-      clientInfo: { name: 'apple-cloud-mcp' },
+      clientInfo: { name: 'apple-icloud-mcp' },
     });
     expect(o.logger).toBe(logger);
     expect(o.proxy).toBeUndefined();
@@ -104,9 +104,9 @@ describe('makeImapLogger', () => {
     logger.warn({ err: { responseText: 'server text' } });
     logger.warn({});
     expect(err.mock.calls.map((c) => c[0])).toEqual([
-      '[apple-cloud-mcp] mail imap error: login [REDACTED] failed',
-      '[apple-cloud-mcp] mail imap warn: server text',
-      '[apple-cloud-mcp] mail imap warn: ',
+      '[apple-icloud-mcp] mail imap error: login [REDACTED] failed',
+      '[apple-icloud-mcp] mail imap warn: server text',
+      '[apple-icloud-mcp] mail imap warn: ',
     ]);
     expect(log).not.toHaveBeenCalled();
   });
@@ -255,8 +255,8 @@ describe('withImap', () => {
       listener(undefined as unknown as Error);
     });
     expect(spy.mock.calls.map((c) => c[0])).toEqual([
-      '[apple-cloud-mcp] mail imap connection error: socket reset',
-      '[apple-cloud-mcp] mail imap connection error: undefined',
+      '[apple-icloud-mcp] mail imap connection error: socket reset',
+      '[apple-icloud-mcp] mail imap connection error: undefined',
     ]);
   });
 });

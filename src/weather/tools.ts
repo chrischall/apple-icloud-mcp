@@ -36,7 +36,7 @@ export interface WeatherDeps {
   now?: () => number;
 }
 
-const LABEL = 'apple-cloud-mcp';
+const LABEL = 'apple-icloud-mcp';
 const VIEWS: readonly View[] = ['compact', 'full'];
 const DEFAULT_SETS: readonly WeatherSet[] = ['current', 'hourly', 'daily', 'alerts'];
 export const DEFAULT_HOURS = 24;

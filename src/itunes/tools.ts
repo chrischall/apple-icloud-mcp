@@ -57,7 +57,7 @@ export interface ItunesDeps {
 }
 
 const VIEWS = ['compact', 'full'] as const;
-const LABEL = 'apple-cloud-mcp';
+const LABEL = 'apple-icloud-mcp';
 
 const countryParam = z
   .string()

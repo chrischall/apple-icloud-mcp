@@ -1,13 +1,13 @@
 {
-  "name": "apple-cloud",
-  "displayName": "Apple Cloud",
+  "name": "apple-icloud",
+  "displayName": "Apple iCloud",
   "version": "0.0.0",
   "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search for Claude via MCP — runs anywhere, no Mac required. Unofficial; not affiliated with Apple.",
   "author": {
     "name": "Chris Chall"
   },
-  "homepage": "https://github.com/chrischall/apple-cloud-mcp",
-  "repository": "https://github.com/chrischall/apple-cloud-mcp",
+  "homepage": "https://github.com/chrischall/apple-icloud-mcp",
+  "repository": "https://github.com/chrischall/apple-icloud-mcp",
   "license": "MIT",
   "keywords": [
     "apple",
