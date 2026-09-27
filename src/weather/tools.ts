@@ -266,15 +266,14 @@ export function registerWeatherTools(server: McpServer, deps: WeatherDeps = {}):
       const weather = parseLenient(WEATHER_RESPONSE, raw, { label: LABEL, context: 'GET /api/v1/weather' }) as Record<string, unknown>;
 
       // A requested set Apple did not send is said out loud — absence is not "none".
-      let noActiveAlerts = false;
       const unavailable = new Set<WeatherSet>();
       for (const s of sets) {
         const data = weather[APPLE_SET_NAME[s]];
         if (data === undefined) {
           if (s === 'alerts') {
-            const verdict = await alertCoverage(client(), args.latitude, args.longitude, countryCode as string);
-            notes.push(verdict.note);
-            noActiveAlerts = verdict.covered;
+            // Never turned into an (empty) alerts list: only a list Apple actually
+            // sent can read as "none". The note says what the coverage check found.
+            notes.push(await alertCoverage(client(), args.latitude, args.longitude, countryCode as string));
           } else {
             notes.push(
               `Apple returned no ${SET_LABEL[s]} for this location` +
@@ -316,9 +315,7 @@ export function registerWeatherTools(server: McpServer, deps: WeatherDeps = {}):
         ]);
       }
       const compact = projected as CompactWeather;
-      if (noActiveAlerts) {
-        compact.alerts = { returned: 0, alerts: [] };
-      } else if (compact.alerts !== undefined && compact.alerts.returned === 0) {
+      if (compact.alerts !== undefined && compact.alerts.returned === 0) {
         if (unavailable.has('alerts')) {
           // An empty list from a provider that says it is unavailable is not
           // "no alerts" — drop the list rather than let it read as one.
@@ -429,36 +426,31 @@ export function dailyWindow(nowMs: number, days: number, zone: string): Pick<Wea
 
 /**
  * Apple sometimes sends no `weatherAlerts` set at all. That alone cannot say
- * whether there are no alerts or no alert SERVICE here, and those must not be
- * confused — so ask the availability endpoint which it is. A failed check is
- * reported as "unknown", never as "no alerts".
+ * whether there are no alerts, no alert SERVICE here, or an answer that simply
+ * did not carry the set — so ask the availability endpoint about coverage and
+ * say what it found. Even "covered" is NOT reported as "no alerts": that
+ * Apple omits the set when none is active is unverified (docs/APPLE-API.md),
+ * so the caller gets a note and no alerts list, never a confident empty one.
+ * A failed check is reported as "unknown".
  */
-async function alertCoverage(
-  client: WeatherClient,
-  latitude: number,
-  longitude: number,
-  countryCode: string,
-): Promise<{ covered: boolean; note: string }> {
+async function alertCoverage(client: WeatherClient, latitude: number, longitude: number, countryCode: string): Promise<string> {
   try {
     const available = await client.getAvailability(latitude, longitude, countryCode);
     if (available.includes('weatherAlerts')) {
-      return {
-        covered: true,
-        note: 'No active severe-weather alerts: Apple sent no alert data, and its availability check lists alert coverage for this location.',
-      };
+      return (
+        'Apple sent no severe-weather alert data in this answer. Its availability check lists alert coverage for this ' +
+        'location, and Apple is believed to omit the data when no alert is active (not verified), so there are ' +
+        'PROBABLY no active alerts — this is NOT confirmation. Check again shortly or consult the local weather agency.'
+      );
     }
-    return {
-      covered: false,
-      note:
-        `Apple does not provide severe-weather alerts for this location (country ${countryCode}). This is NOT ` +
-        'confirmation that none are in effect — check the local weather agency.',
-    };
+    return (
+      `Apple does not provide severe-weather alerts for this location (country ${countryCode}). This is NOT ` +
+      'confirmation that none are in effect — check the local weather agency.'
+    );
   } catch (err) {
-    return {
-      covered: false,
-      note:
-        'Apple sent no alert data and the follow-up coverage check failed ' +
-        `(${errorMessage(err)}), so whether any severe-weather alert is in effect here is UNKNOWN.`,
-    };
+    return (
+      'Apple sent no alert data and the follow-up coverage check failed ' +
+      `(${errorMessage(err)}), so whether any severe-weather alert is in effect here is UNKNOWN.`
+    );
   }
 }

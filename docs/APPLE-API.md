@@ -105,6 +105,13 @@ build environment had no Apple credentials. The first live run is the real verif
   500 000 calls/month free. [DOC] Unauthenticated → `401 {"reason":"MISSING JWT"}`. [LIVE]
 - Attribution (Apple Weather mark + legal link) is mandatory and included in every response;
   alerts must keep their `detailsUrl` and issuing `source`. [DOC]
+- `weatherAlerts` is believed to be OMITTED (not sent as `{alerts: []}`) when no alert is active at a covered
+  location; `GET /api/v1/availability/{lat}/{lon}?country=` lists `weatherAlerts` where alerts are covered.
+  [UNVERIFIED] Until a live run settles it, a missing set is never reported as an empty alerts list: the tool
+  asks availability and says "probably none — NOT confirmation" (covered), "no alert service here" (not
+  covered) or UNKNOWN (check failed). If a live run shows the omission means "none", tag this [LIVE] and the
+  empty list may be restored; if Apple sends `{alerts: []}` instead, a missing set means "not delivered" and
+  should always read UNKNOWN.
 
 ## iTunes Search / Lookup and charts (no auth)
 
