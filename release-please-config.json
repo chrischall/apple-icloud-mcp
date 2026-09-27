@@ -2,8 +2,9 @@
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "packages": {
     ".": {
-      "package-name": "ofw-mcp",
+      "package-name": "@chrischall/aws-mcp",
       "release-type": "node",
+      "initial-version": "0.1.0",
       "changelog-sections": [
         {
           "type": "feat",
@@ -81,7 +82,7 @@
           "path": ".claude-plugin/marketplace.json",
           "jsonpath": "$.metadata.version"
         },
-        "src/index.ts"
+        "src/version.ts"
       ],
       "include-v-in-tag": true,
       "include-component-in-tag": false

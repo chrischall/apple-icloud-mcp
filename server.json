@@ -1,69 +1,210 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.chrischall/ofw-mcp",
-  "description": "OurFamilyWizard co-parenting for Claude — messages, calendar, expenses, and journal",
+  "name": "io.github.chrischall/aws-mcp",
+  "description": "Apple Music playlists, iCloud Calendar/Contacts/Mail, Apple Maps and WeatherKit for Claude",
   "repository": {
-    "url": "https://github.com/chrischall/ofw-mcp",
+    "url": "https://github.com/chrischall/aws-mcp",
     "source": "github"
   },
-  "version": "2.19.4",
+  "version": "0.0.0",
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "ofw-mcp",
-      "version": "2.19.4",
+      "identifier": "@chrischall/aws-mcp",
+      "version": "0.0.0",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
-          "name": "OFW_USERNAME",
-          "description": "Your OurFamilyWizard login email address. Optional — if omitted, the server falls back to the fetchproxy browser extension (requires being signed in to ourfamilywizard.com).",
+          "name": "APPLE_TEAM_ID",
+          "description": "Your Apple Developer Team ID (10 characters). Needed for Apple Music (official API), Apple Maps and WeatherKit.",
           "isRequired": false,
           "format": "string"
         },
         {
-          "name": "OFW_PASSWORD",
-          "description": "Your OurFamilyWizard password. Optional — see OFW_USERNAME.",
+          "name": "APPLE_KEY_ID",
+          "description": "Key ID of a private key created in Certificates, Identifiers & Profiles → Keys with Media Services (MusicKit), MapKit JS and/or WeatherKit enabled.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "APPLE_PRIVATE_KEY",
+          "description": "Contents of that key's .p8 file (PEM; one-line values with \\n escapes and base64 are accepted).",
           "isRequired": false,
           "format": "string",
           "isSecret": true
         },
         {
-          "name": "OFW_WRITE_MODE",
-          "description": "Write-tool gate: \"none\" registers no write tools; \"drafts\" registers draft-level writes only (save/delete drafts, upload attachments); \"all\" registers everything (default). Unrecognized values fail closed to \"none\".",
+          "name": "APPLE_PRIVATE_KEY_PATH",
+          "description": "Local installs only: a path to the .p8 file instead of APPLE_PRIVATE_KEY.",
           "isRequired": false,
           "format": "string"
         },
         {
-          "name": "OFW_CALENDAR_WRITES",
-          "description": "Set to \"true\" to register calendar write tools (create/update/delete event) in \"drafts\" write mode. Events have no draft stage but are reversible. Never overrides \"none\".",
+          "name": "APPLE_MUSIC_KEY_ID",
+          "description": "Optional per-service override of APPLE_KEY_ID for Apple Music (pair with APPLE_MUSIC_PRIVATE_KEY).",
           "isRequired": false,
           "format": "string"
         },
         {
-          "name": "OFW_ALLOW_MARK_READ",
-          "description": "Default \"true\". Set \"false\" to forbid any tool from marking a message read on OurFamilyWizard - reading a body for the first time stamps a co-parent-visible \"First Viewed\" time that cannot be undone. A ceiling: no per-call argument can raise it.",
+          "name": "APPLE_MUSIC_PRIVATE_KEY",
+          "description": "Optional per-service override of APPLE_PRIVATE_KEY for Apple Music.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "APPLE_MAPS_KEY_ID",
+          "description": "Optional per-service override of APPLE_KEY_ID for Apple Maps.",
           "isRequired": false,
           "format": "string"
         },
         {
-          "name": "OFW_FETCH_UNREAD_BODIES",
-          "description": "Default \"false\". Whether ofw_sync_messages fetches unread inbox bodies by default (each fetch stamps a First Viewed time). Capped by OFW_ALLOW_MARK_READ.",
+          "name": "APPLE_MAPS_PRIVATE_KEY",
+          "description": "Optional per-service override of APPLE_PRIVATE_KEY for Apple Maps.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "APPLE_WEATHERKIT_KEY_ID",
+          "description": "Optional per-service override of APPLE_KEY_ID for WeatherKit.",
           "isRequired": false,
           "format": "string"
         },
         {
-          "name": "OFW_SESSION_CACHE",
-          "description": "Set to false to disable the on-disk session cache and re-authenticate on every process start. Defaults to enabled.",
+          "name": "APPLE_WEATHERKIT_PRIVATE_KEY",
+          "description": "Optional per-service override of APPLE_PRIVATE_KEY for WeatherKit.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "APPLE_WEATHERKIT_SERVICE_ID",
+          "description": "WeatherKit only: the Services ID registered for WeatherKit (e.g. com.example.weather).",
           "isRequired": false,
           "format": "string"
         },
         {
-          "name": "OFW_SESSION_FILE",
-          "description": "Absolute path for the session cache file. Defaults to $MCP_DATA_DIR/.ofw-mcp/session.json.",
+          "name": "APPLE_MUSIC_DEVELOPER_TOKEN",
+          "description": "Optional: a pre-minted Apple Music developer token (JWT) instead of signing one from the key above.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "APPLE_MUSIC_USER_TOKEN",
+          "description": "Music User Token for your library, from a one-time MusicKit sign-in: run `npx @chrischall/aws-mcp music-auth` with the Apple Developer key set. Lasts about 6 months.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "APPLE_MUSIC_WEB_USER_TOKEN",
+          "description": "Opt-in web-player mode (no developer account needed; unlocks rename/delete/remove/reorder): the media-user-token cookie from a signed-in music.apple.com tab.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "APPLE_MUSIC_WEB_DEVELOPER_TOKEN",
+          "description": "Optional override for the web-player developer token (normally read automatically from music.apple.com).",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "APPLE_MUSIC_STOREFRONT",
+          "description": "Two-letter Apple Music storefront (e.g. us, gb). Default: your account's storefront, else us.",
           "isRequired": false,
           "format": "string"
+        },
+        {
+          "name": "ICLOUD_USERNAME",
+          "description": "Your Apple ID email, for iCloud Calendar, Contacts and Mail.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "ICLOUD_APP_PASSWORD",
+          "description": "An app-specific password from appleid.apple.com → Sign-In and Security → App-Specific Passwords (NOT your Apple ID password).",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "ICLOUD_MAIL_ADDRESS",
+          "description": "Your @icloud.com address, only if your Apple ID email is not an iCloud address (needed for Mail).",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "ICLOUD_DEFAULT_CALENDAR",
+          "description": "Calendar new events go to when none is named (default: the first writable event calendar).",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "APPLE_WRITE_MODE",
+          "description": "\"none\" = read-only tools; \"additive\" = also create/append, never modify, delete or send; \"all\" = everything (default). Unrecognized values fail closed to \"none\".",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "APPLE_SERVICES",
+          "description": "Comma-separated services to enable (music, calendar, contacts, mail, maps, weather, itunes). Default: all.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "DISPLAY_TZ",
+          "description": "IANA time zone (e.g. America/New_York) for displayed times and for dates you give without an offset. Set this on a hosted server, which runs in UTC.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "APPLE_UNITS",
+          "description": "\"metric\" (default) or \"imperial\" for weather and distances.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "APPLE_STATE_CACHE",
+          "description": "Set to false to disable the small on-disk caches (web-player token, iCloud discovery) under $MCP_DATA_DIR/.aws-mcp.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "APPLE_REQUEST_TIMEOUT_MS",
+          "description": "Per-request timeout in milliseconds (default 30000).",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "APPLE_DEBUG_LOG",
+          "description": "Set to 1 to log every upstream request line to stderr (credentials redacted).",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "MCP_CONFIRM_MODE",
+          "description": "What a confirm-gated write (send mail, delete an event/contact/playlist, remove tracks, invite attendees) does on a client that cannot show a prompt, like claude.ai: \"ask-user\" (default: first call previews and returns a confirmToken, the model must get your OK), \"auto\", or \"refuse\". Unknown values mean \"refuse\".",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "MCP_CONFIRM_TTL_SECONDS",
+          "description": "Lifetime of a confirmToken in seconds (default 600).",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "MCP_CONFIRM_SECRET",
+          "description": "Signing key for confirmTokens. Random per process by default; set it on a hosted server so a restart between preview and confirm does not void the token.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
         }
       ]
     }

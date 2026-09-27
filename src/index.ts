@@ -1,12 +1,30 @@
 #!/usr/bin/env node
-import { runMcp } from '@chrischall/mcp-utils';
-import { registerHealthcheckTool } from './tools/healthcheck.js';
+import { loadDotenvSafely, runMcp } from '@chrischall/mcp-utils';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { VERSION } from './version.js';
 
-// PROVISIONAL: the service registrars are wired in by the integration step.
+// A local checkout's .env (real env vars win). Silently skipped when dotenv is
+// absent, e.g. inside the .mcpb bundle, which ships no node_modules.
+try {
+  await loadDotenvSafely({ path: join(dirname(fileURLToPath(import.meta.url)), '..', '.env') });
+} catch {
+  // no .env — nothing to load
+}
+
+// `npx @chrischall/aws-mcp music-auth` — the one-time browser sign-in that
+// mints an Apple Music user token. A CLI, not the MCP server: it prints the
+// token on stdout and exits.
+if (process.argv[2] === 'music-auth') {
+  const { runMusicAuthCli } = await import('./music/auth-cli.js');
+  process.exit(await runMusicAuthCli(process.argv.slice(3)));
+}
+
+const { REGISTRARS } = await import('./registry.js');
+
 await runMcp({
   name: 'aws-mcp',
   version: VERSION,
-  tools: [(server) => registerHealthcheckTool(server, [])],
+  tools: [...REGISTRARS],
   banner: '[aws-mcp] This project was developed and is maintained by AI (Claude Code). Use at your own discretion.',
 });

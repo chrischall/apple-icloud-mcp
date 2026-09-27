@@ -5,28 +5,32 @@
     "email": "chris.c.hall@gmail.com"
   },
   "metadata": {
-    "description": "OurFamilyWizard tools for Claude Code",
-    "version": "2.19.4"
+    "description": "Apple Web Services tools for Claude Code",
+    "version": "0.0.0"
   },
   "plugins": [
     {
-      "name": "ofw",
-      "displayName": "OurFamilyWizard",
+      "name": "apple-web-services",
+      "displayName": "Apple Web Services",
       "source": "./",
-      "description": "OurFamilyWizard co-parenting tools for Claude — messages, calendar, expenses, and journal via MCP",
-      "version": "2.19.4",
+      "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search for Claude via MCP — runs anywhere, no Mac required",
+      "version": "0.0.0",
       "author": {
         "name": "Chris Chall"
       },
-      "homepage": "https://github.com/chrischall/ofw-mcp",
-      "repository": "https://github.com/chrischall/ofw-mcp",
+      "homepage": "https://github.com/chrischall/aws-mcp",
+      "repository": "https://github.com/chrischall/aws-mcp",
       "license": "MIT",
       "keywords": [
-        "ofw",
-        "coparenting",
-        "ourFamilyWizard",
-        "mcp",
-        "family"
+        "apple",
+        "apple-music",
+        "icloud",
+        "calendar",
+        "contacts",
+        "mail",
+        "maps",
+        "weather",
+        "mcp"
       ],
       "category": "productivity"
     }
