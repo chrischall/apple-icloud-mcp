@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { daysInMonth } from '../time.js';
 import { VCard, VLine, splitUnescaped, unescapeText } from './vcard.js';
 
 /**
@@ -264,16 +265,27 @@ export function formatMonthDay(mmdd: string): string {
 /** Year Apple writes for a birthday whose year is unknown (a leap year, so Feb 29 survives). */
 export const OMIT_YEAR = '1604';
 
-/** Whether month/day exist (Feb 29 allowed when `year` is a leap year or unknown). */
+/**
+ * Year some exporters write for a birthday whose year is unknown. Read like
+ * `OMIT_YEAR`: it is not a date `formatDateOnly` (or anyone) can show.
+ */
+const ZERO_YEAR = '0000';
+
+/**
+ * Whether month/day exist (Feb 29 allowed when `year` is a leap year or
+ * unknown). Uses time.ts's calendar, never `Date.UTC`, which reads years
+ * 0–99 as 1900–1999 (so year 0, a leap year, would refuse Feb 29).
+ */
 export function validMonthDay(month: number, day: number, year?: number): boolean {
   if (month < 1 || month > 12 || day < 1) return false;
-  const y = year ?? 2000;
-  return day <= new Date(Date.UTC(y, month, 0)).getUTCDate();
+  return day <= daysInMonth(year ?? 2000, month);
 }
 
 /**
  * BDAY → `YYYY-MM-DD`, or `--MM-DD` when the year is unknown (Apple writes
- * `BDAY;X-APPLE-OMIT-YEAR=1604:1604-05-12`). Accepts basic and extended forms
+ * `BDAY;X-APPLE-OMIT-YEAR=1604:1604-05-12`; other exporters `0000-05-12`).
+ * A full date always has a year ≥ 1 and a day that exists in it, so
+ * `formatDateOnly` accepts every value this returns. Accepts basic and extended forms
  * and a trailing time part. Undefined when unreadable.
  */
 export function readBirthday(line: VLine): string | undefined {
@@ -286,7 +298,7 @@ export function readBirthday(line: VLine): string | undefined {
   const full = /^(\d{4})-?(\d{2})-?(\d{2})(?:T.*)?$/.exec(v);
   if (!full) return undefined;
   const [, y, mo, d] = full as unknown as [string, string, string, string];
-  const omitted = y === OMIT_YEAR || y === line.paramValue('X-APPLE-OMIT-YEAR');
+  const omitted = y === OMIT_YEAR || y === ZERO_YEAR || y === line.paramValue('X-APPLE-OMIT-YEAR');
   if (!validMonthDay(Number(mo), Number(d), omitted ? undefined : Number(y))) return undefined;
   return omitted ? `--${mo}-${d}` : `${y}-${mo}-${d}`;
 }

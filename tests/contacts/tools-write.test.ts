@@ -499,3 +499,35 @@ describe('review fixes: write tools', () => {
     expect(JSON.parse(res.content[0]!.text)).toMatchObject({ deleted: true, id: 'BARE', verified: true });
   });
 });
+
+describe('review fixes: card values the display must survive', () => {
+  it('update of a card whose BDAY has year 0000 reports the landed write (it used to throw after the PUT)', async () => {
+    const zero = vcard('N:Zero;Zed;;;', 'FN:Zed Zero', 'BDAY:0000-05-12', 'UID:ZERO-UID', 'REV:2023-01-15T10:20:30Z');
+    const h = harness({ 'ZERO-UID.vcf': zero });
+    const r = await h.call('apple_contacts_update', { contactId: 'ZERO-UID', phones: [{ action: 'add', value: '555-1234' }] });
+    expect(r.isError).toBe(false);
+    expect(h.fake.calls.some((c) => c.method === 'PUT')).toBe(true);
+    expect(r.json).toMatchObject({ updated: true, verified: true, contact: { birthday: '--05-12', birthdayDisplay: 'May 12' } });
+    // The stored BDAY line is untouched (the edit did not concern it).
+    expect(h.fake.cards.get('ZERO-UID.vcf')!.body).toContain('\r\nBDAY:0000-05-12\r\n');
+    const noop = await h.call('apple_contacts_update', { contactId: 'ZERO-UID', birthday: '--05-12' });
+    expect(noop.json).toMatchObject({ updated: false, contact: { birthday: '--05-12' } });
+  });
+
+  it('update of the department on a three-unit ORG stores exactly the value asked for, and verifies that', async () => {
+    const jane = vcard('N:Doe;Jane;;;', 'FN:Jane Doe', 'ORG:Acme;Eng;Platform', 'UID:JANE-UID');
+    const h = harness({ 'JANE-UID.vcf': jane });
+    const r = await h.call('apple_contacts_update', { contactId: 'JANE-UID', department: 'Sales' });
+    expect(r.json).toMatchObject({
+      updated: true,
+      verified: true,
+      changes: [{ field: 'department', before: 'Eng, Platform', after: 'Sales' }],
+      contact: { department: 'Sales' },
+    });
+    expect(h.fake.cards.get('JANE-UID.vcf')!.body).toContain('\r\nORG:Acme;Sales\r\n');
+    const cleared = await h.call('apple_contacts_update', { contactId: 'JANE-UID', department: '' });
+    expect(cleared.json).toMatchObject({ updated: true, verified: true });
+    expect(cleared.json.contact.department).toBeUndefined();
+    expect(h.fake.cards.get('JANE-UID.vcf')!.body).toContain('\r\nORG:Acme;\r\n');
+  });
+});

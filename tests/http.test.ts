@@ -19,6 +19,7 @@ import {
   CredentialsRejectedError,
   TransportError,
   UnconfirmedWriteError,
+  ResponseTooLargeError,
   UpstreamError,
   rememberSecret,
 } from '../src/errors.js';
@@ -451,6 +452,9 @@ describe('httpRequest — body read failures', () => {
     } as unknown as Response);
     const err = (await rejection(httpRequest({ service: 'contacts', method: 'REPORT', url: 'https://p1-contacts.icloud.com/card/' }))) as UpstreamError;
     expect(err).toBeInstanceOf(UpstreamError);
+    // Its own class, so the address book can fall back to smaller batches.
+    expect(err).toBeInstanceOf(ResponseTooLargeError);
+    expect(err).toMatchObject({ name: 'ResponseTooLargeError', code: 'UPSTREAM_ERROR', status: 200 });
     expect(err.message).toContain(`larger than ${MAX_RESPONSE_BYTES} bytes`);
   });
 });

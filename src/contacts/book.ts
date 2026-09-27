@@ -1,7 +1,15 @@
-import { AppleToolError, UpstreamError } from '../errors.js';
+import { AppleToolError, ResponseTooLargeError, UpstreamError } from '../errors.js';
 import { DavClient, childUrl, lastPathSegment, sameResource, type DavRequestFn } from '../dav/client.js';
 import { getDavContext } from '../dav/icloud.js';
-import { ADDRESS_DATA_PROPS, NS, addressbookQueryBody, clark } from '../dav/xml.js';
+import {
+  ADDRESS_DATA_PROPS,
+  NS,
+  addressbookMultigetBody,
+  addressbookQueryBody,
+  clark,
+  type DavMultistatus,
+  type DavResponse,
+} from '../dav/xml.js';
 import { readContact, type ContactView } from './model.js';
 import { VCard } from './vcard.js';
 
@@ -13,6 +21,10 @@ import { VCard } from './vcard.js';
  *                               (in practice exactly one, `<home>card/`)
  *   PROPFIND <book> Depth 0   → getctag (the collection's version)
  *   REPORT   <book> Depth 1   → an UNFILTERED addressbook-query: every card with its ETag
+ *
+ * When that single answer is larger than `MAX_RESPONSE_BYTES` (inline contact
+ * photos), the book is fetched in batches instead: the same query for ETags
+ * only, then `addressbook-multiget` REPORTs of `MULTIGET_BATCH` cards.
  *
  * Whether iCloud honours a filtered addressbook-query is unverified, so
  * search happens locally over the whole book. The download is cached per
@@ -57,6 +69,12 @@ export interface Book {
   groups: CardEntry[];
   /** Members that came back without readable vCard data (never silently dropped: tools report it). */
   unreadable: number;
+  /**
+   * Cards each larger on their own than `MAX_RESPONSE_BYTES` (a huge inline
+   * photo), left out of the batched download. Tools say so; a lookup of one
+   * by id reads it directly, so it fails loudly rather than as NOT_FOUND.
+   */
+  tooLarge: number;
   /**
    * iCloud answered the listing for the address book itself with an error
    * status — RFC 6352 §8.6.1's 507 marks a result the server TRUNCATED. The
@@ -171,39 +189,111 @@ export function toEntry(url: string, raw: string, etag: string | undefined): Car
   return { id: cardIdFromUrl(url), url, raw, card, view: readContact(card), ...(etag ? { etag } : {}) };
 }
 
+/** Cards per `addressbook-multiget` in the batched fallback (halved on a too-large answer). */
+export const MULTIGET_BATCH = 100;
+
+/** What a download has gathered so far. */
+interface Gathered {
+  contacts: CardEntry[];
+  groups: CardEntry[];
+  unreadable: number;
+  tooLarge: number;
+  truncated: boolean;
+}
+
+/**
+ * Add one member of a REPORT answer (address-data or multiget) to `into`. A
+ * response-level status (`<href/><status>`) carries no card data — a member
+ * iCloud could not return — and is counted, never silently dropped.
+ */
+function gather(into: Gathered, r: DavResponse): void {
+  const raw = r.status === undefined ? r.props.rawText(NS.CARDDAV, 'address-data') : undefined;
+  // XML indentation before BEGIN:VCARD would read as a folded line. These
+  // cards are only ever displayed (writes GET the card afresh), so dropping
+  // it changes nothing that is written back.
+  const entry = raw === undefined ? undefined : toEntry(r.url, raw.replace(/^[ \t\r\n]+/, ''), r.props.text(NS.DAV, 'getetag'));
+  if (!entry) {
+    into.unreadable += 1;
+    return;
+  }
+  (entry.view.kind === 'group' ? into.groups : into.contacts).push(entry);
+}
+
+/**
+ * The collection's own entry in a Depth 1 REPORT: skipped, but with an error
+ * status it is iCloud saying the answer is incomplete (507 = truncated).
+ */
+function isSelf(into: Gathered, r: DavResponse, bookUrl: string): boolean {
+  if (!sameResource(r.url, bookUrl)) return false;
+  if (r.status !== undefined && r.status >= 400) into.truncated = true;
+  return true;
+}
+
+/**
+ * The batched fallback for a book whose single answer is larger than
+ * `MAX_RESPONSE_BYTES` (inline contact photos): list the members' hrefs
+ * (getetag only — a few hundred bytes a card), then fetch the cards with
+ * `addressbook-multiget` in batches of `MULTIGET_BATCH`. A batch that is
+ * still too large is split in half; a single card that alone is too large is
+ * counted in `tooLarge` (tools say so), never a failed book.
+ */
+async function downloadInBatches(session: ContactsSession, into: Gathered): Promise<void> {
+  const listing = await session.client.report(session.bookUrl, addressbookQueryBody([[NS.DAV, 'getetag']]), 1);
+  into.unreadable += listing.skipped;
+  const hrefs: string[] = [];
+  for (const r of listing.responses) {
+    if (isSelf(into, r, session.bookUrl)) continue;
+    if (r.status !== undefined) into.unreadable += 1;
+    else hrefs.push(r.url);
+  }
+  const fetchBatch = async (batch: string[]): Promise<void> => {
+    let res: DavMultistatus;
+    try {
+      res = await session.client.report(session.bookUrl, addressbookMultigetBody(batch), 1);
+    } catch (err) {
+      if (!(err instanceof ResponseTooLargeError)) throw err;
+      if (batch.length === 1) {
+        into.tooLarge += 1;
+        return;
+      }
+      const half = Math.ceil(batch.length / 2);
+      await fetchBatch(batch.slice(0, half));
+      await fetchBatch(batch.slice(half));
+      return;
+    }
+    into.unreadable += res.skipped;
+    // Only the members asked for, each once: a card the answer left out is
+    // counted as unreadable rather than silently missing from the book.
+    const pending = [...batch];
+    for (const r of res.responses) {
+      const i = pending.findIndex((h) => sameResource(h, r.url));
+      if (i < 0) continue;
+      pending.splice(i, 1);
+      gather(into, r);
+    }
+    into.unreadable += pending.length;
+  };
+  for (let i = 0; i < hrefs.length; i += MULTIGET_BATCH) await fetchBatch(hrefs.slice(i, i + MULTIGET_BATCH));
+}
+
 async function download(session: ContactsSession, version: string | undefined): Promise<Book> {
-  const res = await session.client.report(session.bookUrl, addressbookQueryBody(ADDRESS_DATA_PROPS), 1);
-  const contacts: CardEntry[] = [];
-  const groups: CardEntry[] = [];
-  let unreadable = res.skipped;
-  let truncated = false;
-  for (const r of res.responses) {
-    if (sameResource(r.url, session.bookUrl)) {
-      // iCloud lists the collection itself. With an error status it is the
-      // server saying the answer is incomplete (507 = truncated).
-      if (r.status !== undefined && r.status >= 400) truncated = true;
-      continue;
-    }
-    // A response-level status (`<href/><status>`) carries no card data: a
-    // member iCloud could not return. Counted, never silently dropped.
-    const raw = r.status === undefined ? r.props.rawText(NS.CARDDAV, 'address-data') : undefined;
-    // XML indentation before BEGIN:VCARD would read as a folded line. These
-    // cards are only ever displayed (writes GET the card afresh), so dropping
-    // it changes nothing that is written back.
-    const entry = raw === undefined ? undefined : toEntry(r.url, raw.replace(/^[ \t\r\n]+/, ''), r.props.text(NS.DAV, 'getetag'));
-    if (!entry) {
-      unreadable += 1;
-      continue;
-    }
-    (entry.view.kind === 'group' ? groups : contacts).push(entry);
+  const into: Gathered = { contacts: [], groups: [], unreadable: 0, tooLarge: 0, truncated: false };
+  let res: DavMultistatus | undefined;
+  try {
+    res = await session.client.report(session.bookUrl, addressbookQueryBody(ADDRESS_DATA_PROPS), 1);
+  } catch (err) {
+    if (!(err instanceof ResponseTooLargeError)) throw err;
+  }
+  if (res) {
+    into.unreadable += res.skipped;
+    for (const r of res.responses) if (!isSelf(into, r, session.bookUrl)) gather(into, r);
+  } else {
+    await downloadInBatches(session, into);
   }
   const book: Book = {
     url: session.bookUrl,
     loadedAt: Date.now(),
-    contacts,
-    groups,
-    unreadable,
-    truncated,
+    ...into,
     ...(version !== undefined ? { version } : {}),
   };
   books.set(session.bookUrl, book);
