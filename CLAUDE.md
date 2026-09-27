@@ -18,6 +18,7 @@ npm run test:coverage  # what CI runs: 100% lines/branches/functions/statements 
 npm run dev            # node --env-file=.env dist/index.js
 npm run notices        # regenerate THIRD_PARTY_NOTICES.md (the bundle script does this too)
 npx apple-icloud-mcp music-auth   # one-time MusicKit sign-in that prints APPLE_MUSIC_USER_TOKEN
+npx apple-icloud-mcp doctor [service…] [--json]   # apple_healthcheck from a terminal; exit 0 ok / 1 failing / 2 usage
 npx apple-icloud-mcp music-auth --print-developer-token --days 7   # hand out a dev token, never the .p8
 ```
 
@@ -25,7 +26,8 @@ npx apple-icloud-mcp music-auth --print-developer-token --days 7   # hand out a 
 
 ```
 src/
-  index.ts          entry: .env, `music-auth` CLI dispatch, runMcp(REGISTRARS)
+  index.ts          entry: .env, `music-auth` / `doctor` CLI dispatch, runMcp(REGISTRARS)
+  doctor.ts         `doctor` CLI: healthReport() (shared with apple_healthcheck) rendered for a terminal
   registry.ts       REGISTRARS + HEALTH_PROBES — the single list the server AND tests/manifest-roster use
   version.ts        VERSION (x-release-please-version)
   config.ts         APPLE_SERVICES, APPLE_WRITE_MODE (none|additive|all, fail-closed), DISPLAY_TZ, timeouts

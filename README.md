@@ -450,6 +450,20 @@ All optional; each service activates when its credentials are present. Values th
 Run **`apple_healthcheck`** first. For each service it reports whether credentials are configured (and which
 variables to set if not), whether Apple accepted them just now, the active write mode and the display time zone.
 
+The same check runs from a terminal, with no MCP client involved — useful before wiring the server into Claude,
+or to tell a credential problem from a client problem:
+
+```bash
+read -rs ICLOUD_APP_PASSWORD && export ICLOUD_APP_PASSWORD   # typed without echo, kept out of shell history
+export ICLOUD_USERNAME=you@icloud.com
+npx -y apple-icloud-mcp doctor                  # every enabled service
+npx -y apple-icloud-mcp doctor calendar mail    # only these
+npx -y apple-icloud-mcp doctor --json           # the raw apple_healthcheck report
+```
+
+It exits 0 when every configured service works and 1 when one fails. It sends each configured service one
+read-only request (the iCloud ones one at a time, so a revoked password is sent once), and prints no secrets.
+
 | Symptom | Likely cause |
 |---|---|
 | iCloud "credentials rejected" | The app-specific password was revoked (Apple ID password changed) or the normal password was used. Generate a new app-specific password. |
