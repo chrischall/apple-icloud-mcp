@@ -22,7 +22,7 @@ import {
   ruleOf,
   setAlarms,
   setAttendees,
-  sameLength,
+  endInstantOf,
   setEnd,
   setEventTimes,
   setLength,
@@ -628,11 +628,15 @@ export function editSeries(e: SeriesEdit): string | undefined {
     if (times.endGiven) {
       if (allDay) newDays = daysBetween(times.startYmd as string, times.endYmd as string) + 1;
       else {
-        // A series repeats wall-clock times: the length asked for is the wall time from the new start to the new end,
-        // not the real time between them, which the night the clocks change makes an hour more or less than every
-        // other occurrence's (unless no wall time comes between them).
-        const wallMs = (wallSeconds(times.end, newWz) - wallSeconds(times.start, newWz)) * 1000;
-        newLength = { ms: wallMs > 0 ? wallMs : times.end.getTime() - times.start.getTime() };
+        // A series repeats its times: the length asked for is the wall time from the new start to the new end, on the
+        // clock the request was read by — not the real time between them, which the night that clock changes makes
+        // an hour more or less than every other occurrence's. Unless the start is not a wall time the occurrence has
+        // (an end alone given through an occurrence whose own time the clocks skip, listed an hour off), or no wall
+        // time separates the two: then the real time.
+        const clock: WriteZone = { kind: 'floating', zone };
+        const wallMs = (wallSeconds(times.end, clock) - wallSeconds(times.start, clock)) * 1000;
+        const onSlot = moved || wallSeconds(times.start, oldWz) === wallOf(ref, oldWz, zone);
+        newLength = { ms: onSlot && wallMs > 0 ? wallMs : times.end.getTime() - times.start.getTime() };
       }
     }
     const withEnd = (comp: Component, start: Time, days: number, length: Length) => {
@@ -666,8 +670,9 @@ export function editSeries(e: SeriesEdit): string | undefined {
       if (ovr === target.comp) writeTimes(ovr, times, newWz);
       else if (!retimed) {
         const days = allDay ? daysBetween(ymdOf(oStart), ymdOf(oEnd)) : 0;
-        const length: Length = allDay ? { ms: 0 } : lengthOf(ovr, zone);
-        withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, sameLength(length, oldLength) ? newLength : length);
+        // An override that lasts as long as the series (however either is written) takes its new length.
+        const follows = !allDay && times.endGiven && endInstantOf(ovr, zone).getTime() === endAfter(oStart, oldLength, zone).getTime();
+        withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, follows ? newLength : allDay ? { ms: 0 } : lengthOf(ovr, zone));
       }
       touched.add(ovr);
     }
