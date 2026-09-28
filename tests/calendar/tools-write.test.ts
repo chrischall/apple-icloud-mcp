@@ -130,7 +130,12 @@ describe('apple_calendar_create_event', () => {
     // 01:30 EDT on the fall-back night: a series keeps the wall time 01:30, which is read as EST — and says so.
     const early = await h.call('apple_calendar_create_event', { title: 'Early', startDate: '2026-11-01T01:30:00-04:00', recurrence: { frequency: 'daily', count: 3 } });
     expect(early.json.event.start).toBe('2026-11-01T01:30:00-05:00');
-    expect(early.json.notes).toContainEqual(expect.stringMatching(/^The series now starts at Sun, Nov 1, 2026, 1:30 AM EST, not Sun, Nov 1, 2026, 1:30 AM EDT: that wall-clock time comes twice/));
+    expect(early.json.notes).toContainEqual(expect.stringMatching(/^The series starts at Sun, Nov 1, 2026, 1:30 AM EST, not Sun, Nov 1, 2026, 1:30 AM EDT: that wall-clock time comes twice/));
+    // No such note for a time given with a fraction of a second, or for a single event.
+    const plain = await h.call('apple_calendar_create_event', { title: 'Frac', startDate: '2026-10-21T09:00:00.5', recurrence: { frequency: 'daily', count: 2 } });
+    expect(plain.json.notes.some((n: string) => n.includes('comes twice'))).toBe(false);
+    const one = await h.call('apple_calendar_create_event', { title: 'One', startDate: '2026-10-21T09:00:00.5' });
+    expect(one.json.notes.some((n: string) => n.includes('comes twice'))).toBe(false);
   });
 
   it('with attendees: asks first (iCloud emails invitations), then writes ORGANIZER + ATTENDEEs', async () => {

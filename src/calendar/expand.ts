@@ -7,9 +7,12 @@ import {
   endTimeOf,
   instantOf,
   isRecurringMaster,
+  lengthMs,
   occKey,
+  ownWallMs,
   ruleOf,
   startTimeOf,
+  wallTime,
   ymdOf,
   type Component,
   type EventParts,
@@ -246,7 +249,7 @@ export function timeProblem(recur: Recur, dtstart: Time): string | undefined {
   // Seconds per step, and where in the day the walk starts.
   const step = own.length > 0 ? unit * 60 : (unit * recur.interval) % 86_400 || 86_400;
   const origin = dtstart.hour * 3600 + dtstart.minute * 60 + dtstart.second;
-  const key = ['time', freq, step, hours, minutes, own.length, origin].join('|');
+  const key = ['time', freq, step, hours, minutes, origin].join('|');
   return cached(key, () => {
     const period = 86_400 / gcd(step, 86_400);
     let matches = 0;
@@ -255,7 +258,8 @@ export function timeProblem(recur: Recur, dtstart: Time): string | undefined {
       if (filters.every((f) => f(tod))) matches += 1;
     }
     if (matches === 0) return `FREQ=${freq} whose time filters never match a time it steps on`;
-    return period / (matches * Math.max(1, own.length)) > MAX_STEPS_PER_INSTANCE ? `FREQ=${freq} with time filters that skip too many of the times it steps on` : undefined;
+    // ical.js runs through its own list at every step, matching or not: the list multiplies steps and instances alike.
+    return period / matches > MAX_STEPS_PER_INSTANCE ? `FREQ=${freq} with time filters that skip too many of the times it steps on` : undefined;
   });
 }
 
@@ -416,6 +420,14 @@ function rdateStarts(master: Component): Time[] {
   return rdateValues(master).map((v) => (v instanceof ICAL.Period ? v.start : v));
 }
 
+/** The PERIOD an RDATE gives the instance `key` (its own start and end values), when one does. */
+export function periodOf(master: Component, key: string, zone: string): { start: Time; end: Time } | undefined {
+  for (const v of guarded(() => rdateValues(master))) {
+    if (v instanceof ICAL.Period && occKey(v.start, zone) === key) return { start: v.start, end: v.getEnd() };
+  }
+  return undefined;
+}
+
 /** Whether the master lists some instances as periods (RDATE;VALUE=PERIOD), each with a length of its own. */
 export function hasPeriodDates(master: Component): boolean {
   return guarded(() => rdateValues(master)).some((v) => v instanceof ICAL.Period);
@@ -565,6 +577,8 @@ interface SeriesShape {
   periodEnds: Map<string, number>;
   /** The longest any instance lasts (ms). */
   longestMs: number;
+  /** A floating series' length in wall-clock time (see `lengthMs`): each floating instance ends that long after its own wall time. */
+  wallMs?: number;
 }
 
 function seriesShape(master: Component, zone: string): SeriesShape {
@@ -585,12 +599,16 @@ function seriesShape(master: Component, zone: string): SeriesShape {
     periodEnds.set(occKey(v.start, zone), end);
     longestMs = Math.max(longestMs, end - start);
   }
+  const start = startTimeOf(master);
+  const floating = !s.allDay && start.zone === ICAL.Timezone.localTimezone;
+  const wallMs = floating ? Math.max(0, lengthMs(start, endTimeOf(master, start), zone)) : undefined;
   return {
     allDay: s.allDay,
     days: s.allDay ? daysBetween(s.startYmd as string, s.endYmd as string) + 1 : 0,
     durationMs,
     periodEnds,
-    longestMs,
+    longestMs: Math.max(longestMs, wallMs ?? 0),
+    ...(wallMs !== undefined ? { wallMs } : {}),
   };
 }
 
@@ -599,7 +617,12 @@ function naturalOccurrence(master: Component, t: Time, key: string, shape: Serie
   if (shape.allDay) span = allDaySpan(ymdOf(t), shape.days, zone);
   else {
     const start = instantOf(t, zone);
-    span = { allDay: false, start, end: new Date(shape.periodEnds.get(key) ?? start.getTime() + shape.durationMs) };
+    let end = shape.periodEnds.get(key) ?? start.getTime() + shape.durationMs;
+    // A floating instance ends at its own wall time plus the series' wall-clock length, as an override written for it does.
+    if (shape.wallMs !== undefined && !shape.periodEnds.has(key) && t.zone === ICAL.Timezone.localTimezone) {
+      end = Math.max(start.getTime(), instantOf(wallTime(new Date(ownWallMs(t) + shape.wallMs), { kind: 'floating', zone }), zone).getTime());
+    }
+    span = { allDay: false, start, end: new Date(end) };
   }
   return { comp: master, master, ...span, occ: key, recurrenceTime: t, isOverride: false, recurring: true };
 }
@@ -789,6 +812,35 @@ export function firstInstance(master: Component, zone: string, maxSteps: number 
   let earliest = first;
   for (const t of firsts.values()) if (instantOf(t, zone).getTime() < instantOf(earliest, zone).getTime()) earliest = t;
   return earliest;
+}
+
+/**
+ * The other instances (their keys) an EXDATE `value` meant for occurrence
+ * `occ` (at `at`) would also remove. Only a series that mixes all-day dates
+ * and timed instances has any: a DATE EXDATE removes every instance on its
+ * date, and a date-time one at midnight both the timed instance there and a
+ * DATE instance of that date (see `exclusions`). Walked once, without an
+ * occurrence cap, through the instances that could collide (within
+ * ROUGH_MARGIN_MS of the occurrence).
+ */
+export function alsoExcluded(master: Component, value: Time, occ: string, at: Date, zone: string, maxSteps: number = MAX_EXPANSION_STEPS): string[] {
+  const kind = startTimeOf(master).isDate;
+  if (!guarded(() => rdateStarts(master)).some((t) => t.isDate !== kind)) return [];
+  // A master holding that one EXDATE, as `exclusions` reads it (EXDATE is the only property it asks for).
+  const one = { getAllProperties: () => [{ getValues: () => [value] }] } as unknown as Component;
+  const hit = exclusions(one, zone);
+  const next = seriesWalker(master, zone);
+  const out: string[] = [];
+  for (let steps = 0; steps < maxSteps; steps++) {
+    const t = next();
+    if (!t) return out;
+    const r = roughStartMs(t);
+    if (r < at.getTime() - ROUGH_MARGIN_MS) continue;
+    if (r > at.getTime() + ROUGH_MARGIN_MS) return out;
+    const key = occKey(t, zone);
+    if (key !== occ && hit(t, r)) out.push(key);
+  }
+  throw tooLong(`the occurrences next to ${occ}`, maxSteps);
 }
 
 /** Where an instant falls among a series' RRULE instances (RDATE and EXDATE aside). */

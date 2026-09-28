@@ -658,11 +658,16 @@ describe('series times next to DST changes', () => {
       expect(p.result.occurrence.start.getTime()).toBe(start);
       expect(p.result.occurrence.end.getTime()).toBe(start + 3_600_000);
     }
+    // A floating series is wall clock: 01:00–02:00 every day, which on the fall-back night is two hours. Its override
+    // and a split keep those wall times, and a floating DTEND (never a UTC one next to a floating DTSTART).
     dav.put('home', 'fs.ics', ics(...vevent('UID:fs', 'DTSTART:20261029T010000', 'DTEND:20261029T020000', 'RRULE:FREQ=DAILY;COUNT=7', 'SUMMARY:S')));
+    expect(spansOf(dav.get('home', 'fs.ics')!.ics, '2026-10-31', '2026-11-03')).toEqual(['2026-10-31T05:00:00Z 60', '2026-11-01T05:00:00Z 120', '2026-11-02T06:00:00Z 60']);
     const one = await update('home/fs.ics#occ=2026-11-01T05:00:00Z', { title: 'S2' });
-    expect(spansOf(one.puts[0]!.body, '2026-11-01', '2026-11-02')).toEqual(['2026-11-01T05:00:00Z 60']);
+    expect(one.puts[0]!.body).toContain('DTEND:20261101T020000\r\n');
+    expect(spansOf(one.puts[0]!.body, '2026-11-01', '2026-11-02')).toEqual(['2026-11-01T05:00:00Z 120']);
     const split = await update('home/fs.ics#occ=2026-11-01T05:00:00Z', { span: 'futureEvents', title: 'S3' });
-    expect(spansOf(split.puts[1]!.body).map((s) => s.split(' ')[1])).toEqual(['60', '60', '60', '60']);
+    expect(split.puts[1]!.body).toContain('DTEND:20261101T020000\r\n');
+    expect(spansOf(split.puts[1]!.body).map((s) => s.split(' ')[1])).toEqual(['120', '60', '60', '60']);
   });
 
   it('names an RDATE on the unread pass of a repeated hour by its own value, so an edit replaces it and a delete removes it', async () => {
@@ -738,10 +743,72 @@ describe('series times next to DST changes', () => {
     });
   });
 
+  it('measures a floating series\' length in wall clock, so a move from a skipped time keeps it', async () => {
+    // 02:30–03:30 on the spring-forward day reads as zero length in New York (both walls land on 03:30 EDT), but the
+    // series lasts an hour on every other day, and wherever it is read.
+    dav.put('home', 'fg2.ics', ics(...vevent('UID:fg2', 'DTSTART:20270314T023000', 'DTEND:20270314T033000', 'RRULE:FREQ=DAILY;COUNT=4', 'SUMMARY:F')));
+    const p = await update('home/fg2.ics', { span: 'allEvents', startDate: '2027-03-14T04:00' });
+    expect(p.puts[0]!.body).toContain('DTSTART:20270314T040000\r\nDTEND:20270314T050000\r\n');
+    // A new end given on the fall-back night whose wall time comes before the start's (01:15 EST after 01:30 EDT):
+    // the time between them, as a wall length from the start.
+    dav.put('home', 'fe.ics', ics(...vevent('UID:fe', 'DTSTART:20261029T013000', 'DTEND:20261029T023000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:F')));
+    const end = await update('home/fe.ics#occ=2026-11-01T05:30:00Z', { span: 'allEvents', endDate: '2026-11-01T01:15:00-05:00' });
+    expect(end.puts[0]!.body).toContain('DTSTART:20261029T013000\r\nDTEND:20261029T021500\r\n');
+    // On any other day the wall length is the length asked for.
+    const plain = await update('home/fe.ics#occ=2026-10-29T05:30:00Z', { span: 'allEvents', endDate: '2026-10-29T02:00' });
+    expect(plain.puts[0]!.body).toContain('DTSTART:20261029T013000\r\nDTEND:20261029T020000\r\n');
+  });
+
+  it('moves an UNTIL written another way than the series by the bound ical.js compares, keeping the last occurrence', async () => {
+    // Floating 20:00 daily bounded by a UTC UNTIL (compared by its fields), 540 instances: past the check's sample.
+    dav.put('home', 'u1.ics', ics(...vevent('UID:u1', 'DTSTART:20270104T200000', 'DTEND:20270104T210000', 'RRULE:FREQ=DAILY;UNTIL=20280630T235959Z', 'SUMMARY:U')));
+    const later = await update('home/u1.ics', { span: 'allEvents', startDate: '2027-01-05T20:00' });
+    expect(later.puts[0]!.body).toContain('RRULE:FREQ=DAILY;UNTIL=20280701T235959\r\n');
+    // Its last occurrence moves with it, to Jul 1 20:00 (00:00Z the next day).
+    expect(keysOf(later.puts[0]!.body, '2028-06-29', '2028-07-05').at(-1)).toBe('2028-07-02T00:00:00Z');
+    // Zoned 21:00 daily bounded by a floating UNTIL (compared as 21:00 UTC, so it ends 08-22): an hour later, still 08-22.
+    put('u2.ics', 'UID:u2', 'DTSTART;TZID=America/New_York:20270101T210000', 'DTEND;TZID=America/New_York:20270101T220000', 'RRULE:FREQ=DAILY;UNTIL=20280823T210000', 'SUMMARY:U');
+    const lastBefore = keysOf(dav.get('home', 'u2.ics')!.ics, '2028-08-20', '2028-08-26').at(-1);
+    expect(lastBefore).toBe('2028-08-23T01:00:00Z');
+    const hour = await update('home/u2.ics', { span: 'allEvents', startDate: '2027-01-01T22:00' });
+    expect(hour.puts[0]!.body).toContain('UNTIL=20280823T220000Z');
+    expect(keysOf(hour.puts[0]!.body, '2028-08-20', '2028-08-26').at(-1)).toBe('2028-08-23T02:00:00Z');
+  });
+
+  it('changes the zone of a series starting at a skipped time without moving it, where the new zone skips the same hour', async () => {
+    const zoneOnly = async (zoneName: string, id: string) => planUpdate(await loadEvent(dav.context(), id, zoneName), { span: 'allEvents', endDate: '2027-03-14T03:30', timeZone: zoneName }, { ...env, zone: zoneName });
+    put('tor.ics', 'UID:tor', 'DTSTART;TZID=America/New_York:20270314T023000', 'DTEND;TZID=America/New_York:20270314T033000', 'RRULE:FREQ=DAILY;COUNT=4', 'SUMMARY:T');
+    expect((await zoneOnly('America/Toronto', 'home/tor.ics')).puts[0]!.body).toContain('DTSTART;TZID=America/Toronto:20270314T023000');
+    put('tor2.ics', 'UID:tor2', 'DTSTART;TZID=America/New_York:20270312T023000', 'DTEND;TZID=America/New_York:20270312T033000', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:T');
+    expect((await zoneOnly('America/Toronto', 'home/tor2.ics#occ=2027-03-14T06:30:00Z')).puts[0]!.body).toContain('DTSTART;TZID=America/Toronto:20270312T023000');
+    dav.put('home', 'ber.ics', ics(...vevent('UID:ber', 'DTSTART;TZID=Europe/Berlin:20270328T023000', 'DTEND;TZID=Europe/Berlin:20270328T033000', 'RRULE:FREQ=WEEKLY;COUNT=4', 'SUMMARY:B')));
+    const paris = planUpdate(await loadEvent(dav.context(), 'home/ber.ics', 'Europe/Paris'), { span: 'allEvents', endDate: '2027-03-28T03:30', timeZone: 'Europe/Paris' }, { ...env, zone: 'Europe/Paris' });
+    expect(paris.puts[0]!.body).toContain('DTSTART;TZID=Europe/Paris:20270328T023000');
+  });
+
+  it('keeps a UTC RDATE on the first pass of the repeated hour where it is when the series changes', async () => {
+    put('fp.ics', 'UID:fp', 'DTSTART;TZID=America/New_York:20261028T013000', 'DTEND;TZID=America/New_York:20261028T023000', 'RRULE:FREQ=WEEKLY;COUNT=2', 'RDATE:20261101T053000Z', 'SUMMARY:P');
+    const longer = await update('home/fp.ics#occ=2026-10-28T05:30:00Z', { span: 'allEvents', endDate: '2026-10-28T03:00' });
+    expect(longer.puts[0]!.body).toContain('RDATE:20261101T053000Z');
+    expect(keysOf(longer.puts[0]!.body, '2026-10-27', '2026-11-06')).toEqual(['2026-10-28T05:30:00Z', '2026-11-01T05:30:00Z', '2026-11-04T06:30:00Z']);
+    // A day later: 01:30 EDT on 11-02 does not exist twice, so it takes the series' zone.
+    const day = await update('home/fp.ics#occ=2026-10-28T05:30:00Z', { span: 'allEvents', startDate: '2026-10-29T01:30' });
+    expect(day.puts[0]!.body).toContain('RDATE;TZID=America/New_York:20261102T013000');
+  });
+
   it('says when a series moved by an explicit offset starts on the other pass of a repeated hour', async () => {
     put('n.ics', 'UID:n', 'DTSTART;TZID=America/New_York:20261029T090000', 'DTEND;TZID=America/New_York:20261029T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:N');
     const p = await update('home/n.ics#occ=2026-11-01T14:00:00Z', { span: 'allEvents', startDate: '2026-11-01T01:30:00-04:00' });
-    expect(p.notes).toEqual([expect.stringMatching(/^The series now starts at .*1:30 AM EST, not .*1:30 AM EDT: that wall-clock time comes twice/)]);
+    expect(p.notes).toEqual([expect.stringMatching(/^This occurrence is now at Sun, Nov 1, 2026, 1:30 AM EST, not .*1:30 AM EDT: that wall-clock time comes twice/)]);
+    // Not for an override: its own start is written exactly where it was asked.
+    const edited = await update('home/n.ics#occ=2026-11-01T14:00:00Z', { title: 'N2' });
+    dav.put('home', 'n.ics', edited.puts[0]!.body);
+    const through = await update('home/n.ics#occ=2026-11-01T14:00:00Z', { span: 'allEvents', startDate: '2026-11-01T01:30:00-04:00' });
+    expect(through.notes).toEqual([]);
+    expect(through.result.occurrence.start.toISOString()).toBe('2026-11-01T05:30:00.000Z');
+    // Nor for a time given with a fraction of a second.
+    const frac = await update('home/n.ics#occ=2026-10-29T13:00:00Z', { span: 'allEvents', startDate: '2026-10-29T10:00:00.250' });
+    expect(frac.notes).toEqual([]);
   });
 });
 
@@ -758,8 +825,22 @@ describe('all-day dates in a timed series (RDATE;VALUE=DATE)', () => {
     expect((one.op as { body: string }).body).toContain('EXDATE;TZID=America/New_York:20261023T000000');
     put('m.ics', 'UID:m', 'DTSTART;TZID=America/New_York:20261021T000000', 'DTEND;TZID=America/New_York:20261021T003000', 'RRULE:FREQ=DAILY;COUNT=5', 'RDATE;VALUE=DATE:20261023', 'SUMMARY:M');
     await expect(load('home/m.ics#occ=2026-10-23').then((l) => planDelete(l, 'thisEvent', env))).rejects.toThrow(
-      /cannot be deleted on its own: the exclusion \(EXDATE\) that removes it would also remove 2026-10-23T04:00:00Z/,
+      /cannot be deleted on its own: the exclusion \(EXDATE\) that removes it also matches 2026-10-23T04:00:00Z — another occurrence on the same date, or at the same midnight/,
     );
+  });
+
+  it('refuses a delete whose exclusion also matches another occurrence, however dense the series', async () => {
+    // Every minute for four days, plus an all-day date: thousands of instances next to the one deleted.
+    put('dm.ics', 'UID:dm', 'DTSTART;TZID=America/New_York:20261021T000000', 'DURATION:PT1M', 'RRULE:FREQ=MINUTELY;UNTIL=20261025T000000Z', 'RDATE;VALUE=DATE:20261023', 'SUMMARY:M');
+    await expect(load('home/dm.ics#occ=2026-10-23').then((l) => planDelete(l, 'thisEvent', env))).rejects.toThrow(/also matches 2026-10-23T04:00:00Z/);
+    // An all-day series with a timed RDATE: a DATE exclusion removes every instance on its date.
+    dav.put('home', 'at.ics', ics(...NY_TZ, ...vevent('UID:at', 'DTSTART;VALUE=DATE:20261019', 'DTEND;VALUE=DATE:20261020', 'RRULE:FREQ=DAILY;COUNT=7', 'RDATE;TZID=America/New_York:20261022T150000', 'SUMMARY:A')));
+    await expect(load('home/at.ics#occ=2026-10-22').then((l) => planDelete(l, 'thisEvent', env))).rejects.toThrow(
+      /also matches 2026-10-22T19:00:00Z — another occurrence on the same date, or at the same midnight/,
+    );
+    // Only a series mixing the two kinds is checked; a plain one deletes as before.
+    const plain = planDelete(await load('work/s.ics#occ=2026-10-22T13:00:00Z'), 'thisEvent', env);
+    expect(plain.scope).toBe('this occurrence only');
   });
 
   it('refuses to edit one alone, split at one, or move the series through one (fields through it are fine)', async () => {
