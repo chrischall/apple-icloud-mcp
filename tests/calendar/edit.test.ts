@@ -883,6 +883,42 @@ describe('series times next to DST changes', () => {
     expect(z.puts[0]!.body).toContain('DTEND;TZID=America/New_York:20261025T030000');
   });
 
+  it('takes the real time for an end given through an occurrence whose own time the clocks skip', async () => {
+    // Sundays 02:00–04:00: on 03-08 02:00 does not exist, and that occurrence is listed from 01:00 EST. An end of 05:00
+    // there is three hours after the slot, as on every other Sunday — not the four between the listed walls.
+    put('sk.ics', 'UID:sk', 'DTSTART;TZID=America/New_York:20260222T020000', 'DTEND;TZID=America/New_York:20260222T040000', 'RRULE:FREQ=WEEKLY;COUNT=6', 'SUMMARY:W');
+    const p = await update('home/sk.ics#occ=2026-03-08T06:00:00Z', { span: 'allEvents', endDate: '2026-03-08T05:00' });
+    expect(p.puts[0]!.body).toContain('DTEND;TZID=America/New_York:20260222T050000');
+    expect(p.notes).toEqual([]);
+  });
+
+  it('measures a new length on the clock the request was read by, not the series\' own', async () => {
+    // A New York series seen from Los Angeles: its occurrence on New York's fall-back night is 21:30–22:30 there like
+    // every other, and an end of 23:30 makes every one two hours.
+    const la = 'America/Los_Angeles';
+    put('ny.ics', 'UID:ny', 'DTSTART;TZID=America/New_York:20261018T003000', 'DTEND;TZID=America/New_York:20261018T013000', 'RRULE:FREQ=WEEKLY;COUNT=4', 'SUMMARY:B');
+    const p = planUpdate(await loadEvent(dav.context(), 'home/ny.ics#occ=2026-11-01T04:30:00Z', la), { span: 'allEvents', endDate: '2026-10-31T23:30' }, { ...env, zone: la });
+    expect(p.puts[0]!.body).toContain('DTEND;TZID=America/New_York:20261018T023000');
+    expect(p.notes).toEqual([]);
+  });
+
+  it('lets an override that lasts as long as the series follow a new length, however either is written', async () => {
+    // A DURATION series whose renamed occurrence was written with a DTEND (as an override is).
+    put('dl.ics', 'UID:dl', 'DTSTART;TZID=America/New_York:20261006T090000', 'DURATION:PT1H', 'RRULE:FREQ=WEEKLY;COUNT=6', 'SUMMARY:Standup');
+    const renamed = await update('home/dl.ics#occ=2026-10-20T13:00:00Z', { title: 'Standup (demo)' });
+    dav.put('home', 'dl.ics', renamed.puts[0]!.body);
+    const longer = await update('home/dl.ics#occ=2026-10-27T13:00:00Z', { span: 'allEvents', endDate: '2026-10-27T10:30' });
+    expect(spansOf(longer.puts[0]!.body, '2026-10-01', '2026-11-20').map((x) => x.split(' ')[1])).toEqual(['90', '90', '90', '90', '90', '90']);
+    // A DTEND series whose occurrence at a skipped time was renamed (written with a DURATION).
+    put('dk.ics', 'UID:dk', 'DTSTART;TZID=America/New_York:20260305T023000', 'DTEND;TZID=America/New_York:20260305T033000', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:P');
+    const skipped = await update('home/dk.ics#occ=2026-03-08T06:30:00Z', { title: 'P2' });
+    expect(skipped.puts[0]!.body).toContain('DURATION:PT1H');
+    dav.put('home', 'dk.ics', skipped.puts[0]!.body);
+    const all = await update('home/dk.ics#occ=2026-03-06T07:30:00Z', { span: 'allEvents', endDate: '2026-03-06T04:00' });
+    expect(all.puts[0]!.body).toContain('DURATION:PT1H30M');
+    expect(spansOf(all.puts[0]!.body, '2026-03-01', '2026-03-12').map((x) => x.split(' ')[1])).toEqual(['90', '90', '90', '90', '90', '90']);
+  });
+
   it('says when a series moved by an explicit offset starts on the other pass of a repeated hour', async () => {
     put('n.ics', 'UID:n', 'DTSTART;TZID=America/New_York:20261029T090000', 'DTEND;TZID=America/New_York:20261029T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:N');
     const p = await update('home/n.ics#occ=2026-11-01T14:00:00Z', { span: 'allEvents', startDate: '2026-11-01T01:30:00-04:00' });
