@@ -401,12 +401,6 @@ export function lengthOf(comp: Component, zone: string): Length {
   return { ms: instantOf(end, zone).getTime() - instantOf(start, zone).getTime() };
 }
 
-/** Whether two lengths are the same length, written the same way. */
-export function sameLength(a: Length, b: Length): boolean {
-  if ('ms' in a) return 'ms' in b && a.ms === b.ms;
-  return !('ms' in b) && a.duration.toString() === b.duration.toString();
-}
-
 /** A length in milliseconds, roughly: a DURATION's days as 24 hours (for margins, not for ends). */
 export function roughMs(length: Length): number {
   return 'ms' in length ? length.ms : length.duration.toSeconds() * 1000;
