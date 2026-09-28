@@ -37,6 +37,8 @@ import {
 import { NY_TZ, ics, vevent } from './fake-caldav.js';
 
 const NY = 'America/New_York';
+/** Both zones of a call made without `timeZone`. */
+const NYZ = { zone: NY, displayZone: NY };
 const NOW = new Date('2026-10-20T16:00:00Z');
 
 function load(...lines: string[]): { vcal: Component; parts: EventParts } {
@@ -113,15 +115,15 @@ describe('writing times', () => {
   it('writes in the requested zone, else the event\'s own; DATE for all-day', () => {
     const { vcal, parts } = load(...vevent('UID:a', 'DTSTART:20261020T130000Z', 'DURATION:PT1H'));
     const comp = parts.master as Component;
-    expect(writeZoneFor(vcal, comp, {}, NY)).toEqual({ kind: 'utc' });
-    const ny = writeZoneFor(vcal, comp, { timeZone: NY }, NY);
+    expect(writeZoneFor(vcal, comp, {}, NYZ)).toEqual({ kind: 'utc' });
+    const ny = writeZoneFor(vcal, comp, { timeZone: NY }, NYZ);
     expect(ny.kind).toBe('tz');
     writeTimes(comp, { allDay: false, start: new Date('2026-10-21T13:00:00Z'), end: new Date('2026-10-21T15:00:00Z'), endGiven: true }, ny);
     expect(comp.hasProperty('duration')).toBe(false);
     expect(unfold(serialize(vcal))).toContain('DTSTART;TZID=America/New_York:20261021T090000');
     writeTimes(comp, { allDay: true, start: NOW, end: NOW, startYmd: '2026-10-21', endYmd: '2026-10-22', endGiven: false }, ny);
     expect(serialize(vcal)).toContain('DTEND;VALUE=DATE:20261023');
-    expect(writeZoneFor(vcal, comp, {}, NY).kind).toBe('tz');
+    expect(writeZoneFor(vcal, comp, {}, NYZ).kind).toBe('tz');
   });
 
   it('rewrites date lists, keeping PERIOD values and dropping what fn rejects', () => {
@@ -187,6 +189,7 @@ describe('editSeries', () => {
     fields: {},
     who: undefined,
     zone: NY,
+    displayZone: NY,
     now: NOW,
     ...over,
   });
@@ -287,7 +290,7 @@ describe('editSeries', () => {
     const target = findOccurrence(l.parts, '2026-11-09', NY) as Occurrence;
     const input = { startDate: '2026-11-10', endDate: '2026-11-11' };
     const times = planTimes(target, input, NY, true);
-    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: l.parts.overrides, target, times, timeInput: input, fields: {}, who: undefined, zone: NY, now: NOW });
+    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: l.parts.overrides, target, times, timeInput: input, fields: {}, who: undefined, zone: NY, displayZone: NY, now: NOW });
     const text = serialize(l.vcal);
     expect(text).toContain('DTSTART;VALUE=DATE:20261020');
     expect(text).toContain('DTEND;VALUE=DATE:20261022');
@@ -299,12 +302,12 @@ describe('editSeries', () => {
 
     const f = load(...vevent('UID:f', 'DTSTART:20261019T090000', 'RRULE:FREQ=DAILY;UNTIL=20261030T090000'));
     const ft = findOccurrence(f.parts, '2026-10-20T13:00:00Z', NY) as Occurrence;
-    editSeries({ vcal: f.vcal, master: f.parts.master as Component, overrides: [], target: ft, times: planTimes(ft, { startDate: '2026-10-20T08:00' }, NY, true), timeInput: { startDate: '2026-10-20T08:00' }, fields: {}, who: undefined, zone: NY, now: NOW });
+    editSeries({ vcal: f.vcal, master: f.parts.master as Component, overrides: [], target: ft, times: planTimes(ft, { startDate: '2026-10-20T08:00' }, NY, true), timeInput: { startDate: '2026-10-20T08:00' }, fields: {}, who: undefined, zone: NY, displayZone: NY, now: NOW });
     expect(serialize(f.vcal)).toContain('UNTIL=20261030T080000');
 
     const r = load(...vevent('UID:r', 'DTSTART:20261019T130000Z', 'RDATE:20261022T130000Z'));
     const rt = findOccurrence(r.parts, '2026-10-22T13:00:00Z', NY) as Occurrence;
-    editSeries({ vcal: r.vcal, master: r.parts.master as Component, overrides: [], target: rt, times: planTimes(rt, { startDate: '2026-10-22T10:00' }, NY, true), timeInput: { startDate: '2026-10-22T10:00' }, fields: {}, who: undefined, zone: NY, now: NOW });
+    editSeries({ vcal: r.vcal, master: r.parts.master as Component, overrides: [], target: rt, times: planTimes(rt, { startDate: '2026-10-22T10:00' }, NY, true), timeInput: { startDate: '2026-10-22T10:00' }, fields: {}, who: undefined, zone: NY, displayZone: NY, now: NOW });
     expect(serialize(r.vcal)).toContain('RDATE:20261022T140000Z');
   });
 });
@@ -376,7 +379,7 @@ describe('editSeries and the repeat rule', () => {
     const target = findOccurrence(l.parts, '2026-10-21T13:00:00Z', NY) as Occurrence;
     const input = { startDate: '2026-10-22T09:00' };
     const notes: string[] = [];
-    const key = editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, now: NOW, notes });
+    const key = editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, displayZone: NY, now: NOW, notes });
     expect(key).toBe('2026-10-22T13:00:00Z');
     expect(notes).toEqual(['The repeat days moved with it: MO,WE → TU,TH.']);
     const text = at(serialize(l.vcal));
@@ -397,7 +400,7 @@ describe('editSeries and the repeat rule', () => {
     const target = findOccurrence(l.parts, '2026-10-27T03:00:00Z', NY) as Occurrence;
     expect(target).toBeDefined();
     const input = { startDate: '2026-10-27T01:00' };
-    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, now: NOW });
+    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, displayZone: NY, now: NOW });
     expect(serialize(l.vcal)).toContain('RRULE:FREQ=WEEKLY;BYDAY=TU');
   });
 
@@ -408,12 +411,12 @@ describe('editSeries and the repeat rule', () => {
     expect(target).toBeDefined();
     const input = { startDate: '2026-11-16T09:00' };
     expect(() =>
-      editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, now: NOW }),
+      editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, displayZone: NY, now: NOW }),
     ).toThrow(/BYMONTHDAY/);
     expect(serialize(l.vcal)).toBe(before);
     // Only the time of day: allowed.
     const later = { startDate: '2026-11-15T11:00' };
-    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, later, NY, true), timeInput: later, fields: {}, who: undefined, zone: NY, now: NOW });
+    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, later, NY, true), timeInput: later, fields: {}, who: undefined, zone: NY, displayZone: NY, now: NOW });
     expect(serialize(l.vcal)).toContain('RRULE:FREQ=MONTHLY;BYMONTHDAY=15');
   });
 
@@ -425,7 +428,7 @@ describe('editSeries and the repeat rule', () => {
     const target = { ...singleOccurrence(l.parts.master as Component, NY), master: l.parts.master, recurring: true };
     // Mar 7 is EST, Mar 15 EDT: the instant moves 8 days minus an hour, the wall clock 8 days.
     const input = { startDate: '2027-03-15T09:00' };
-    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, now: NOW });
+    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: [], target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, displayZone: NY, now: NOW });
     expect(serialize(l.vcal)).toContain('UNTIL=20270712T130000Z');
     const occs = expandSeries(eventParts(l.vcal), { from: new Date('2027-07-01T00:00:00Z'), to: new Date('2027-07-20T00:00:00Z'), zone: NY }).occurrences;
     expect(occs.map((o) => o.occ)).toEqual(['2027-07-05T13:00:00Z', '2027-07-12T13:00:00Z']);
@@ -440,7 +443,7 @@ describe('editSeries and values of the other type', () => {
   const moveAll = (l: { vcal: Component; parts: EventParts }, occ: string, startDate: string) => {
     const target = findOccurrence(l.parts, occ, NY) as Occurrence;
     const input = { startDate };
-    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: l.parts.overrides, target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, now: NOW });
+    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: l.parts.overrides, target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, displayZone: NY, now: NOW });
   };
 
   it('moves a DATE-TIME UNTIL of an all-day series by whole days, keeping the final occurrence', () => {
@@ -569,5 +572,62 @@ describe('splitting', () => {
     expect(serialize(rn.vcal)).toContain('RDATE:20261022T130000Z,20261025T130000Z'.split(',')[1]);
     expect(startTimeOf(rn.master).toString()).toBe('2026-10-22T13:00:00Z');
     expect(new ICAL.Component(newCalendar().toJSON()).name).toBe('vcalendar');
+  });
+});
+
+describe('a request zone other than the display zone', () => {
+  const CHICAGO = 'America/Chicago';
+  const zones = { zone: CHICAGO, displayZone: NY };
+
+  /** Plan and apply a series edit the way update does: the occurrence found by DISPLAY_TZ's key, the times read in Chicago. */
+  function move(l: { vcal: Component; parts: EventParts }, occ: string, input: { startDate?: string; endDate?: string; timeZone?: string }) {
+    const target = findOccurrence(l.parts, occ, NY, { dayZone: CHICAGO }) as Occurrence;
+    const times = planTimes(target, input, CHICAGO, true);
+    const key = editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: l.parts.overrides, target, times, timeInput: input, fields: {}, who: undefined, ...zones, now: NOW });
+    return { key, text: unfold(serialize(l.vcal)) };
+  }
+
+  it('writes new times in the request\'s zone, and keeps a floating start floating as DISPLAY_TZ reads it', () => {
+    const { vcal, parts } = load(...vevent('UID:f', 'DTSTART:20261020T090000', 'DURATION:PT1H'));
+    const comp = parts.master as Component;
+    expect(writeZoneFor(vcal, comp, {}, zones)).toEqual({ kind: 'floating', zone: NY });
+    const chicago = writeZoneFor(vcal, comp, { timeZone: CHICAGO }, zones);
+    expect(chicago.kind === 'tz' && chicago.tz.tzid).toBe(CHICAGO);
+  });
+
+  it('converts a floating EXDATE of a zoned series from DISPLAY_TZ\'s reading when the series moves to the request\'s zone', () => {
+    const l = load(
+      ...NY_TZ,
+      ...vevent('UID:zx', 'DTSTART;TZID=America/New_York:20261020T090000', 'DTEND;TZID=America/New_York:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'EXDATE:20261022T090000'),
+    );
+    const { key, text } = move(l, '2026-10-21T13:00:00Z', { startDate: '2026-10-21T10:00', timeZone: CHICAGO });
+    expect(key).toBe('2026-10-21T15:00:00Z');
+    expect(text).toContain('DTSTART;TZID=America/Chicago:20261020T100000');
+    expect(text).toContain('EXDATE;TZID=America/Chicago:20261022T100000');
+    expect(expandSeries(eventParts(l.vcal), { from: new Date('2026-10-19T00:00:00Z'), to: new Date('2026-10-26T00:00:00Z'), zone: NY }).occurrences.map((o) => o.occ)).toEqual([
+      '2026-10-20T15:00:00Z',
+      '2026-10-21T15:00:00Z',
+      '2026-10-23T15:00:00Z',
+      '2026-10-24T15:00:00Z',
+    ]);
+  });
+
+  it('moves a floating series into the request\'s zone keeping its instants as DISPLAY_TZ reads them', () => {
+    const l = load(...vevent('UID:f', 'DTSTART:20261020T090000', 'DTEND:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5'));
+    const { key, text } = move(l, '2026-10-21T13:00:00Z', { endDate: '2026-10-21T09:30', timeZone: CHICAGO });
+    expect(key).toBe('2026-10-21T13:00:00Z');
+    expect(text).toContain('DTSTART;TZID=America/Chicago:20261020T080000');
+    expect(text).toContain('DTEND;TZID=America/Chicago:20261020T093000');
+  });
+
+  it('measures the move of a floating series through an occurrence DISPLAY_TZ skips a day earlier', () => {
+    // 02:30 floating is 03:30 EDT (07:30Z) on 2027-03-14 in New York. At that instant Chicago has not changed yet
+    // (01:30 CST) while New York shows 03:30: a two-hour shift, and every other day at 00:30. A day earlier both are
+    // on standard time: 01:30 Chicago for 02:30 New York.
+    const l = load(...vevent('UID:g', 'DTSTART:20270310T023000', 'DTEND:20270310T033000', 'RRULE:FREQ=DAILY;COUNT=7'));
+    const { key, text } = move(l, '2027-03-14T07:30:00Z', { endDate: '2027-03-14T03:30', timeZone: CHICAGO });
+    expect(key).toBe('2027-03-14T07:30:00Z');
+    expect(text).toContain('DTSTART;TZID=America/Chicago:20270310T013000');
+    expect(text).toContain('DTEND;TZID=America/Chicago:20270310T023000');
   });
 });

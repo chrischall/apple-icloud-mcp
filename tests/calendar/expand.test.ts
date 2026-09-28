@@ -348,8 +348,8 @@ describe('findOccurrence', () => {
     expect(findOccurrence(parts(...vevent('UID:x', 'DTSTART:20261020T130000Z')), '2026-10-20T13:00:00Z', NY)).toBeUndefined();
     expect(findOccurrence(parts(...vevent('UID:i', 'RECURRENCE-ID:20261020T130000Z', 'DTSTART:20261020T150000Z')), '2026-10-21T13:00:00Z', NY)).toBeUndefined();
     const old = parts(...vevent('UID:o', 'DTSTART:20000101T000000Z', 'RRULE:FREQ=DAILY'));
-    expect(() => findOccurrence(old, '2026-10-20T00:00:00Z', NY, 10)).toThrow(AppleToolError);
-    expect(() => findOccurrence(old, '2026-10-20T00:00:00Z', NY, 10)).toThrow(/more than 10 occurrences/);
+    expect(() => findOccurrence(old, '2026-10-20T00:00:00Z', NY, { maxSteps: 10 })).toThrow(AppleToolError);
+    expect(() => findOccurrence(old, '2026-10-20T00:00:00Z', NY, { maxSteps: 10 })).toThrow(/more than 10 occurrences/);
   });
 });
 
@@ -595,5 +595,66 @@ describe('rules that cannot be walked', () => {
     ]);
     expect(findOccurrence(p, '2026-10-21', NY)).toMatchObject({ startYmd: '2026-10-21', isOverride: false });
     expect(rulePosition(p.master as Component, d('2026-10-21T04:00:00Z'), NY).before).toBe(13442);
+  });
+});
+
+describe('the display zone and the day zone', () => {
+  const window = { from: d('2026-10-18T00:00:00Z'), to: d('2026-10-26T00:00:00Z'), zone: NY };
+  const view = (p: EventParts, dayZone?: string) =>
+    expandSeries(p, { ...window, ...(dayZone ? { dayZone } : {}) }).occurrences.map((o) => [o.occ, o.start.toISOString(), o.end.toISOString()]);
+  const floating = parts(...vevent('UID:f', 'DTSTART:20261020T090000', 'DTEND:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=3'));
+  // A zoned series with a floating EXDATE: excluded by its reading in the display zone.
+  const zoned = parts(
+    ...NY_TZ,
+    ...vevent('UID:zx', 'DTSTART;TZID=America/New_York:20261020T090000', 'DTEND;TZID=America/New_York:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'EXDATE:20261022T090000'),
+  );
+  const allDay = parts(
+    ...vevent('UID:a', 'DTSTART;VALUE=DATE:20261020', 'DTEND;VALUE=DATE:20261021', 'RRULE:FREQ=DAILY;COUNT=2'),
+    ...vevent('UID:a', 'RECURRENCE-ID;VALUE=DATE:20261021', 'DTSTART;VALUE=DATE:20261023', 'DTEND;VALUE=DATE:20261024'),
+  );
+
+  it('reads floating values and makes keys in the display zone, whatever the day zone', () => {
+    expect(view(floating).map((o) => o[1])).toEqual(['2026-10-20T13:00:00.000Z', '2026-10-21T13:00:00.000Z', '2026-10-22T13:00:00.000Z']);
+    expect(view(zoned).map((o) => o[0])).toEqual(['2026-10-20T13:00:00Z', '2026-10-21T13:00:00Z', '2026-10-23T13:00:00Z', '2026-10-24T13:00:00Z']);
+    for (const dayZone of ['Europe/London', 'Asia/Tokyo', 'UTC']) {
+      expect(view(floating, dayZone), dayZone).toEqual(view(floating));
+      expect(view(zoned, dayZone), dayZone).toEqual(view(zoned));
+    }
+  });
+
+  it('bounds all-day occurrences (natural, moved and single) by midnights in the day zone, keyed by date', () => {
+    expect(view(allDay, 'Asia/Tokyo')).toEqual([
+      ['2026-10-20', '2026-10-19T15:00:00.000Z', '2026-10-20T15:00:00.000Z'],
+      ['2026-10-21', '2026-10-22T15:00:00.000Z', '2026-10-23T15:00:00.000Z'],
+    ]);
+    expect(view(allDay, 'Europe/London')[0]).toEqual(['2026-10-20', '2026-10-19T23:00:00.000Z', '2026-10-20T23:00:00.000Z']);
+    expect(view(allDay)[0]).toEqual(['2026-10-20', '2026-10-20T04:00:00.000Z', '2026-10-21T04:00:00.000Z']);
+    const one = parts(...vevent('UID:o', 'DTSTART;VALUE=DATE:20261020'));
+    expect(view(one, 'Asia/Tokyo')).toEqual([[undefined, '2026-10-19T15:00:00.000Z', '2026-10-20T15:00:00.000Z']]);
+    expect(singleOccurrence(one.master as Component, NY, 'Europe/London').start.toISOString()).toBe('2026-10-19T23:00:00.000Z');
+    expect(singleOccurrence(one.master as Component, NY).start.toISOString()).toBe('2026-10-20T04:00:00.000Z');
+  });
+
+  it('finds an occurrence by the display zone\'s key, its all-day days in the day zone', () => {
+    const tokyo = { dayZone: 'Asia/Tokyo' };
+    expect(findOccurrence(floating, '2026-10-21T13:00:00Z', NY, tokyo)).toMatchObject({ occ: '2026-10-21T13:00:00Z', start: d('2026-10-21T13:00:00Z') });
+    expect(findOccurrence(allDay, '2026-10-20', NY, tokyo)).toMatchObject({ isOverride: false, start: d('2026-10-19T15:00:00Z') });
+    expect(findOccurrence(allDay, '2026-10-21', NY, tokyo)).toMatchObject({ isOverride: true, startYmd: '2026-10-23', start: d('2026-10-22T15:00:00Z') });
+    expect(findOccurrence(allDay, '2026-10-21', NY)).toMatchObject({ start: d('2026-10-23T04:00:00Z') });
+  });
+
+  it('starts a DATE instance of a timed series at its midnight in the display zone, so the walk is not ended before a timed one', () => {
+    // Walked in New York's order: the 21st's midnight (04:00Z), then 05:00Z. From Los Angeles's midnight (07:00Z) the
+    // DATE instance would look past a window ending at 06:00Z and end the walk before the 05:00Z instance.
+    const p = parts(
+      ...NY_TZ,
+      ...vevent('UID:m', 'DTSTART;TZID=America/New_York:20261020T090000', 'DTEND;TZID=America/New_York:20261020T100000', 'RDATE;VALUE=DATE:20261021', 'RDATE:20261021T050000Z'),
+    );
+    const r = expandSeries(p, { from: d('2026-10-20T00:00:00Z'), to: d('2026-10-21T06:00:00Z'), zone: NY, dayZone: 'America/Los_Angeles' });
+    expect(r.occurrences.map((o) => [o.occ, o.start.toISOString()])).toEqual([
+      ['2026-10-20T13:00:00Z', '2026-10-20T13:00:00.000Z'],
+      ['2026-10-21', '2026-10-21T04:00:00.000Z'],
+      ['2026-10-21T05:00:00Z', '2026-10-21T05:00:00.000Z'],
+    ]);
   });
 });

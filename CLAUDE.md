@@ -129,7 +129,10 @@ persisted (`icloud-rejected.json`, salted digests + time) so a hosted cold start
 password; the healthcheck runs the iCloud probes one at a time until one answers, so a revoked pair is sent once.
 
 **Calendar** — event id `<calendarId>/<file>.ics`, occurrence `…#occ=<UTC Z | YYYY-MM-DD>` (parsed from the
-end). A bare id on a recurring series is refused for single-occurrence edits; never fall back to the first
+end). **Two zones per call** (`CallZones`): DISPLAY_TZ reads floating values, makes every `#occ=` key and compares DATE
+values inside a series, so a floating key never depends on `timeZone`; the request zone (`timeZone`, else the same
+string) reads offset-less input, is the zone new values are written in, formats every time and note, is `editSeries`'
+request-clock ruler, and draws all-day days in windows and free time (`dayZone`). A bare id on a recurring series is refused for single-occurrence edits; never fall back to the first
 occurrence. Recurrences are expanded client-side with ical.js (iCloud's server `expand` breaks all-day
 events). ical.js has NO loop limits: VTIMEZONE rules that aren't plain yearly are swapped for the standard
 zone (an invitation-controlled TZ once hung the server), and rules it would spin on are refused before it

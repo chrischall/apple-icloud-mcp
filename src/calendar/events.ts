@@ -12,7 +12,7 @@ import {
 } from './expand.js';
 import { decodeIdPart, formatEventId, parseEventId, type ParsedEventId } from './ids.js';
 import { eventParts, instantOf, occKey, parseCalendar, startTimeOf, textProp, type Component, type EventParts, type Time } from './ics.js';
-import type { Window } from './window.js';
+import type { CallZones, Window } from './window.js';
 
 /**
  * From calendars to occurrences: query each calendar for the window, parse
@@ -43,7 +43,9 @@ function titleOf(parts: EventParts): string {
 }
 
 /**
- * Query `calendars` for the window and expand everything in it.
+ * Query `calendars` for the window and expand everything in it: floating
+ * times read (and keys made) in `opts.displayZone`, all-day days bounded in
+ * the window's own zone.
  *
  * `strict` (free-time): any calendar that fails fails the call, because a
  * missing calendar would turn its busy time into "free". Otherwise a failed
@@ -54,7 +56,7 @@ export async function collectOccurrences(
   ctx: CalendarContext,
   calendars: readonly CalendarInfo[],
   win: Window,
-  opts: { strict?: boolean } = {},
+  opts: { displayZone: string; strict?: boolean },
 ): Promise<Collected> {
   const outcomes = await queryCalendars(ctx, calendars, win.from, win.to);
   const failures = outcomes.filter((o) => !o.ok);
@@ -76,7 +78,7 @@ export async function collectOccurrences(
       try {
         parts = eventParts(parseCalendar(resource.ics, `an event in "${calendar.name}"`));
         // Inside the try: one resource that cannot be expanded must not take the whole answer down with it.
-        expanded = expandSeries(parts, { from: win.from, to: win.to, zone: win.zone });
+        expanded = expandSeries(parts, { from: win.from, to: win.to, zone: opts.displayZone, dayZone: win.zone });
       } catch (err) {
         console.error(`[apple-icloud-mcp] WARNING: calendar: an event in "${calendar.name}" could not be read: ${errorMessage(err)}`);
         unreadable += 1;
@@ -157,8 +159,11 @@ export interface LoadedEvent {
 /**
  * Resolve an event id to its resource and occurrence. An `#occ=` that the
  * series does not have is NOT_FOUND — never a fall-back to another occurrence.
+ * The key is looked up in the display zone that made it, whatever the
+ * request's zone (which bounds only an all-day occurrence's days).
  */
-export async function loadEvent(ctx: CalendarContext, eventId: string, zone: string): Promise<LoadedEvent> {
+export async function loadEvent(ctx: CalendarContext, eventId: string, zones: CallZones): Promise<LoadedEvent> {
+  const { zone, displayZone } = zones;
   const id = parseEventId(eventId);
   const { calendars } = await listCalendars(ctx);
   const calendar = calendars.find((c) => decodeIdPart(c.id) === id.calendarId);
@@ -179,7 +184,7 @@ export async function loadEvent(ctx: CalendarContext, eventId: string, zone: str
     if (!recurring) {
       throw new InvalidArgumentError(`${eventId} names one occurrence, but this event is not recurring.`, `Use the id without "#occ=…": ${id.baseId}`);
     }
-    const found = findOccurrence(parts, id.occ, zone);
+    const found = findOccurrence(parts, id.occ, displayZone, { dayZone: zone });
     if (!found) {
       throw new AppleToolError(
         'NOT_FOUND',
@@ -189,12 +194,12 @@ export async function loadEvent(ctx: CalendarContext, eventId: string, zone: str
     }
     target = found;
   } else if (parts.master) {
-    target = singleOccurrence(parts.master, zone);
+    target = singleOccurrence(parts.master, displayZone, zone);
     if (recurring) target = { ...target, master: parts.master, recurring: true };
   } else {
     // Only overrides (occurrences of a series held elsewhere, e.g. an invitation): show the earliest.
-    const first = [...parts.overrides].sort((a, b) => instantOf(startTimeOf(a), zone).getTime() - instantOf(startTimeOf(b), zone).getTime())[0] as Component;
-    target = findOccurrence(parts, occKey(first.getFirstPropertyValue('recurrence-id') as Time, zone), zone) as Occurrence;
+    const first = [...parts.overrides].sort((a, b) => instantOf(startTimeOf(a), displayZone).getTime() - instantOf(startTimeOf(b), displayZone).getTime())[0] as Component;
+    target = findOccurrence(parts, occKey(first.getFirstPropertyValue('recurrence-id') as Time, displayZone), displayZone, { dayZone: zone }) as Occurrence;
   }
   return { id, calendars, calendar, resource, vcal, parts, recurring, target };
 }

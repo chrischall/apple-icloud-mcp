@@ -39,6 +39,7 @@ import {
   type Identity,
   type TimeInput,
 } from './series.js';
+import type { CallZones } from './window.js';
 
 /**
  * Plans for update and delete: the complete set of writes, computed in
@@ -72,8 +73,8 @@ export interface PutOp {
   label: string;
 }
 
-export interface EditEnv {
-  zone: string;
+/** A plan's zones (see `CallZones`): the request's reads and writes the times asked for, the display zone reads the event. */
+export interface EditEnv extends CallZones {
   now: Date;
   newUid: () => string;
   /** Needed only when attendees change. */
@@ -81,11 +82,11 @@ export interface EditEnv {
 }
 
 /** The occurrence `key` names in `parts`, or — for a bare series id — the series' first instance. */
-export function occurrenceFor(parts: EventParts, key: string | undefined, zone: string): Occurrence | undefined {
-  if (key !== undefined) return findOccurrence(parts, key, zone);
+export function occurrenceFor(parts: EventParts, key: string | undefined, zones: CallZones): Occurrence | undefined {
+  if (key !== undefined) return findOccurrence(parts, key, zones.displayZone, { dayZone: zones.zone });
   const master = parts.master;
   if (!master) return undefined;
-  const single = singleOccurrence(master, zone);
+  const single = singleOccurrence(master, zones.displayZone, zones.zone);
   return isRecurringMaster(master) ? { ...single, master, recurring: true } : single;
 }
 
@@ -137,7 +138,7 @@ export interface UpdatePlan {
 
 export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv): UpdatePlan {
   const { calendar, parts, vcal, target, recurring, id, resource } = loaded;
-  const { zone } = env;
+  const { zone, displayZone } = env;
   const fields = changedFields(input);
   const timeChange = wantsTimeChange(input);
   if (input.timeZone !== undefined && input.startDate === undefined && input.endDate === undefined) {
@@ -174,13 +175,13 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
     }
   }
   const destCal = move ?? calendar;
-  const before = formatOccurrence(target, { calendar, baseId: id.baseId, zone });
+  const before = formatOccurrence(target, { calendar, baseId: id.baseId, zone, displayZone });
   const times = planTimes(target, input, zone, recurring);
   const notifiesAttendees = hasAttendees(vcal) || (input.attendees?.length ?? 0) > 0;
   const ifMatch = resource.etag ?? '*';
   const notes: string[] = [];
   const checks: Array<() => void> = [];
-  const edit = { times, timeInput: input, fields: input, who: env.who, zone, now: env.now, notes, checks };
+  const edit = { times, timeInput: input, fields: input, who: env.who, zone, displayZone, now: env.now, notes, checks };
 
   let effective: Span | 'single' = span;
   let resultVcal = vcal;
@@ -190,7 +191,7 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
   let newSeriesId: string | undefined;
 
   const applyTo = (comp: Component) => {
-    if (times) writeTimes(comp, times, writeZoneFor(vcal, comp, input, zone));
+    if (times) writeTimes(comp, times, writeZoneFor(vcal, comp, input, env));
     for (const f of fields) applyField(comp, f, input, env.who);
     touch(comp, env.now);
   };
@@ -203,19 +204,19 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
     if (times && span !== 'thisEvent') {
       throw new AppleToolError('UNSUPPORTED', 'This event holds only individual occurrences of a series organised elsewhere; change their times one at a time (span: "thisEvent").');
     }
-    const from = span === 'futureEvents' ? ridInstant(target.comp, zone) : Number.NEGATIVE_INFINITY;
-    const inScope = span === 'thisEvent' ? [target.comp] : parts.overrides.filter((o) => ridInstant(o, zone) >= from);
+    const from = span === 'futureEvents' ? ridInstant(target.comp, displayZone) : Number.NEGATIVE_INFINITY;
+    const inScope = span === 'thisEvent' ? [target.comp] : parts.overrides.filter((o) => ridInstant(o, displayZone) >= from);
     for (const comp of inScope) applyTo(comp);
   } else if (span === 'thisEvent') {
-    applyTo(target.isOverride ? target.comp : createOverride(vcal, parts.master, target, zone));
-  } else if (span === 'allEvents' || isFirstInstance(parts.master, target.occ as string, zone)) {
+    applyTo(target.isOverride ? target.comp : createOverride(vcal, parts.master, target, displayZone));
+  } else if (span === 'allEvents' || isFirstInstance(parts.master, target.occ as string, displayZone)) {
     if (span === 'futureEvents') notes.push('This is the first occurrence of the series, so "this and all following" is the whole series.');
     effective = 'allEvents';
     key = editSeries({ ...edit, vcal, master: parts.master, overrides: parts.overrides, target });
   } else {
     const occ = target.occ as string;
-    const at = occInstant(occ, zone).getTime();
-    const position = rulePosition(parts.master, new Date(at), zone);
+    const at = occInstant(occ, displayZone).getTime();
+    const position = rulePosition(parts.master, new Date(at), displayZone);
     if (ruleOf(parts.master) && position.next?.getTime() !== at) {
       // An occurrence added by RDATE: the continuation would start its rule there — on the wrong weekday, or (past a
       // COUNT) with no end at all — and list the occurrence twice.
@@ -226,11 +227,11 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
       );
     }
     const used = position.before;
-    const carried = parts.overrides.filter((o) => ridInstant(o, zone) >= at);
+    const carried = parts.overrides.filter((o) => ridInstant(o, displayZone) >= at);
     const uid = env.newUid();
-    const next = continuationSeries(vcal, parts.master, carried, target, used, { uid, now: env.now, zone });
-    truncateSeries(vcal, parts.master, parts.overrides, target, zone, env.now);
-    const nextTarget = findOccurrence({ master: next.master, overrides: next.overrides }, occ, zone) as Occurrence;
+    const next = continuationSeries(vcal, parts.master, carried, target, used, { uid, now: env.now, zone: displayZone });
+    truncateSeries(vcal, parts.master, parts.overrides, target, displayZone, env.now);
+    const nextTarget = findOccurrence({ master: next.master, overrides: next.overrides }, occ, displayZone, { dayZone: zone }) as Occurrence;
     key = editSeries({ ...edit, vcal: next.vcal, master: next.master, overrides: next.overrides, target: nextTarget });
     resultVcal = next.vcal;
     resultName = `${uid}.ics`;
@@ -245,7 +246,7 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
   else puts[0]!.body = serializeForWrite(vcal);
 
   const baseId = formatEventId(destCal.id, resultName);
-  const edited = occurrenceFor(eventParts(resultVcal), key, zone);
+  const edited = occurrenceFor(eventParts(resultVcal), key, env);
   if (!edited) {
     // Planned in memory: nothing has been written yet, so refusing here leaves the event exactly as it was.
     throw new AppleToolError(
@@ -256,7 +257,7 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
   }
   // Then that every other occurrence moved with it (still in memory: a refusal writes nothing).
   for (const check of checks) check();
-  const after = formatOccurrence(edited, { calendar: destCal, baseId, zone });
+  const after = formatOccurrence(edited, { calendar: destCal, baseId, zone, displayZone });
   return {
     span: effective,
     scope: SCOPE[effective],
@@ -305,9 +306,9 @@ export interface DeletePlan {
   notes: string[];
 }
 
-export function planDelete(loaded: LoadedEvent, span: Span, env: { zone: string; now: Date }): DeletePlan {
+export function planDelete(loaded: LoadedEvent, span: Span, env: CallZones & { now: Date }): DeletePlan {
   const { calendar, parts, vcal, target, recurring, id, resource } = loaded;
-  const { zone, now } = env;
+  const { zone, displayZone, now } = env;
   assertWritable(calendar);
   if (recurring && id.occ === undefined && span !== 'allEvents') throw needsOccurrence(id.baseId);
   const ifMatch = resource.etag ?? '*';
@@ -321,9 +322,9 @@ export function planDelete(loaded: LoadedEvent, span: Span, env: { zone: string;
   if (!recurring) {
     effective = 'single';
     scope = SCOPE.single;
-  } else if (span === 'allEvents' || (span === 'futureEvents' && parts.master && isFirstInstance(parts.master, id.occ as string, zone))) {
+  } else if (span === 'allEvents' || (span === 'futureEvents' && parts.master && isFirstInstance(parts.master, id.occ as string, displayZone))) {
     effective = 'allEvents';
-    const next = expandSeries(parts, { from: now, to: new Date(now.getTime() + 365 * 86_400_000), zone });
+    const next = expandSeries(parts, { from: now, to: new Date(now.getTime() + 365 * 86_400_000), zone: displayZone, dayZone: zone });
     const n = `${next.occurrences.length}${next.truncated ? '+' : ''}`;
     scope =
       next.truncated === 'rule'
@@ -335,8 +336,8 @@ export function planDelete(loaded: LoadedEvent, span: Span, env: { zone: string;
     const master = parts.master;
     if (span === 'thisEvent') {
       if (master) {
-        const value = recurrenceValue(master, target, zone);
-        const lost = alsoExcluded(master, value, occ, instantOf(target.recurrenceTime as Time, zone), zone);
+        const value = recurrenceValue(master, target, displayZone);
+        const lost = alsoExcluded(master, value, occ, instantOf(target.recurrenceTime as Time, displayZone), displayZone);
         if (lost.length > 0) {
           // Planned in memory: nothing has been written.
           throw new AppleToolError(
@@ -351,14 +352,14 @@ export function planDelete(loaded: LoadedEvent, span: Span, env: { zone: string;
       }
       if (target.isOverride) vcal.removeSubcomponent(target.comp);
     } else if (master) {
-      truncateSeries(vcal, master, parts.overrides, target, zone, now);
+      truncateSeries(vcal, master, parts.overrides, target, displayZone, now);
     } else {
-      const at = ridInstant(target.comp, zone);
-      for (const o of parts.overrides) if (ridInstant(o, zone) >= at) vcal.removeSubcomponent(o);
+      const at = ridInstant(target.comp, displayZone);
+      for (const o of parts.overrides) if (ridInstant(o, displayZone) >= at) vcal.removeSubcomponent(o);
     }
     scope = SCOPE[span];
     const left = eventParts(vcal);
-    if (left.overrides.length > 0 || (left.master && hasInstance(left.master, zone))) {
+    if (left.overrides.length > 0 || (left.master && hasInstance(left.master, displayZone))) {
       // Checked like every other write: a stored value holding a stray CR (another app's) is refused, never re-sent.
       op = { kind: 'put', url: resource.url, body: serializeForWrite(vcal), ifMatch };
       verify = { occ };
@@ -366,7 +367,7 @@ export function planDelete(loaded: LoadedEvent, span: Span, env: { zone: string;
   }
 
   const attendees = readAttendees(target.comp);
-  const recurrence = parts.master && recurring ? recurrenceOf(parts.master, zone) : undefined;
+  const recurrence = parts.master && recurring ? recurrenceOf(parts.master, env) : undefined;
   const preview: Record<string, unknown> = {
     event: textProp(target.comp, 'summary') ?? '(untitled)',
     when: whenLabel(target, zone),

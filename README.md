@@ -235,7 +235,8 @@ The package ships a [`mint.yaml`](mint.yaml) that mcp-host reads when you regist
   SMTP are tunnelled through the same proxy with HTTP CONNECT.
 
 Give it your time zone (`DISPLAY_TZ`): the runner is on UTC, and times you give without an offset ("3pm") are
-read in `DISPLAY_TZ`. Set **`MCP_CONFIRM_SECRET`** too: without it, a confirmation token issued just before the
+read in `DISPLAY_TZ` — so are calendar events stored without a time zone of their own ("floating"), whatever
+`timeZone` a call passes. Set **`MCP_CONFIRM_SECRET`** too: without it, a confirmation token issued just before the
 child restarts (a redeploy, a machine move) stops working and you have to preview again. Spent tokens are
 recorded on disk, so a shared secret does not let one be replayed.
 
@@ -416,7 +417,7 @@ All optional; each service activates when its credentials are present. Values th
 |---|---|
 | `APPLE_WRITE_MODE` | "none" = read-only tools; "additive" = also create/append, never modify, delete or send; "all" = everything (default). Unrecognized values fail closed to "none". |
 | `APPLE_SERVICES` | Comma-separated services to enable (music, calendar, contacts, mail, maps, weather, itunes). Default: all. |
-| `DISPLAY_TZ` | IANA time zone (e.g. America/New_York) for displayed times and for dates you give without an offset. Set this on a hosted server, which runs in UTC. |
+| `DISPLAY_TZ` | IANA time zone (e.g. America/New_York) for displayed times and for dates you give without an offset. Calendar events stored without a time zone of their own (floating) are always read in it: a calendar call's `timeZone` changes how your times are read and shown (and, on create/update, the zone an event is stored in) but never how a floating event is read, so occurrence ids never depend on it. Set this on a hosted server, which runs in UTC. |
 | `APPLE_UNITS` | "metric" (default) or "imperial" units for weather (Maps distances always show both). |
 | `APPLE_STATE_CACHE` | Set to false to write nothing under $MCP_DATA_DIR/.apple-icloud-mcp: no web-player token or iCloud discovery cache, and the rejected-password latch and spent confirmation tokens then last only as long as the process. |
 | `APPLE_REQUEST_TIMEOUT_MS` | Per-request timeout in milliseconds (default 30000). |

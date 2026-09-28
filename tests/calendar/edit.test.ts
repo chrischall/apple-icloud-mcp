@@ -8,7 +8,9 @@ import { FakeCalDav, HOME, NOW, NY_TZ, ics, vevent } from './fake-caldav.js';
 
 const NY = 'America/New_York';
 let dav: FakeCalDav;
-const env = { zone: NY, now: NOW, newUid: () => 'NEW' };
+/** A call's zones: the request's, and DISPLAY_TZ (the same without `timeZone`). */
+const zones = (zone: string, displayZone = zone) => ({ zone, displayZone });
+const env = { ...zones(NY), now: NOW, newUid: () => 'NEW' };
 
 beforeEach(() => {
   dav = new FakeCalDav().install();
@@ -34,7 +36,7 @@ beforeEach(() => {
   dav.put('ro', 'x.ics', ics(...vevent('UID:x', 'DTSTART:20261021T130000Z', 'SUMMARY:X')));
 });
 
-const load = (id: string) => loadEvent(dav.context(), id, NY);
+const load = (id: string) => loadEvent(dav.context(), id, zones(NY));
 const update = async (id: string, input: Partial<UpdateInput>) => planUpdate(await load(id), { span: 'thisEvent', ...input }, env);
 /** The `#occ=` keys a written body expands to between two dates. */
 const keysOf = (body: string, from = '2026-09-01', to = '2027-06-01') =>
@@ -242,8 +244,8 @@ describe('planUpdate', () => {
     it('splits a Santiago series whose clocks jump at midnight on that Sunday', async () => {
       const santiago = 'America/Santiago';
       dav.put('home', 'cl.ics', ics(...vevent('UID:cl', 'DTSTART;TZID=America/Santiago:20270103T000000', 'DTEND;TZID=America/Santiago:20270103T010000', 'RRULE:FREQ=WEEKLY;BYDAY=SU', 'SUMMARY:C')));
-      const loaded = await loadEvent(dav.context(), 'home/cl.ics#occ=2027-09-05T03:00:00Z', santiago);
-      const split = planUpdate(loaded, { span: 'futureEvents', title: 'C2' }, { ...env, zone: santiago });
+      const loaded = await loadEvent(dav.context(), 'home/cl.ics#occ=2027-09-05T03:00:00Z', zones(santiago));
+      const split = planUpdate(loaded, { span: 'futureEvents', title: 'C2' }, { ...env, ...zones(santiago) });
       expect(split.puts[1]!.body).toContain('DTSTART;TZID=America/Santiago:20270905T000000');
     });
   });
@@ -710,7 +712,7 @@ describe('series times next to DST changes', () => {
       // Santiago skips midnight: a Sunday series from that Sunday, moved to 02:00.
       const santiago = 'America/Santiago';
       dav.put('home', 'cl.ics', ics(...vevent('UID:cl', 'DTSTART;TZID=America/Santiago:20260906T000000', 'DTEND;TZID=America/Santiago:20260906T010000', 'RRULE:FREQ=WEEKLY;BYDAY=SU;COUNT=3', 'SUMMARY:C')));
-      const cl = planUpdate(await loadEvent(dav.context(), 'home/cl.ics', santiago), { span: 'allEvents', startDate: '2026-09-06T02:00' }, { ...env, zone: santiago });
+      const cl = planUpdate(await loadEvent(dav.context(), 'home/cl.ics', zones(santiago)), { span: 'allEvents', startDate: '2026-09-06T02:00' }, { ...env, ...zones(santiago) });
       expect(cl.puts[0]!.body).toContain('DTSTART;TZID=America/Santiago:20260906T020000');
     });
 
@@ -719,7 +721,7 @@ describe('series times next to DST changes', () => {
       // 02:30 New York is 01:30 Chicago on every other day (both zones change at 2 AM local, an hour apart).
       const chicago = 'America/Chicago';
       const input = { span: 'allEvents' as const, endDate: '2027-03-14T01:15', timeZone: chicago };
-      const p = planUpdate(await loadEvent(dav.context(), GAP, chicago), input, { ...env, zone: chicago });
+      const p = planUpdate(await loadEvent(dav.context(), GAP, zones(chicago, NY)), input, { ...env, ...zones(chicago, NY) });
       expect(p.puts[0]!.body).toContain('DTSTART;TZID=America/Chicago:20270310T013000');
     });
 
@@ -777,13 +779,14 @@ describe('series times next to DST changes', () => {
   });
 
   it('changes the zone of a series starting at a skipped time without moving it, where the new zone skips the same hour', async () => {
-    const zoneOnly = async (zoneName: string, id: string) => planUpdate(await loadEvent(dav.context(), id, zoneName), { span: 'allEvents', endDate: '2027-03-14T03:30', timeZone: zoneName }, { ...env, zone: zoneName });
+    const zoneOnly = async (zoneName: string, id: string) =>
+      planUpdate(await loadEvent(dav.context(), id, zones(zoneName, NY)), { span: 'allEvents', endDate: '2027-03-14T03:30', timeZone: zoneName }, { ...env, ...zones(zoneName, NY) });
     put('tor.ics', 'UID:tor', 'DTSTART;TZID=America/New_York:20270314T023000', 'DTEND;TZID=America/New_York:20270314T033000', 'RRULE:FREQ=DAILY;COUNT=4', 'SUMMARY:T');
     expect((await zoneOnly('America/Toronto', 'home/tor.ics')).puts[0]!.body).toContain('DTSTART;TZID=America/Toronto:20270314T023000');
     put('tor2.ics', 'UID:tor2', 'DTSTART;TZID=America/New_York:20270312T023000', 'DTEND;TZID=America/New_York:20270312T033000', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:T');
     expect((await zoneOnly('America/Toronto', 'home/tor2.ics#occ=2027-03-14T06:30:00Z')).puts[0]!.body).toContain('DTSTART;TZID=America/Toronto:20270312T023000');
     dav.put('home', 'ber.ics', ics(...vevent('UID:ber', 'DTSTART;TZID=Europe/Berlin:20270328T023000', 'DTEND;TZID=Europe/Berlin:20270328T033000', 'RRULE:FREQ=WEEKLY;COUNT=4', 'SUMMARY:B')));
-    const paris = planUpdate(await loadEvent(dav.context(), 'home/ber.ics', 'Europe/Paris'), { span: 'allEvents', endDate: '2027-03-28T03:30', timeZone: 'Europe/Paris' }, { ...env, zone: 'Europe/Paris' });
+    const paris = planUpdate(await loadEvent(dav.context(), 'home/ber.ics', zones('Europe/Paris', NY)), { span: 'allEvents', endDate: '2027-03-28T03:30', timeZone: 'Europe/Paris' }, { ...env, ...zones('Europe/Paris', NY) });
     expect(paris.puts[0]!.body).toContain('DTSTART;TZID=Europe/Paris:20270328T023000');
   });
 
@@ -897,9 +900,13 @@ describe('series times next to DST changes', () => {
     // every other, and an end of 23:30 makes every one two hours.
     const la = 'America/Los_Angeles';
     put('ny.ics', 'UID:ny', 'DTSTART;TZID=America/New_York:20261018T003000', 'DTEND;TZID=America/New_York:20261018T013000', 'RRULE:FREQ=WEEKLY;COUNT=4', 'SUMMARY:B');
-    const p = planUpdate(await loadEvent(dav.context(), 'home/ny.ics#occ=2026-11-01T04:30:00Z', la), { span: 'allEvents', endDate: '2026-10-31T23:30' }, { ...env, zone: la });
+    const p = planUpdate(await loadEvent(dav.context(), 'home/ny.ics#occ=2026-11-01T04:30:00Z', zones(la)), { span: 'allEvents', endDate: '2026-10-31T23:30' }, { ...env, ...zones(la) });
     expect(p.puts[0]!.body).toContain('DTEND;TZID=America/New_York:20261018T023000');
     expect(p.notes).toEqual([]);
+    // The same with DISPLAY_TZ New York: the clock the request was read by is still Los Angeles's.
+    const shown = planUpdate(await loadEvent(dav.context(), 'home/ny.ics#occ=2026-11-01T04:30:00Z', zones(la, NY)), { span: 'allEvents', endDate: '2026-10-31T23:30' }, { ...env, ...zones(la, NY) });
+    expect(shown.puts[0]!.body).toBe(p.puts[0]!.body);
+    expect(shown.notes).toEqual([]);
   });
 
   it('takes the real time for a new length when only the request\'s clock changes during the occurrence', async () => {
@@ -916,8 +923,10 @@ describe('series times next to DST changes', () => {
     // A New York series seen from Los Angeles, through Los Angeles's spring-forward night (an hour after New York's).
     const la = 'America/Los_Angeles';
     put('nl.ics', 'UID:nl', 'DTSTART;TZID=America/New_York:20260301T040000', 'DTEND;TZID=America/New_York:20260301T060000', 'RRULE:FREQ=WEEKLY;COUNT=4', 'SUMMARY:N');
-    const fromLa = planUpdate(await loadEvent(dav.context(), 'home/nl.ics#occ=2026-03-08T08:00:00Z', la), { span: 'allEvents', endDate: '2026-03-08T04:00' }, { ...env, zone: la });
+    const fromLa = planUpdate(await loadEvent(dav.context(), 'home/nl.ics#occ=2026-03-08T08:00:00Z', zones(la)), { span: 'allEvents', endDate: '2026-03-08T04:00' }, { ...env, ...zones(la) });
     expect(fromLa.puts[0]!.body).toContain('DTEND;TZID=America/New_York:20260301T070000');
+    const shownFromLa = planUpdate(await loadEvent(dav.context(), 'home/nl.ics#occ=2026-03-08T08:00:00Z', zones(la, NY)), { span: 'allEvents', endDate: '2026-03-08T04:00' }, { ...env, ...zones(la, NY) });
+    expect(shownFromLa.puts[0]!.body).toBe(fromLa.puts[0]!.body);
   });
 
   it('keeps a floating override listed across a DST change at its own length, or lets it follow when it had the series\'', async () => {
@@ -1071,12 +1080,46 @@ describe('all-day dates in a timed series (RDATE;VALUE=DATE)', () => {
   });
 });
 
+describe('a request zone other than the display zone', () => {
+  const chicago = zones('America/Chicago', NY);
+  const loadIn = (id: string) => loadEvent(dav.context(), id, chicago);
+
+  it('ends a floating series at a UTC RDATE a second before DISPLAY_TZ\'s wall time of it, not the request zone\'s', async () => {
+    dav.put('home', 'fr.ics', ics(...vevent('UID:fr', 'DTSTART:20261019T090000', 'DTEND:20261019T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'RDATE:20261021T200000Z', 'SUMMARY:F')));
+    const cut = planDelete(await loadIn('home/fr.ics#occ=2026-10-21T20:00:00Z'), 'futureEvents', { ...chicago, now: NOW });
+    // 20:00Z is 16:00 in New York (15:00 in Chicago would keep that occurrence).
+    expect((cut.op as { body: string }).body).toContain('UNTIL=20261021T155959');
+    expect(keysOf((cut.op as { body: string }).body)).toEqual(['2026-10-19T13:00:00Z', '2026-10-20T13:00:00Z', '2026-10-21T13:00:00Z']);
+  });
+
+  it('splits a floating series under a request timeZone and returns the key it finds the moved occurrence by', async () => {
+    dav.put('home', 'fs.ics', ics(...vevent('UID:fs', 'DTSTART:20261019T090000', 'DTEND:20261019T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:F')));
+    const p = planUpdate(await loadIn('home/fs.ics#occ=2026-10-21T13:00:00Z'), { span: 'futureEvents', startDate: '2026-10-21T10:00', timeZone: 'America/Chicago' }, { ...env, ...chicago });
+    expect(p.span).toBe('futureEvents');
+    expect(p.result.eventId).toBe('home/NEW.ics#occ=2026-10-21T15:00:00Z');
+    expect(p.result.expected).toMatchObject({ start: '2026-10-21T10:00:00-05:00' });
+    expect(p.puts[0]!.body).toContain('UNTIL=20261021T085959');
+    expect(keysOf(p.puts[0]!.body)).toEqual(['2026-10-19T13:00:00Z', '2026-10-20T13:00:00Z']);
+    expect(p.puts[1]!.body).toContain('DTSTART;TZID=America/Chicago:20261021T100000');
+    expect(keysOf(p.puts[1]!.body)).toEqual(['2026-10-21T15:00:00Z', '2026-10-22T15:00:00Z', '2026-10-23T15:00:00Z']);
+  });
+
+  it('edits one floating occurrence by the key DISPLAY_TZ made, writing its new time in the request\'s zone', async () => {
+    dav.put('home', 'fo.ics', ics(...vevent('UID:fo', 'DTSTART:20261019T090000', 'DTEND:20261019T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:F')));
+    const p = planUpdate(await loadIn('home/fo.ics#occ=2026-10-21T13:00:00Z'), { span: 'thisEvent', startDate: '2026-10-21T10:00', timeZone: 'America/Chicago' }, { ...env, ...chicago });
+    expect(p.result.eventId).toBe('home/fo.ics#occ=2026-10-21T13:00:00Z');
+    expect(p.before).toMatchObject({ start: '2026-10-21T08:00:00-05:00' });
+    expect(p.puts[0]!.body).toContain('RECURRENCE-ID:20261021T090000');
+    expect(p.puts[0]!.body).toContain('DTSTART;TZID=America/Chicago:20261021T100000');
+  });
+});
+
 describe('occurrenceFor', () => {
   it('builds the series view for a bare id and a plain view for a single event', () => {
     const series = eventParts(parseCalendar(ics(...vevent('UID:s', 'DTSTART:20261019T130000Z', 'RRULE:FREQ=DAILY')), 't'));
-    expect(occurrenceFor(series, undefined, NY)).toMatchObject({ recurring: true, master: series.master });
+    expect(occurrenceFor(series, undefined, zones(NY))).toMatchObject({ recurring: true, master: series.master });
     const single = eventParts(parseCalendar(ics(...vevent('UID:x', 'DTSTART:20261019T130000Z')), 't'));
-    expect(occurrenceFor(single, undefined, NY)).toMatchObject({ recurring: false });
-    expect(occurrenceFor(series, '2026-10-20T13:00:00Z', NY)).toMatchObject({ occ: '2026-10-20T13:00:00Z' });
+    expect(occurrenceFor(single, undefined, zones(NY))).toMatchObject({ recurring: false });
+    expect(occurrenceFor(series, '2026-10-20T13:00:00Z', zones(NY))).toMatchObject({ occ: '2026-10-20T13:00:00Z' });
   });
 });

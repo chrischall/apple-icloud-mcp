@@ -14,6 +14,7 @@ import {
   endAfter,
   exactMs,
   instantOf,
+  isFloating,
   isRecurringMaster,
   lengthOf,
   occKey,
@@ -48,6 +49,7 @@ import {
   type Time,
   type WriteZone,
 } from './ics.js';
+import type { CallZones } from './window.js';
 
 /**
  * The editing primitives behind update and delete: resolving the requested
@@ -59,6 +61,11 @@ import {
  * together with DTSTART, by the same WALL-CLOCK delta in the series' zone.
  * Moving DTSTART alone would orphan every exception: a deleted occurrence
  * would reappear and a moved one would show twice.
+ *
+ * A `zone` parameter here is the DISPLAY zone (see `CallZones`): it reads
+ * floating values and DATE values against a series' instances, and makes
+ * occurrence keys, the same in every call. Only `planTimes` takes the
+ * request's zone, and `writeZoneFor` / `SeriesEdit` carry both.
  */
 
 // ---------------------------------------------------------------------------
@@ -169,7 +176,9 @@ export function wantsTimeChange(t: TimeInput): boolean {
 /**
  * Resolve new start/end for `target` from the request; undefined when no
  * time was asked to change. Unchanged parts keep their current values (a
- * moved start keeps the event's length).
+ * moved start keeps the event's length). `zone` is the request's: it reads
+ * the dates given, and dates a timed event turned all-day (the day the caller
+ * sees it on).
  */
 export function planTimes(target: Occurrence, input: TimeInput, zone: string, recurring: boolean): TimePlan | undefined {
   if (!wantsTimeChange(input)) return undefined;
@@ -220,11 +229,15 @@ export function planTimes(target: Occurrence, input: TimeInput, zone: string, re
   return { allDay: false, start, end, endGiven, ...(startSkipped ? { startSkipped: true } : {}) };
 }
 
-/** The zone to write a component's new times in: the requested one, else the zone it already uses. */
-export function writeZoneFor(vcal: Component, comp: Component, input: TimeInput, zone: string): WriteZone {
+/**
+ * The zone to write a component's new times in: the requested one, else the
+ * zone it already uses (a floating one read in the display zone, as it is
+ * listed).
+ */
+export function writeZoneFor(vcal: Component, comp: Component, input: TimeInput, zones: CallZones): WriteZone {
   const start = startTimeOf(comp);
-  if (input.timeZone !== undefined || start.isDate) return zoneForWrite(vcal, zone);
-  return zoneOfTime(start, zone);
+  if (input.timeZone !== undefined || start.isDate) return zoneForWrite(vcal, zones.zone);
+  return zoneOfTime(start, zones.displayZone);
 }
 
 /** Write DTSTART / DTEND (DURATION is replaced by DTEND). */
@@ -337,7 +350,13 @@ export function createOverride(vcal: Component, master: Component, target: Occur
 // The whole series
 // ---------------------------------------------------------------------------
 
-export interface SeriesEdit {
+/**
+ * A change to a whole series. `displayZone` reads its floating values and
+ * DATE values against its instances, and makes its keys; `zone` (the
+ * request's) is the zone a given time was read in and new times are written
+ * in, and the one notes are phrased in.
+ */
+export interface SeriesEdit extends CallZones {
   vcal: Component;
   master: Component;
   /** The overrides that belong to this series (all of them, or those carried into a split). */
@@ -348,7 +367,6 @@ export interface SeriesEdit {
   timeInput: TimeInput;
   fields: FieldChanges;
   who: Identity | undefined;
-  zone: string;
   now: Date;
   /** Where to say what else changed with the series (its repeat days). */
   notes?: string[];
@@ -524,10 +542,22 @@ export function checkShifted(expected: readonly string[], actual: readonly strin
  * instant — for a time the old zone skips, at the same wall time a day
  * earlier, as that instant is on the far side of the change in a zone that
  * changes at the same moment (Toronto for New York, Paris for Berlin) and
- * would move every other occurrence an hour.
+ * would move every other occurrence an hour. A floating series is "in" the
+ * display zone `zone`: a floating reference whose wall time that zone skips
+ * (read an hour on, where its wall time is another) is measured a day earlier
+ * too — else, moved to a zone whose clocks change at another moment, every
+ * other occurrence would land an hour off. Only for a floating series: a
+ * floating RDATE or RECURRENCE-ID on a UTC or zoned one is not on that
+ * series' clock, whose own zone does not skip it. With the request's zone the
+ * display zone the shift is then 0 — as long as the VTIMEZONE written for it
+ * agrees with Intl on the day measured (a historical year it does not, such as
+ * Santiago's 2022 change, is measured by the zone data each side has).
  */
 function zoneShift(ref: Time, oldWz: WriteZone, newWz: WriteZone, zone: string): number {
-  const at = rfcInstantOf(ref, zone).getTime() - (skippedWall(ref) ? 86_400_000 : 0);
+  const read = rfcInstantOf(ref, zone);
+  const skipped =
+    skippedWall(ref) || (oldWz.kind === 'floating' && isFloating(ref) && wallSeconds(read, { kind: 'floating', zone }) * 1000 !== ownWallMs(ref));
+  const at = read.getTime() - (skipped ? 86_400_000 : 0);
   return wallSeconds(new Date(at), newWz) - wallSeconds(new Date(at), oldWz);
 }
 
@@ -561,7 +591,11 @@ function untilShifted(until: Time, oldWz: WriteZone, newWz: WriteZone, deltaWall
  * a new startDate says where this occurrence of the series should now be.
  */
 export function editSeries(e: SeriesEdit): string | undefined {
-  const { vcal, master, overrides, target, times, zone } = e;
+  const { vcal, master, overrides, target, times } = e;
+  // `zone` here is the DISPLAY zone: it reads the series' floating values and makes its keys, as every listing does.
+  // The request's own zone is used in exactly five places: the zone new times are written in, the clock the request
+  // was read by (the length ruler below), and the two notes and the refusal that name times to the caller.
+  const { zone: requestZone, displayZone: zone } = e;
   const oldMaster = cloneComponent(master);
   const mStart = startTimeOf(master);
   const allDay = mStart.isDate;
@@ -571,7 +605,7 @@ export function editSeries(e: SeriesEdit): string | undefined {
   if (times) {
     refusePeriodDates(master);
     const moved = e.timeInput.startDate !== undefined;
-    if (moved && times.startSkipped) throw skippedStartError(zone);
+    if (moved && times.startSkipped) throw skippedStartError(requestZone);
     // The value the move is measured from: the occurrence's natural slot, or DTSTART for the bare series id.
     const ref = target.recurrenceTime ?? mStart;
     if (ref.isDate && !allDay) {
@@ -584,7 +618,7 @@ export function editSeries(e: SeriesEdit): string | undefined {
     // The instances before the change, to check the rewritten series against (see checkShifted).
     const sample = leadingInstances(master, zone, SHIFT_CHECK_INSTANCES, addDaysYmd(ymdOf(mStart), SHIFT_CHECK_DAYS));
     const oldWz = zoneOfTime(mStart, zone);
-    const newWz = e.timeInput.timeZone !== undefined && !allDay ? zoneForWrite(vcal, zone) : oldWz;
+    const newWz = e.timeInput.timeZone !== undefined && !allDay ? zoneForWrite(vcal, requestZone) : oldWz;
     const mEnd = endTimeOf(master, mStart);
     const deltaDays = moved && allDay ? daysBetween(ymdOf(ref), times.startYmd as string) : 0;
     // Wall clocks from the values' own fields where they are written in the zone (see recurrenceValue) — the
@@ -636,7 +670,7 @@ export function editSeries(e: SeriesEdit): string | undefined {
         // and that is the real time. The real time too for a start that is not a wall time the occurrence has (an
         // end alone given through one whose own time the clocks skip, listed an hour off).
         const wallOn = (wz: WriteZone) => (wallSeconds(times.end, wz) - wallSeconds(times.start, wz)) * 1000;
-        const wallMs = wallOn({ kind: 'floating', zone });
+        const wallMs = wallOn({ kind: 'floating', zone: requestZone });
         const own = target.isOverride ? startTimeOf(target.comp) : ref;
         const onSlot = moved || wallSeconds(times.start, oldWz) === wallOf(own, oldWz, zone);
         newLength = { ms: onSlot && wallMs > 0 && wallMs === wallOn(newWz) ? wallMs : times.end.getTime() - times.start.getTime() };
@@ -696,14 +730,14 @@ export function editSeries(e: SeriesEdit): string | undefined {
     // unless the occurrence is an override, whose own start is written exactly (writeTimes).
     const lands = allDay || !moved || target.isOverride ? undefined : instantOf(shift(ref), zone);
     if (lands && lands.getTime() !== Math.floor(times.start.getTime() / 1000) * 1000) {
-      e.notes?.push(otherPassNote('This occurrence is now', lands, times.start, zone));
+      e.notes?.push(otherPassNote('This occurrence is now', lands, times.start, requestZone));
     }
     // An end given across the clock change: the series takes its wall-clock length, so this one occurrence ends
     // elsewhere than asked (see newLength above).
     const ends = allDay || !times.endGiven || target.isOverride ? undefined : endAfter(shift(ref), newLength, zone);
     if (ends && ends.getTime() !== Math.floor(times.end.getTime() / 1000) * 1000) {
       e.notes?.push(
-        `This occurrence ends at ${formatInstant(ends, zone).display}, not ${formatInstant(times.end, zone).display}: every occurrence takes ` +
+        `This occurrence ends at ${formatInstant(ends, requestZone).display}, not ${formatInstant(times.end, requestZone).display}: every occurrence takes ` +
           'the wall-clock length asked for, and the clocks change during this one.',
       );
     }

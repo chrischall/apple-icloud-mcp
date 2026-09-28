@@ -39,6 +39,26 @@ export function resolveZone(timeZone: string | undefined): string {
   return canonical;
 }
 
+/**
+ * The two zones of a call. `displayZone` (DISPLAY_TZ) reads floating values
+ * — so every `#occ=` key, and every DATE value compared inside a series, is
+ * the same whatever `timeZone` a call passes. `zone` (the request's
+ * `timeZone`, else the same string) reads offset-less input, is the zone new
+ * values are written in, formats every returned time and note, and draws the
+ * day boundaries of all-day events in a window. Carried together, by name, so
+ * the two strings cannot be swapped by position.
+ */
+export interface CallZones {
+  zone: string;
+  displayZone: string;
+}
+
+/** Both zones of a call; DISPLAY_TZ is read once, so without `timeZone` they are the same string. */
+export function resolveZones(timeZone: string | undefined): CallZones {
+  const displayZone = getDisplayTimeZone();
+  return { zone: timeZone === undefined ? displayZone : resolveZone(timeZone), displayZone };
+}
+
 /** `instant` moved by `days` calendar days at the same wall-clock time in `zone` (DST-safe). */
 export function addDaysWall(instant: Date, days: number, zone: string): Date {
   const p = zonedParts(instant, zone);

@@ -14,6 +14,8 @@ import { dateValue, eventParts, parseCalendar, timeAt, type Component } from '..
 import { NY_TZ, ics, vevent } from './fake-caldav.js';
 
 const NY = 'America/New_York';
+/** Both zones of a call made without `timeZone`. */
+const NYZ = { zone: NY, displayZone: NY };
 const CAL = { id: 'home', name: 'Home' };
 
 function master(...lines: string[]): Component {
@@ -42,7 +44,7 @@ describe('formatOccurrence', () => {
         'END:VALARM',
       ),
     );
-    const out = formatOccurrence(singleOccurrence(m, NY), { calendar: CAL, baseId: 'home/x.ics', zone: NY, notesLimit: 4 });
+    const out = formatOccurrence(singleOccurrence(m, NY), { calendar: CAL, baseId: 'home/x.ics', ...NYZ, notesLimit: 4 });
     expect(out).toEqual({
       id: 'home/x.ics',
       calendar: 'Home',
@@ -67,8 +69,8 @@ describe('formatOccurrence', () => {
       lastModified: '2026-10-01T08:00:00-04:00',
       lastModifiedDisplay: 'Thu, Oct 1, 2026, 8:00 AM EDT',
     });
-    // Full notes when no limit; no eventTimeZone when it is the display zone.
-    const full = formatOccurrence(singleOccurrence(m, 'Europe/Berlin'), { calendar: CAL, baseId: 'home/x.ics', zone: 'Europe/Berlin' });
+    // Full notes when no limit; no eventTimeZone when it is the zone times are shown in.
+    const full = formatOccurrence(singleOccurrence(m, 'Europe/Berlin'), { calendar: CAL, baseId: 'home/x.ics', zone: 'Europe/Berlin', displayZone: 'Europe/Berlin' });
     expect(full.notes).toBe('0123456789');
     expect(full.notesTruncated).toBeUndefined();
     expect(full.eventTimeZone).toBeUndefined();
@@ -77,7 +79,7 @@ describe('formatOccurrence', () => {
   it('formats a bare all-day occurrence of a recurring series', () => {
     const m = master(...vevent('UID:b', 'DTSTART;VALUE=DATE:20241023', 'RRULE:FREQ=YEARLY;UNTIL=20301023', 'DESCRIPTION:short'));
     const [o] = expandSeries({ master: m, overrides: [] }, { from: new Date('2026-10-01T00:00:00Z'), to: new Date('2026-11-01T00:00:00Z'), zone: NY }).occurrences;
-    expect(formatOccurrence(o!, { calendar: CAL, baseId: 'home/b.ics', zone: NY, notesLimit: 500 })).toEqual({
+    expect(formatOccurrence(o!, { calendar: CAL, baseId: 'home/b.ics', ...NYZ, notesLimit: 500 })).toEqual({
       id: 'home/b.ics#occ=2026-10-23',
       calendar: 'Home',
       calendarId: 'home',
@@ -96,17 +98,51 @@ describe('formatOccurrence', () => {
 
   it('describes recurrence: until as a time, RDATE-only, and none', () => {
     const withUntil = master(...NY_TZ, ...vevent('UID:u', 'DTSTART;TZID=America/New_York:20261020T090000', 'RRULE:FREQ=WEEKLY;UNTIL=20261231T140000Z'));
-    expect(recurrenceOf(withUntil, NY)).toEqual({ rule: 'FREQ=WEEKLY;UNTIL=20261231T140000Z', summary: 'Every week, until Thu, Dec 31, 2026, 9:00 AM EST' });
-    expect(recurrenceOf(master(...vevent('UID:r', 'DTSTART:20261020T130000Z', 'RDATE:20261022T130000Z')), NY)).toEqual({ summary: 'On specific dates (RDATE)' });
-    expect(recurrenceOf(master(...vevent('UID:n', 'DTSTART:20261020T130000Z')), NY)).toBeUndefined();
-    expect(recurrenceOf(master(...vevent('UID:d', 'DTSTART:20261020T130000Z', 'RRULE:FREQ=DAILY')), NY)).toEqual({ rule: 'FREQ=DAILY', summary: 'Every day' });
+    expect(recurrenceOf(withUntil, NYZ)).toEqual({ rule: 'FREQ=WEEKLY;UNTIL=20261231T140000Z', summary: 'Every week, until Thu, Dec 31, 2026, 9:00 AM EST' });
+    expect(recurrenceOf(master(...vevent('UID:r', 'DTSTART:20261020T130000Z', 'RDATE:20261022T130000Z')), NYZ)).toEqual({ summary: 'On specific dates (RDATE)' });
+    expect(recurrenceOf(master(...vevent('UID:n', 'DTSTART:20261020T130000Z')), NYZ)).toBeUndefined();
+    expect(recurrenceOf(master(...vevent('UID:d', 'DTSTART:20261020T130000Z', 'RRULE:FREQ=DAILY')), NYZ)).toEqual({ rule: 'FREQ=DAILY', summary: 'Every day' });
+  });
+});
+
+describe('the zone times are shown in and the zone floating values are read in', () => {
+  const LONDON = { zone: 'Europe/London', displayZone: NY };
+
+  it('reads a floating UNTIL, alert and stamp in DISPLAY_TZ, and shows them in the request\'s zone', () => {
+    const m = master(
+      ...vevent(
+        'UID:f',
+        'DTSTART:20261020T090000',
+        'DTEND:20261020T100000',
+        'RRULE:FREQ=DAILY;UNTIL=20261030T100000',
+        'LAST-MODIFIED:20261001T080000',
+        'BEGIN:VALARM',
+        'ACTION:DISPLAY',
+        'TRIGGER;VALUE=DATE-TIME:20261020T084500',
+        'END:VALARM',
+      ),
+    );
+    // 10:00 in New York is 14:00Z: 2 PM in London (on GMT again by the 30th).
+    expect(timeLabel(m.getFirstPropertyValue('rrule').until, LONDON)).toBe('Fri, Oct 30, 2026, 2:00 PM GMT');
+    expect(recurrenceOf(m, LONDON)?.summary).toBe('Every day, until Fri, Oct 30, 2026, 2:00 PM GMT');
+    const [o] = expandSeries({ master: m, overrides: [] }, { from: new Date('2026-10-20T00:00:00Z'), to: new Date('2026-10-21T00:00:00Z'), zone: NY, dayZone: 'Europe/London' }).occurrences;
+    const out = formatOccurrence(o!, { calendar: CAL, baseId: 'home/f.ics', ...LONDON });
+    expect(out).toMatchObject({
+      id: 'home/f.ics#occ=2026-10-20T13:00:00Z',
+      start: '2026-10-20T14:00:00+01:00',
+      // 08:45 in New York, a quarter of an hour before the start (in London's reading it would be 5 hours 15 before).
+      alarms: [15],
+      lastModified: '2026-10-01T13:00:00+01:00',
+    });
+    expect(out).not.toHaveProperty('eventTimeZone');
+    expect(invitationSummary(o!, LONDON)).toMatchObject({ timeZone: 'Europe/London', repeats: 'Every day, until Fri, Oct 30, 2026, 2:00 PM GMT' });
   });
 });
 
 describe('labels', () => {
   it('labels times and spans', () => {
-    expect(timeLabel(dateValue('2026-10-20'), NY)).toBe('Tue, Oct 20, 2026');
-    expect(timeLabel(timeAt(new Date('2026-10-20T13:00:00Z'), { kind: 'utc' }), NY)).toBe('Tue, Oct 20, 2026, 9:00 AM EDT');
+    expect(timeLabel(dateValue('2026-10-20'), NYZ)).toBe('Tue, Oct 20, 2026');
+    expect(timeLabel(timeAt(new Date('2026-10-20T13:00:00Z'), { kind: 'utc' }), NYZ)).toBe('Tue, Oct 20, 2026, 9:00 AM EDT');
     const one = singleOccurrence(master(...vevent('UID:a', 'DTSTART;VALUE=DATE:20261020')), NY);
     expect(whenLabel(one, NY)).toBe('Tue, Oct 20, 2026 (all day)');
     const two = singleOccurrence(master(...vevent('UID:a', 'DTSTART;VALUE=DATE:20261020', 'DTEND;VALUE=DATE:20261022')), NY);
@@ -142,7 +178,7 @@ describe('formatCompactOccurrence', () => {
       ),
     );
     const [o] = expandSeries({ master: m, overrides: [] }, { from: new Date('2026-10-20T00:00:00Z'), to: new Date('2026-10-21T00:00:00Z'), zone: NY }).occurrences;
-    const out = formatCompactOccurrence(o!, { calendar: CAL, baseId: 'home/x.ics', zone: NY }, SELF);
+    const out = formatCompactOccurrence(o!, { calendar: CAL, baseId: 'home/x.ics', ...NYZ }, SELF);
     expect(out).toEqual({
       id: 'home/x.ics#occ=2026-10-20T13:00:00Z',
       calendar: 'Home',
@@ -166,14 +202,14 @@ describe('formatCompactOccurrence', () => {
 
   it('leaves myStatus out when my entry is not recognisable, and says needs-action when I have not replied', () => {
     const lines = ['UID:y', 'DTSTART:20261020T130000Z', 'SUMMARY:Plain'];
-    const plain = formatCompactOccurrence(singleOccurrence(master(...vevent(...lines)), NY), { calendar: CAL, baseId: 'home/y.ics', zone: NY }, SELF);
+    const plain = formatCompactOccurrence(singleOccurrence(master(...vevent(...lines)), NY), { calendar: CAL, baseId: 'home/y.ics', ...NYZ }, SELF);
     expect(plain).not.toHaveProperty('attendeeCount');
     expect(plain).not.toHaveProperty('recurrence');
     const strangers = master(...vevent(...lines, 'ATTENDEE:mailto:a@x.com'));
-    expect(formatCompactOccurrence(singleOccurrence(strangers, NY), { calendar: CAL, baseId: 'home/y.ics', zone: NY }, SELF)).toMatchObject({ attendeeCount: 1 });
-    expect(formatCompactOccurrence(singleOccurrence(strangers, NY), { calendar: CAL, baseId: 'home/y.ics', zone: NY }, SELF)).not.toHaveProperty('myStatus');
+    expect(formatCompactOccurrence(singleOccurrence(strangers, NY), { calendar: CAL, baseId: 'home/y.ics', ...NYZ }, SELF)).toMatchObject({ attendeeCount: 1 });
+    expect(formatCompactOccurrence(singleOccurrence(strangers, NY), { calendar: CAL, baseId: 'home/y.ics', ...NYZ }, SELF)).not.toHaveProperty('myStatus');
     const invited = master(...vevent(...lines, 'ATTENDEE:mailto:ME@icloud.com'));
-    expect(formatCompactOccurrence(singleOccurrence(invited, NY), { calendar: CAL, baseId: 'home/y.ics', zone: NY }, SELF)).toMatchObject({ myStatus: 'needs-action' });
+    expect(formatCompactOccurrence(singleOccurrence(invited, NY), { calendar: CAL, baseId: 'home/y.ics', ...NYZ }, SELF)).toMatchObject({ myStatus: 'needs-action' });
   });
 });
 
@@ -203,7 +239,7 @@ describe('invitation previews', () => {
       ),
     );
     const o = { ...singleOccurrence(m, NY), master: m, recurring: true };
-    expect(invitationSummary(o, NY)).toEqual({
+    expect(invitationSummary(o, NYZ)).toEqual({
       event: 'Lunch',
       when: 'Tue, Oct 20, 2026, 9:00 AM EDT – Tue, Oct 20, 2026, 10:00 AM EDT',
       timeZone: NY,
@@ -215,6 +251,6 @@ describe('invitation previews', () => {
       attendees: 'Ann <ann@x.com>, bob@x.com',
     });
     const allDay = master(...vevent('UID:a', 'DTSTART;VALUE=DATE:20261020'));
-    expect(invitationSummary(singleOccurrence(allDay, NY), NY)).toEqual({ event: '(untitled)', when: 'Tue, Oct 20, 2026 (all day)' });
+    expect(invitationSummary(singleOccurrence(allDay, NY), NYZ)).toEqual({ event: '(untitled)', when: 'Tue, Oct 20, 2026 (all day)' });
   });
 });
