@@ -106,6 +106,13 @@ function hasInstance(master: Component, zone: string): boolean {
   }
 }
 
+/** The keys of a master's own instances within two days of an occurrence (what an EXDATE for it could also match). */
+function instancesNear(master: Component, target: Occurrence, zone: string): Set<string> {
+  const at = instantOf(target.recurrenceTime as Time, zone).getTime();
+  const near = expandSeries({ master, overrides: [] }, { from: new Date(at - 2 * 86_400_000), to: new Date(at + 2 * 86_400_000), zone });
+  return new Set(near.occurrences.map((o) => o.occ as string));
+}
+
 function ridInstant(comp: Component, zone: string): number {
   return instantOf(comp.getFirstPropertyValue('recurrence-id') as Time, zone).getTime();
 }
@@ -229,7 +236,7 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
     const carried = parts.overrides.filter((o) => ridInstant(o, zone) >= at);
     const uid = env.newUid();
     const next = continuationSeries(vcal, parts.master, carried, target, used, { uid, now: env.now, zone });
-    truncateSeries(vcal, parts.master, parts.overrides, occ, zone, env.now);
+    truncateSeries(vcal, parts.master, parts.overrides, target, zone, env.now);
     const nextTarget = findOccurrence({ master: next.master, overrides: next.overrides }, occ, zone) as Occurrence;
     key = editSeries({ ...edit, vcal: next.vcal, master: next.master, overrides: next.overrides, target: nextTarget });
     resultVcal = next.vcal;
@@ -335,12 +342,24 @@ export function planDelete(loaded: LoadedEvent, span: Span, env: { zone: string;
     const master = parts.master;
     if (span === 'thisEvent') {
       if (master) {
+        const before = instancesNear(master, target, zone);
         addTimeProp(master, 'exdate', recurrenceValue(master, target, zone));
+        const after = instancesNear(master, target, zone);
+        const lost = [...before].filter((key) => key !== occ && !after.has(key));
+        if (lost.length > 0) {
+          // Planned in memory: nothing has been written.
+          throw new AppleToolError(
+            'UNSUPPORTED',
+            `calendar: this occurrence cannot be deleted on its own: the exclusion (EXDATE) that removes it would also remove ${lost.join(', ')} — ` +
+              'an all-day date and a timed occurrence at its midnight are one value to an exclusion. Nothing was changed.',
+            { hint: 'Delete the series (span "allEvents"), or change it in Apple Calendar.' },
+          );
+        }
         touch(master, now);
       }
       if (target.isOverride) vcal.removeSubcomponent(target.comp);
     } else if (master) {
-      truncateSeries(vcal, master, parts.overrides, occ, zone, now);
+      truncateSeries(vcal, master, parts.overrides, target, zone, now);
     } else {
       const at = ridInstant(target.comp, zone);
       for (const o of parts.overrides) if (ridInstant(o, zone) >= at) vcal.removeSubcomponent(o);

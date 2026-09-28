@@ -11,15 +11,19 @@ import {
   daysBetween,
   endTimeOf,
   ensureOrganizer,
-  eventTimes,
   instantOf,
   isRecurringMaster,
   occKey,
+  otherPassNote,
+  rfcInstantOf,
   ruleOf,
   setAlarms,
   setAttendees,
+  setEnd,
+  setEventTimes,
   setTextProp,
   setTimeProp,
+  skippedStartError,
   startTimeOf,
   textProp,
   timeAt,
@@ -146,6 +150,8 @@ export interface TimePlan {
   endYmd?: string;
   /** Whether endDate was given (a series then takes the new length; otherwise it keeps its own). */
   endGiven: boolean;
+  /** A timed startDate was a wall-clock time the zone skips at a DST change (`start` is where it would have been). */
+  startSkipped?: boolean;
 }
 
 export function wantsTimeChange(t: TimeInput): boolean {
@@ -182,8 +188,10 @@ export function planTimes(target: Occurrence, input: TimeInput, zone: string, re
     }
     return { allDay: true, start: startOfDay(startYmd, zone), end: startOfDay(addDaysYmd(endYmd, 1), zone), startYmd, endYmd, endGiven };
   }
+  let startSkipped = false;
   const at = (value: string, field: string): Date => {
     const p = parseDateInput(value, field, zone);
+    if (field === 'startDate') startSkipped = p.skipped;
     if (p.dateOnly && input.isAllDay === undefined) {
       throw new InvalidArgumentError(
         `${field} "${value}" has no time of day. Pass a date-time (e.g. ${value}T09:00), or isAllDay: true to make it an all-day event.`,
@@ -201,7 +209,7 @@ export function planTimes(target: Occurrence, input: TimeInput, zone: string, re
   else end = new Date(start.getTime() + (target.allDay ? 3_600_000 : target.end.getTime() - target.start.getTime()));
   // Without endDate the end is derived (unchanged, or start + the current length), so only a given one can be wrong.
   if (endGiven && end.getTime() <= start.getTime()) throw new InvalidArgumentError('endDate must be after startDate.');
-  return { allDay: false, start, end, endGiven };
+  return { allDay: false, start, end, endGiven, ...(startSkipped ? { startSkipped: true } : {}) };
 }
 
 /** The zone to write a component's new times in: the requested one, else the zone it already uses. */
@@ -217,11 +225,7 @@ export function writeTimes(comp: Component, plan: TimePlan, wz: WriteZone): void
   if (plan.allDay) {
     setTimeProp(comp, 'dtstart', dateValue(plan.startYmd as string));
     setTimeProp(comp, 'dtend', dateValue(addDaysYmd(plan.endYmd as string, 1)));
-  } else {
-    const t = eventTimes(plan.start, plan.end, wz, isRecurringMaster(comp));
-    setTimeProp(comp, 'dtstart', t.start);
-    setTimeProp(comp, 'dtend', t.end);
-  }
+  } else setEventTimes(comp, plan.start, plan.end, wz, isRecurringMaster(comp));
 }
 
 // ---------------------------------------------------------------------------
@@ -258,14 +262,39 @@ export function recurrenceValue(master: Component, target: Occurrence, zone: str
   const start = startTimeOf(master);
   if (start.isDate) return dateValue(ymdOf(rid));
   const wz = zoneOfTime(start, zone);
+  // An all-day date of a timed series (an RDATE;VALUE=DATE): its midnight as a wall clock in the series' zone, which
+  // `exclusions` matches to that date in whatever zone the series is read.
+  if (rid.isDate) return wallTime(new Date(Date.UTC(rid.year, rid.month - 1, rid.day)), wz);
   // The instance's own value when it is already written in that zone — never rebuilt through its instant: a time a
   // DST change skips (02:30 on the spring-forward day) reads as an instant whose true wall time is another (01:30).
-  return writtenIn(rid, wz) ? rid.clone() : timeAt(instantOf(rid, zone), wz);
+  if (writtenIn(rid, wz)) return rid.clone();
+  // A value written another way (an RDATE in UTC), in the series' zone when a wall time there reads back as its
+  // instant; one on the pass of a repeated hour the zone's wall time is not read as keeps its own form.
+  const at = instantOf(rid, zone);
+  const value = timeAt(at, wz);
+  return instantOf(value, zone).getTime() === at.getTime() ? value : rid.clone();
 }
 
-/** Whether a date-time value is written in the write zone itself (so its own fields are its wall clock there). */
+/**
+ * Refuse to give one instance a component of its own — an override, or the
+ * first instance of a split-off series — when it is not the series' type: an
+ * all-day date added to a timed series by RDATE, or a timed one added to an
+ * all-day series. Its RECURRENCE-ID or DTSTART has to take the series' type
+ * (RFC 5545), so it could not name the instance, which would list twice.
+ */
+function refuseOtherType(master: Component, target: Occurrence, what: string): void {
+  const rid = target.recurrenceTime as Time;
+  if (rid.isDate === startTimeOf(master).isDate) return;
+  throw new AppleToolError(
+    'UNSUPPORTED',
+    `calendar: this occurrence is ${rid.isDate ? 'an all-day date added to a timed' : 'a timed one added to an all-day'} series (an RDATE), ` +
+      `so ${what}. Nothing was changed.`,
+    { hint: 'Delete this occurrence alone (span "thisEvent"), or change the whole series (span "allEvents").' },
+  );
+}
+
+/** Whether a date-time value (not a DATE) is written in the write zone itself (so its own fields are its wall clock there). */
 function writtenIn(t: Time, wz: WriteZone): boolean {
-  if (t.isDate) return false;
   if (wz.kind === 'utc') return t.zone === ICAL.Timezone.utcTimezone;
   if (wz.kind === 'floating') return t.zone === ICAL.Timezone.localTimezone;
   return tzidOf(t) === wz.tz.tzid;
@@ -274,11 +303,12 @@ function writtenIn(t: Time, wz: WriteZone): boolean {
 /** A value's wall clock in the write zone, in seconds: its own fields when it is written there, else its instant's. */
 function wallOf(t: Time, wz: WriteZone, zone: string): number {
   if (writtenIn(t, wz)) return Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute, t.second) / 1000;
-  return wallSeconds(instantOf(t, zone), wz);
+  return wallSeconds(rfcInstantOf(t, zone), wz);
 }
 
 /** An override component for a natural occurrence, added to `vcal` (a copy of the master, pinned to that one instance). */
 export function createOverride(vcal: Component, master: Component, target: Occurrence, zone: string): Component {
+  refuseOtherType(master, target, 'it cannot be changed on its own');
   const ovr = cloneComponent(master);
   for (const name of ['rrule', 'rdate', 'exdate', 'exrule', 'duration']) ovr.removeAllProperties(name);
   const rid = recurrenceValue(master, target, zone);
@@ -288,9 +318,8 @@ export function createOverride(vcal: Component, master: Component, target: Occur
     writeTimes(ovr, { allDay: true, start: target.start, end: target.end, startYmd: target.startYmd, endYmd: target.endYmd, endGiven: false }, wz);
   } else {
     // It starts where the instance does, written the same way (see recurrenceValue), and keeps its length.
-    ovr.removeAllProperties('duration');
     setTimeProp(ovr, 'dtstart', rid.clone());
-    setTimeProp(ovr, 'dtend', eventTimes(instantOf(rid, zone), new Date(instantOf(rid, zone).getTime() + target.end.getTime() - target.start.getTime()), wz, false).end);
+    setEnd(ovr, rid, target.end.getTime() - target.start.getTime(), zoneOfTime(rid, zone));
   }
   vcal.addSubcomponent(ovr);
   return ovr;
@@ -503,17 +532,26 @@ export function editSeries(e: SeriesEdit): string | undefined {
 
   if (times) {
     refusePeriodDates(master);
+    const moved = e.timeInput.startDate !== undefined;
+    if (moved && times.startSkipped) throw skippedStartError(zone);
+    // The value the move is measured from: the occurrence's natural slot, or DTSTART for the bare series id.
+    const ref = target.recurrenceTime ?? mStart;
+    if (ref.isDate && !allDay) {
+      throw new AppleToolError(
+        'UNSUPPORTED',
+        'calendar: this occurrence is an all-day date added to a timed series (an RDATE), so the series cannot be moved through it. Nothing was changed.',
+        { hint: 'Move the series through one of its timed occurrences, or by its series id.' },
+      );
+    }
     // The instances before the change, to check the rewritten series against (see checkShifted).
     const sample = leadingInstances(master, zone, SHIFT_CHECK_INSTANCES, addDaysYmd(ymdOf(mStart), SHIFT_CHECK_DAYS));
     const oldWz = zoneOfTime(mStart, zone);
     const newWz = e.timeInput.timeZone !== undefined && !allDay ? zoneForWrite(vcal, zone) : oldWz;
     const mEnd = endTimeOf(master, mStart);
-    const moved = e.timeInput.startDate !== undefined;
-    const ref = target.recurrenceTime;
-    const refYmd = ref ? ymdOf(ref) : (target.startYmd as string);
-    const deltaDays = moved && allDay ? daysBetween(refYmd, times.startYmd as string) : 0;
-    // Wall clocks from the values' own fields where they are written in the zone (see recurrenceValue).
-    const wallIn = (wz: WriteZone) => (ref ? wallOf(ref, wz, zone) : wallSeconds(target.start, wz));
+    const deltaDays = moved && allDay ? daysBetween(ymdOf(ref), times.startYmd as string) : 0;
+    // Wall clocks from the values' own fields where they are written in the zone (see recurrenceValue) — the
+    // reference's too: ical.js's instant of a time a DST change skips has another wall time.
+    const wallIn = (wz: WriteZone) => wallOf(ref, wz, zone);
     const refWall = allDay ? 0 : wallIn(oldWz);
     const deltaWall = allDay ? 0 : (moved ? wallSeconds(times.start, newWz) : wallIn(newWz)) - refWall;
     // The rule's instances share DTSTART's time of day, so they move by the calendar days DTSTART does — not by the
@@ -544,9 +582,11 @@ export function editSeries(e: SeriesEdit): string | undefined {
       else newMs = times.end.getTime() - times.start.getTime();
     }
     const withEnd = (comp: Component, start: Time, days: number, ms: number) => {
-      comp.removeAllProperties('duration');
       setTimeProp(comp, 'dtstart', start);
-      setTimeProp(comp, 'dtend', start.isDate ? dateValue(addDaysYmd(ymdOf(start), days)) : timeAt(new Date(instantOf(start, zone).getTime() + ms), newWz));
+      if (start.isDate) {
+        comp.removeAllProperties('duration');
+        setTimeProp(comp, 'dtend', dateValue(addDaysYmd(ymdOf(start), days)));
+      } else setEnd(comp, start, ms, zoneOfTime(start, zone));
     };
     const newStart = shift(mStart);
     withEnd(master, newStart, newDays, newMs);
@@ -558,8 +598,9 @@ export function editSeries(e: SeriesEdit): string | undefined {
       if (until) {
         // UNTIL moves like the last instance it bounds: by the WALL-CLOCK delta. Moving it by DTSTART's instant delta
         // is an hour off when the move crosses a DST change, and drops the final occurrence.
-        if (until.isDate) r.until = shift(until);
-        else r.until = timeAt(instantOf(shift(until), zone), until.zone === ICAL.Timezone.utcTimezone ? { kind: 'utc' } : { kind: 'floating', zone });
+        // A floating series' UNTIL is floating, compared by wall clock; any other's is UTC (RFC 5545).
+        if (until.isDate || newWz.kind === 'floating') r.until = shift(until);
+        else r.until = timeAt(instantOf(shift(until), zone), { kind: 'utc' });
       }
       (master.getFirstProperty('rrule') as Property).setValue(r);
     }
@@ -577,6 +618,9 @@ export function editSeries(e: SeriesEdit): string | undefined {
       }
       touched.add(ovr);
     }
+    // A move to a wall time the clocks go through twice lands where the series' wall time is read (setEventTimes).
+    const lands = allDay || !moved ? undefined : instantOf(shift(ref), zone);
+    if (lands && lands.getTime() !== times.start.getTime()) e.notes?.push(otherPassNote(lands, times.start, zone));
     const check = () => checkShiftedSample(sample, shift, master, rule, zone);
     if (e.checks) e.checks.push(check);
     else check();
@@ -597,12 +641,21 @@ export function editSeries(e: SeriesEdit): string | undefined {
   return target.recurrenceTime ? occKey(shift(target.recurrenceTime), zone) : undefined;
 }
 
-/** A value just before an occurrence, for UNTIL: the day before (DATE), or one second before. */
-function untilBefore(master: Component, occInstant: Date, occ: string, zone: string): Time {
+/**
+ * A value just before an occurrence (`rid`, its own value; `at`, its
+ * instant), for UNTIL: the day before its date (DATE), a second before it in
+ * UTC, or — for a floating rule, which compares UNTIL by wall clock — a
+ * second before its own wall time. (The wall time of the instant a second
+ * before it is another for a time a DST change skips: 03:29:59 for 02:30,
+ * which left that instance in the series.)
+ */
+function untilBefore(master: Component, rid: Time, at: Date, zone: string): Time {
   const start = startTimeOf(master);
-  if (start.isDate) return dateValue(addDaysYmd(occ, -1));
-  const before = new Date(occInstant.getTime() - 1000);
-  return timeAt(before, start.zone === ICAL.Timezone.localTimezone ? { kind: 'floating', zone } : { kind: 'utc' });
+  if (start.isDate) return dateValue(addDaysYmd(ymdOf(rid), -1));
+  if (start.zone !== ICAL.Timezone.localTimezone) return timeAt(new Date(at.getTime() - 1000), { kind: 'utc' });
+  const own = rid.isDate || rid.zone === ICAL.Timezone.localTimezone;
+  const wall = own ? Date.UTC(rid.year, rid.month - 1, rid.day, rid.hour, rid.minute, rid.second) : wallSeconds(at, { kind: 'floating', zone }) * 1000;
+  return wallTime(new Date(wall - 1000), { kind: 'floating', zone });
 }
 
 /** The instant an `#occ=` value names. */
@@ -621,8 +674,9 @@ export function isFirstInstance(master: Component, occ: string, zone: string): b
  * RFC 5545 allows only one), and EXDATE/RDATE values and overrides from
  * `occ` on are removed. Returns the removed overrides.
  */
-export function truncateSeries(vcal: Component, master: Component, overrides: readonly Component[], occ: string, zone: string, now: Date): Component[] {
+export function truncateSeries(vcal: Component, master: Component, overrides: readonly Component[], target: Occurrence, zone: string, now: Date): Component[] {
   refusePeriodDates(master);
+  const occ = target.occ as string;
   const at = occInstant(occ, zone);
   const before = (t: Time) => instantOf(t, zone).getTime() < at.getTime();
   const rule = ruleOf(master);
@@ -631,7 +685,7 @@ export function truncateSeries(vcal: Component, master: Component, overrides: re
   if (rule && rulePosition(master, at, zone).next !== undefined) {
     const r = rule.clone();
     r.count = null;
-    r.until = untilBefore(master, at, occ, zone);
+    r.until = untilBefore(master, target.recurrenceTime as Time, at, zone);
     (master.getFirstProperty('rrule') as Property).setValue(r);
   }
   rewriteDates(master, 'exdate', (t) => (before(t) ? t : undefined));
@@ -669,6 +723,7 @@ export function continuationSeries(
   opts: { uid: string; now: Date; zone: string },
 ): { vcal: Component; master: Component; overrides: Component[] } {
   refusePeriodDates(master);
+  refuseOtherType(master, target, 'a new series cannot start at it');
   const { zone } = opts;
   const vcal = new ICAL.Component(['vcalendar', [], []]);
   for (const prop of source.getAllProperties()) vcal.addProperty(new ICAL.Property(JSON.parse(JSON.stringify(prop.toJSON()))));
@@ -684,15 +739,11 @@ export function continuationSeries(
   const first = recurrenceValue(master, target, zone);
   const start = startTimeOf(master);
   const end = endTimeOf(master, start);
-  next.removeAllProperties('duration');
   setTimeProp(next, 'dtstart', first);
-  setTimeProp(
-    next,
-    'dtend',
-    first.isDate
-      ? dateValue(addDaysYmd(ymdOf(first), daysBetween(ymdOf(start), ymdOf(end))))
-      : timeAt(new Date(instantOf(first, zone).getTime() + instantOf(end, zone).getTime() - instantOf(start, zone).getTime()), zoneOfTime(start, zone)),
-  );
+  if (first.isDate) {
+    next.removeAllProperties('duration');
+    setTimeProp(next, 'dtend', dateValue(addDaysYmd(ymdOf(first), daysBetween(ymdOf(start), ymdOf(end)))));
+  } else setEnd(next, first, instantOf(end, zone).getTime() - instantOf(start, zone).getTime(), zoneOfTime(first, zone));
   const rule = ruleOf(next);
   if (rule?.count) {
     const r = rule.clone();

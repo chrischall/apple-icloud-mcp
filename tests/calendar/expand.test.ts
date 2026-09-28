@@ -8,12 +8,15 @@ import {
   isRecurringResource,
   MAX_GAP_COST,
   MAX_SKIPPED,
+  MAX_STEPS_PER_INSTANCE,
+  firstInstance,
   overlaps,
   rulePosition,
   ruleProblem,
   seriesWalker,
   singleOccurrence,
   sparseProblem,
+  timeProblem,
   type Occurrence,
 } from '../../src/calendar/expand.js';
 import { ICAL } from '../../src/calendar/ics.js';
@@ -154,6 +157,17 @@ describe('RDATE values', () => {
     ]);
     const first = findOccurrence(parts(...vevent('UID:f', 'DTSTART:20261005T130000Z', 'DTEND:20261005T140000Z', 'RDATE:20261007T130000Z')), '2026-10-05T13:00:00Z', NY);
     expect(first?.end.toISOString()).toBe('2026-10-05T14:00:00.000Z');
+  });
+
+  it('lists DTSTART of a series of RDATEs only when an RDATE written another way sorts level with it', () => {
+    // ical.js starts such a list at DTSTART's place by a binary search on its own sort key, which reads floating 09:00
+    // as 09:00Z and a DATE as midnight UTC: with those tied, it could start past DTSTART and never list it.
+    const floating = parts(...vevent('UID:t', 'DTSTART:20261021T090000Z', 'DTEND:20261021T100000Z', 'RDATE:20261021T090000,20261025T090000,20261028T090000'));
+    expect(keys(floating)).toEqual(['2026-10-21T09:00:00Z', '2026-10-21T13:00:00Z', '2026-10-25T13:00:00Z', '2026-10-28T13:00:00Z']);
+    const dates = parts(...vevent('UID:u', 'DTSTART:20261021T000000Z', 'DTEND:20261021T010000Z', 'RDATE;VALUE=DATE:20261021,20261025,20261028'));
+    expect(keys(dates)).toEqual(['2026-10-21T00:00:00Z', '2026-10-21', '2026-10-25', '2026-10-28']);
+    // Such a walk is exact: its first instance is its first value.
+    expect(firstInstance(floating.master as Component, NY)?.toString()).toBe('2026-10-21T09:00:00Z');
   });
 
   it('lists an instant once however many values name it, and an EXDATE removes every copy', () => {
@@ -400,6 +414,76 @@ describe('rules that cannot be walked', () => {
     const r = expandSeries(p, { from: d('2026-10-01T00:00:00Z'), to: d('2027-01-01T00:00:00Z'), zone: NY });
     expect(r).toMatchObject({ truncated: 'rule', ruleProblem: 'FREQ=DAILY whose day filters never match a day it steps on' });
     expect(r.occurrences.map((o) => o.occ)).toEqual(['2026-10-19T13:00:00Z']);
+  });
+
+  it('counts the times of day a DAILY or WEEKLY rule tries on every day it steps on', () => {
+    const at = (text: string) => ICAL.Time.fromDateTimeString(text);
+    const all = (n: number) => Array.from({ length: n }, (_, i) => i).join(',');
+    const tooFar = (freq: string) => `FREQ=${freq} with day filters that skip too many of the days it steps on`;
+    // June only, every second of the day: ical.js tries 86,400 times on each of the other 335 days (half a minute).
+    expect(sparseProblem(rule(`FREQ=DAILY;BYMONTH=6;BYHOUR=${all(24)};BYMINUTE=${all(60)};BYSECOND=${all(60)}`), at('2026-07-01T00:00:00'))).toBe(tooFar('DAILY'));
+    expect(sparseProblem(rule(`FREQ=DAILY;BYMONTH=6;BYHOUR=${all(24)};BYMINUTE=${all(60)}`), at('2026-07-01T00:00:00'))).toBe(tooFar('DAILY'));
+    expect(sparseProblem(rule(`FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO;BYHOUR=${all(24)};BYMINUTE=${all(60)}`), at('2024-03-01T00:00:00'))).toBe(tooFar('DAILY'));
+    expect(sparseProblem(rule(`FREQ=WEEKLY;INTERVAL=52;BYMONTH=6;BYDAY=MO,FR;BYHOUR=${all(24)};BYMINUTE=${all(60)}`), at('2026-10-19T00:00:00'))).toBe(tooFar('WEEKLY'));
+    // The same days at one time of day are cheap enough (the budget the day filters alone were given).
+    expect(sparseProblem(rule('FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO;BYHOUR=9'), at('2024-03-01T00:00:00'))).toBeUndefined();
+    expect(sparseProblem(rule('FREQ=DAILY;BYMONTH=6;BYHOUR=9,17;BYMINUTE=0,30'), at('2026-07-01T00:00:00'))).toBeUndefined();
+  });
+
+  it('refuses a sub-daily rule whose time filters skip most of the times it steps on, or all of them', () => {
+    const at = (text: string) => ICAL.Time.fromDateTimeString(text);
+    const midnight = at('2026-01-01T00:00:00');
+    const tooMany = (freq: string) => `FREQ=${freq} with time filters that skip too many of the times it steps on`;
+    // Daily at 03:00:00, stepping a minute at a time (it runs through BYSECOND, then steps the minute): 1440 steps each.
+    expect(timeProblem(rule('FREQ=SECONDLY;BYHOUR=3;BYMINUTE=0;BYSECOND=0'), midnight)).toBe(tooMany('SECONDLY'));
+    expect(timeProblem(rule('FREQ=SECONDLY;BYMINUTE=0'), midnight)).toBe(tooMany('SECONDLY'));
+    expect(timeProblem(rule('FREQ=MINUTELY;BYHOUR=9;BYMINUTE=0'), midnight)).toBe(tooMany('MINUTELY'));
+    expect(timeProblem(rule('FREQ=MINUTELY;BYHOUR=9'), midnight)).toBe(tooMany('MINUTELY'));
+    // Every 1440 minutes from midnight is midnight again: 3 AM never comes, and ical.js would spin forever.
+    expect(timeProblem(rule('FREQ=MINUTELY;INTERVAL=1440;BYHOUR=3'), midnight)).toBe('FREQ=MINUTELY whose time filters never match a time it steps on');
+    expect(timeProblem(rule('FREQ=SECONDLY;INTERVAL=86400;BYMINUTE=5'), midnight)).toBe('FREQ=SECONDLY whose time filters never match a time it steps on');
+    for (const ok of [
+      'FREQ=HOURLY;BYHOUR=9',
+      'FREQ=HOURLY;INTERVAL=5;BYHOUR=3',
+      'FREQ=HOURLY;BYMINUTE=0,30',
+      'FREQ=MINUTELY;BYMINUTE=0',
+      'FREQ=MINUTELY;BYSECOND=0,30',
+      'FREQ=MINUTELY;INTERVAL=15;BYHOUR=9,10,11,12,13,14,15,16',
+      'FREQ=MINUTELY;BYHOUR=9,10,11',
+      'FREQ=SECONDLY;BYSECOND=0',
+      'FREQ=SECONDLY;INTERVAL=7;BYSECOND=3',
+      'FREQ=SECONDLY',
+      'FREQ=DAILY;BYHOUR=3',
+    ]) {
+      expect(timeProblem(rule(ok), midnight), ok).toBeUndefined();
+    }
+    expect(MAX_STEPS_PER_INSTANCE).toBe(10);
+    expect(timeProblem(rule('FREQ=MINUTELY;BYHOUR=9;BYMINUTE=0'), midnight)).toBe(tooMany('MINUTELY')); // cached
+    // Refused before ical.js sees it: a listing of a series from 1990 answers at once.
+    const p = parts(...vevent('UID:sec', 'DTSTART:19900101T030000Z', 'DTEND:19900101T030100Z', 'RRULE:FREQ=SECONDLY;BYHOUR=3;BYMINUTE=0;BYSECOND=0'));
+    const r = expandSeries(p, { from: d('2026-10-19T00:00:00Z'), to: d('2026-10-26T00:00:00Z'), zone: NY });
+    expect(r).toMatchObject({ truncated: 'rule', ruleProblem: tooMany('SECONDLY') });
+  });
+
+  it('finds the first instance of a dense series whose walk can stray without reading every instance nearby', { timeout: 3000 }, () => {
+    // Every second from 09:00 floating (13:00Z in New York), plus an all-day date years later.
+    const dense = parts(...vevent('UID:dn', 'DTSTART:20261021T090000', 'DTEND:20261021T090001', 'RRULE:FREQ=SECONDLY', 'RDATE;VALUE=DATE:20300101'));
+    expect(firstInstance(dense.master as Component, NY)?.toString()).toBe('2026-10-21T09:00:00');
+    // An RDATE written another way that comes before the rule's first instance is still found.
+    const early = parts(...vevent('UID:de', 'DTSTART:20261021T090000', 'DTEND:20261021T090001', 'RRULE:FREQ=MINUTELY', 'RDATE:20261021T120000Z'));
+    expect(firstInstance(early.master as Component, NY)?.toString()).toBe('2026-10-21T12:00:00Z');
+    // One nearby that an EXDATE removes leaves the walk waiting through the dense rule: past its bound it gives up, loudly.
+    const gone = parts(...vevent('UID:dg', 'DTSTART:20261021T090000', 'DTEND:20261021T090001', 'RRULE:FREQ=MINUTELY', 'RDATE:20261021T200000Z', 'EXDATE:20261021T200000Z'));
+    expect(() => firstInstance(gone.master as Component, NY, 100)).toThrow(/the series' first occurrence could not be located: the series has more than 100 occurrences/);
+    expect(firstInstance(gone.master as Component, NY)?.toString()).toBe('2026-10-21T09:00:00');
+  });
+
+  it('removes an all-day date by an EXDATE at the midnight that starts it in the writer\'s zone, wherever it is read', () => {
+    // An Outlook-style exception to an all-day series: the organizer's local midnight.
+    const p = parts(...vevent('UID:ad', 'DTSTART;VALUE=DATE:20261019', 'DTEND;VALUE=DATE:20261020', 'RRULE:FREQ=WEEKLY;COUNT=3', 'EXDATE;TZID=Europe/Berlin:20261026T000000'));
+    for (const zone of [NY, 'Europe/Berlin', 'Asia/Tokyo', 'UTC']) {
+      expect(expandSeries(p, { from: d('2026-10-01T00:00:00Z'), to: d('2026-12-01T00:00:00Z'), zone }).occurrences.map((o) => o.occ), zone).toEqual(['2026-10-19', '2026-11-02']);
+    }
   });
 
   it('lists the first instance and the overrides of a rule it refuses to walk, and says why', () => {

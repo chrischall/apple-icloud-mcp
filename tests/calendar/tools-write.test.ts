@@ -111,11 +111,26 @@ describe('apple_calendar_create_event', () => {
     expect(first.json).toMatchObject({ verified: true, event: { start: '2026-11-01T01:30:00-04:00', end: '2026-11-01T01:30:00-05:00' } });
     const stored = unfold(h.dav.get('work', 'UID-1.ics')!.ics);
     expect(stored).toContain('DTSTART:20261101T053000Z');
-    expect(stored).toContain('DTEND;TZID=America/New_York:20261101T013000');
+    expect(stored).toContain('DTEND:20261101T063000Z');
     // Dublin's is the other way round: its SECOND pass has no wall time ical.js reads as it.
     const dublin = await h.call('apple_calendar_create_event', { title: 'Late', startDate: '2026-10-25T01:30:00+00:00', timeZone: 'Europe/Dublin' });
     expect(dublin.json).toMatchObject({ verified: true, event: { start: expect.stringMatching(/^2026-10-25T01:30:00(\+00:00|Z)$/) } });
     expect(unfold(h.dav.get('work', 'UID-2.ics')!.ics)).toContain('DTSTART:20261025T013000Z');
+  });
+
+  it('refuses a series starting at a wall time the clocks skip, and says when one starts on the other pass of a repeated hour', async () => {
+    // 02:30 does not exist on 2027-03-14 in New York: a series stored at 03:30 would repeat at 03:30 every day.
+    const skipped = await h.call('apple_calendar_create_event', { title: 'Pill', startDate: '2027-03-14T02:30', recurrence: { frequency: 'daily', count: 3 } });
+    expect(skipped.isError).toBe(true);
+    expect(skipped.json.error.message).toMatch(/startDate is a time of day that does not exist that day in America\/New_York/);
+    expect(h.dav.requests.some((q) => q.method === 'PUT')).toBe(false);
+    // One event is one instant: it goes where the clocks put that time (03:30 EDT).
+    const single = await h.call('apple_calendar_create_event', { title: 'Once', startDate: '2027-03-14T02:30' });
+    expect(single.json.event.start).toBe('2027-03-14T03:30:00-04:00');
+    // 01:30 EDT on the fall-back night: a series keeps the wall time 01:30, which is read as EST — and says so.
+    const early = await h.call('apple_calendar_create_event', { title: 'Early', startDate: '2026-11-01T01:30:00-04:00', recurrence: { frequency: 'daily', count: 3 } });
+    expect(early.json.event.start).toBe('2026-11-01T01:30:00-05:00');
+    expect(early.json.notes).toContainEqual(expect.stringMatching(/^The series now starts at Sun, Nov 1, 2026, 1:30 AM EST, not Sun, Nov 1, 2026, 1:30 AM EDT: that wall-clock time comes twice/));
   });
 
   it('with attendees: asks first (iCloud emails invitations), then writes ORGANIZER + ATTENDEEs', async () => {

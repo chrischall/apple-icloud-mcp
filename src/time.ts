@@ -247,6 +247,8 @@ export interface ParsedDateInput {
   ymd: string;
   /** True when the input fixed its own instant with `Z` or `±HH:MM`. */
   hasOffset: boolean;
+  /** True for a wall-clock time (no offset) the zone skips at a DST change: `instant` is where it would have been. */
+  skipped: boolean;
 }
 
 const DATE_RE =
@@ -284,7 +286,7 @@ export function parseDateInput(value: string, field: string, zone: string): Pars
   if (day < 1 || day > daysInMonth(year, month)) return bad(`day ${ds} does not exist in ${ys}-${mos}`);
   const ymdWritten = `${ys}-${mos}-${ds}`;
   if (hs === undefined) {
-    return { instant: startOfDay(ymdWritten, zone), dateOnly: true, ymd: ymdWritten, hasOffset: false };
+    return { instant: startOfDay(ymdWritten, zone), dateOnly: true, ymd: ymdWritten, hasOffset: false, skipped: false };
   }
   const hour = Number(hs);
   const minute = Number(mis);
@@ -294,6 +296,7 @@ export function parseDateInput(value: string, field: string, zone: string): Pars
   if (minute > 59) return bad(`minute ${mis} is out of range`);
   if (second > 59) return bad(`second ${ss} is out of range`);
   let instant: Date;
+  let skipped = false;
   if (off !== undefined) {
     let offsetMin = 0;
     if (off !== 'Z' && off !== 'z') {
@@ -307,6 +310,8 @@ export function parseDateInput(value: string, field: string, zone: string): Pars
     instant = new Date(utcMs(year, month - 1, day, hour, minute, second, millisecond) - offsetMin * 60_000);
   } else {
     instant = zonedToInstant({ year, month, day, hour, minute, second, millisecond }, zone);
+    const p = zonedParts(instant, zone);
+    skipped = p.day !== day || p.hour !== hour || p.minute !== minute;
   }
-  return { instant, dateOnly: false, ymd: ymdInZone(instant, zone), hasOffset: off !== undefined };
+  return { instant, dateOnly: false, ymd: ymdInZone(instant, zone), hasOffset: off !== undefined, skipped };
 }
