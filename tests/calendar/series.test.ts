@@ -536,7 +536,8 @@ describe('splitting', () => {
     expect(newText.indexOf('BEGIN:VTIMEZONE')).toBeLessThan(newText.indexOf('BEGIN:VEVENT'));
     expect(newText).toContain('UID:NEW');
     expect(newText).toContain('DTSTART;TZID=America/New_York:20261023T090000');
-    expect(newText).toContain('DTEND;TZID=America/New_York:20261023T091500');
+    // The series' length as it was written (a DURATION, which RFC 5545 applies to each instance nominally).
+    expect(newText).toContain('DURATION:PT15M');
     expect(newText).toContain('RRULE:FREQ=DAILY;COUNT=6');
     expect(newText).toContain('EXDATE;TZID=America/New_York:20261024T090000');
     expect(newText).not.toContain('20261020T090000');

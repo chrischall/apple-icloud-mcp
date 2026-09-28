@@ -840,6 +840,49 @@ describe('series times next to DST changes', () => {
     expect(end.puts[0]!.body).toContain('DTSTART:20270312T023000\r\nDTEND:20270312T040000\r\n');
   });
 
+  it('writes an exact DURATION in hours, never days, which are calendar days (25 hours across the change)', async () => {
+    dav.put('home', 'fd.ics', ics(...vevent('UID:fd', 'DTSTART:20261020T120000', 'DTEND:20261020T130000', 'SUMMARY:F')));
+    // Floating, noon to noon over the fall-back weekend: the wall times would last 25 hours, so it is a DURATION.
+    const p = await update('home/fd.ics', { startDate: '2026-10-31T12:00', endDate: '2026-11-01T12:00' });
+    expect(p.puts[0]!.body).toContain('DTSTART:20261031T120000\r\nDURATION:PT25H\r\n');
+    expect(p.result.occurrence.end.toISOString()).toBe('2026-11-01T17:00:00.000Z');
+    // A floating day-long series: an edit to its occurrence across the change keeps that occurrence's end.
+    dav.put('home', 'fday.ics', ics(...vevent('UID:fday', 'DTSTART:20261029T200000', 'DTEND:20261030T200000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:Day')));
+    const before = spansOf(dav.get('home', 'fday.ics')!.ics, '2026-10-31', '2026-11-02').find((x) => x.startsWith('2026-11-01T00:00:00Z'));
+    const one = await update('home/fday.ics#occ=2026-11-01T00:00:00Z', { title: 'Day X' });
+    expect(spansOf(one.puts[0]!.body, '2026-10-31', '2026-11-02').find((x) => x.startsWith('2026-11-01T00:00:00Z'))).toBe(before);
+    expect(one.puts[0]!.body).not.toMatch(/DURATION:P\d+D/);
+  });
+
+  it('keeps a DURATION series and its DURATION overrides nominal when the series moves', async () => {
+    put(
+      'dn.ics',
+      'UID:dn',
+      'DTSTART;TZID=America/New_York:20261024T120000',
+      'DURATION:P1D',
+      'RRULE:FREQ=WEEKLY;COUNT=3',
+      'SUMMARY:D',
+    );
+    dav.put('home', 'dn.ics', dav.get('home', 'dn.ics')!.ics.replace('END:VCALENDAR', ['BEGIN:VEVENT', 'UID:dn', 'RECURRENCE-ID;TZID=America/New_York:20261031T120000', 'DTSTART;TZID=America/New_York:20261031T120000', 'DURATION:P1D', 'SUMMARY:D2', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n')));
+    const p = await update('home/dn.ics', { span: 'allEvents', startDate: '2026-10-24T13:00' });
+    expect(p.puts[0]!.body.match(/DURATION:P1D/g)).toHaveLength(2);
+    // Noon-to-noon became one-to-one, the weekend of the change included (25 hours).
+    expect(spansOf(p.puts[0]!.body, '2026-10-20', '2026-11-20').map((x) => x.split(' ')[1])).toEqual(['1440', '1500', '1440']);
+  });
+
+  it('gives a series the wall-clock length asked for through its occurrence on the night the clocks change', async () => {
+    // Saturdays 23:00–01:00, ended at 03:00 through the fall-back night's occurrence: four hours on the clock every
+    // week (that night's is five in real time).
+    dav.put('home', 'j.ics', ics(...vevent('UID:j', 'DTSTART:20261024T230000', 'DTEND:20261025T010000', 'RRULE:FREQ=WEEKLY;COUNT=3', 'SUMMARY:J')));
+    const p = await update('home/j.ics#occ=2026-11-01T03:00:00Z', { span: 'allEvents', endDate: '2026-11-01T03:00' });
+    expect(p.puts[0]!.body).toContain('DTSTART:20261024T230000\r\nDTEND:20261025T030000\r\n');
+    expect(p.notes).toEqual([expect.stringMatching(/^This occurrence ends at .*2:00 AM EST, not .*3:00 AM EST: every occurrence takes the wall-clock length asked for/)]);
+    // A zoned series the same.
+    put('jz.ics', 'UID:jz', 'DTSTART;TZID=America/New_York:20261024T230000', 'DTEND;TZID=America/New_York:20261025T010000', 'RRULE:FREQ=WEEKLY;COUNT=3', 'SUMMARY:J');
+    const z = await update('home/jz.ics#occ=2026-11-01T03:00:00Z', { span: 'allEvents', endDate: '2026-11-01T03:00' });
+    expect(z.puts[0]!.body).toContain('DTEND;TZID=America/New_York:20261025T030000');
+  });
+
   it('says when a series moved by an explicit offset starts on the other pass of a repeated hour', async () => {
     put('n.ics', 'UID:n', 'DTSTART;TZID=America/New_York:20261029T090000', 'DTEND;TZID=America/New_York:20261029T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:N');
     const p = await update('home/n.ics#occ=2026-11-01T14:00:00Z', { span: 'allEvents', startDate: '2026-11-01T01:30:00-04:00' });

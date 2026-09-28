@@ -1,5 +1,5 @@
 import { AppleToolError, InvalidArgumentError } from '../errors.js';
-import { parseDateInput, startOfDay, ymdInZone } from '../time.js';
+import { formatInstant, parseDateInput, startOfDay, ymdInZone } from '../time.js';
 import { firstInstance, hasPeriodDates, rulePosition, seriesWalker, type Occurrence } from './expand.js';
 import {
   ICAL,
@@ -11,6 +11,7 @@ import {
   daysBetween,
   endTimeOf,
   ensureOrganizer,
+  endAfter,
   instantOf,
   isRecurringMaster,
   lengthOf,
@@ -21,8 +22,10 @@ import {
   ruleOf,
   setAlarms,
   setAttendees,
+  sameLength,
   setEnd,
   setEventTimes,
+  setLength,
   setTextProp,
   setTimeProp,
   skippedStartError,
@@ -38,6 +41,7 @@ import {
   zoneForWrite,
   zoneOfTime,
   type Component,
+  type Length,
   type Property,
   type Recur,
   type Time,
@@ -618,22 +622,28 @@ export function editSeries(e: SeriesEdit): string | undefined {
     };
     // Lengths: the series keeps its own unless endDate was given.
     const oldDays = allDay ? daysBetween(ymdOf(mStart), ymdOf(mEnd)) : 0;
-    const oldMs = allDay ? 0 : lengthOf(master, zone);
+    const oldLength: Length = allDay ? { ms: 0 } : lengthOf(master, zone);
     let newDays = oldDays;
-    let newMs = oldMs;
+    let newLength = oldLength;
     if (times.endGiven) {
       if (allDay) newDays = daysBetween(times.startYmd as string, times.endYmd as string) + 1;
-      else newMs = times.end.getTime() - times.start.getTime();
+      else {
+        // A series repeats wall-clock times: the length asked for is the wall time from the new start to the new end,
+        // not the real time between them, which the night the clocks change makes an hour more or less than every
+        // other occurrence's (unless no wall time comes between them).
+        const wallMs = (wallSeconds(times.end, newWz) - wallSeconds(times.start, newWz)) * 1000;
+        newLength = { ms: wallMs > 0 ? wallMs : times.end.getTime() - times.start.getTime() };
+      }
     }
-    const withEnd = (comp: Component, start: Time, days: number, ms: number) => {
+    const withEnd = (comp: Component, start: Time, days: number, length: Length) => {
       setTimeProp(comp, 'dtstart', start);
       if (start.isDate) {
         comp.removeAllProperties('duration');
         setTimeProp(comp, 'dtend', dateValue(addDaysYmd(ymdOf(start), days)));
-      } else setEnd(comp, start, ms, zoneOfTime(start, zone));
+      } else setLength(comp, start, length, zoneOfTime(start, zone));
     };
     const newStart = shift(mStart);
-    withEnd(master, newStart, newDays, newMs);
+    withEnd(master, newStart, newDays, newLength);
     rewriteDates(master, 'exdate', shift);
     rewriteDates(master, 'rdate', shift);
     if (shifted) {
@@ -656,8 +666,8 @@ export function editSeries(e: SeriesEdit): string | undefined {
       if (ovr === target.comp) writeTimes(ovr, times, newWz);
       else if (!retimed) {
         const days = allDay ? daysBetween(ymdOf(oStart), ymdOf(oEnd)) : 0;
-        const ms = allDay ? 0 : lengthOf(ovr, zone);
-        withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, ms === oldMs ? newMs : ms);
+        const length: Length = allDay ? { ms: 0 } : lengthOf(ovr, zone);
+        withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, sameLength(length, oldLength) ? newLength : length);
       }
       touched.add(ovr);
     }
@@ -666,6 +676,15 @@ export function editSeries(e: SeriesEdit): string | undefined {
     const lands = allDay || !moved || target.isOverride ? undefined : instantOf(shift(ref), zone);
     if (lands && lands.getTime() !== Math.floor(times.start.getTime() / 1000) * 1000) {
       e.notes?.push(otherPassNote('This occurrence is now', lands, times.start, zone));
+    }
+    // An end given across the clock change: the series takes its wall-clock length, so this one occurrence ends
+    // elsewhere than asked (see newLength above).
+    const ends = allDay || !times.endGiven || target.isOverride ? undefined : endAfter(shift(ref), newLength, zone);
+    if (ends && ends.getTime() !== Math.floor(times.end.getTime() / 1000) * 1000) {
+      e.notes?.push(
+        `This occurrence ends at ${formatInstant(ends, zone).display}, not ${formatInstant(times.end, zone).display}: every occurrence takes ` +
+          'the wall-clock length asked for, and the clocks change during this one.',
+      );
     }
     const check = () => checkShiftedSample(sample, shift, master, rule, zone);
     if (e.checks) e.checks.push(check);
@@ -789,7 +808,7 @@ export function continuationSeries(
   if (first.isDate) {
     next.removeAllProperties('duration');
     setTimeProp(next, 'dtend', dateValue(addDaysYmd(ymdOf(first), daysBetween(ymdOf(start), ymdOf(end)))));
-  } else setEnd(next, first, lengthOf(master, zone), zoneOfTime(first, zone));
+  } else setLength(next, first, lengthOf(master, zone), zoneOfTime(first, zone));
   const rule = ruleOf(next);
   if (rule?.count) {
     const r = rule.clone();
