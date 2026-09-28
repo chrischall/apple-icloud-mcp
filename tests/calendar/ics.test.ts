@@ -271,10 +271,14 @@ describe('time zones', () => {
     expect(times('2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z', ny, true)).toEqual(['2026-11-01T01:30:00', '2026-11-01T02:30:00', true]);
     expect(times('2026-10-20T13:00:00Z', '2026-10-20T14:00:00Z', ny, false)).toEqual(['2026-10-20T09:00:00', '2026-10-20T10:00:00', false]);
     // Floating values are read in their zone, a repeated hour as its first pass: the second 01:30 has no floating
-    // form, so a single event starting then takes UTC; an end then does too (never the same wall time as its start).
+    // form, so a single event starting or ending then takes UTC, start and end (DTEND is floating only with DTSTART).
+    // A series keeps floating wall times: an hour after 01:30 is 02:30.
     const floating = { kind: 'floating' as const, zone: NY };
     expect(times('2026-11-01T06:30:00Z', '2026-11-01T07:30:00Z', floating, false)).toEqual(['2026-11-01T06:30:00Z', '2026-11-01T07:30:00Z', false]);
-    expect(times('2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z', floating, true)).toEqual(['2026-11-01T01:30:00', '2026-11-01T06:30:00Z', false]);
+    expect(times('2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z', floating, false)).toEqual(['2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z', false]);
+    expect(times('2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z', floating, true)).toEqual(['2026-11-01T01:30:00', '2026-11-01T02:30:00', false]);
+    // Whole seconds, as values hold them: a fraction is not "another instant".
+    expect(times('2026-10-20T13:00:00.500Z', '2026-10-20T14:00:00Z', ny, true)).toEqual(['2026-10-20T09:00:00', '2026-10-20T10:00:00', false]);
     expect(times('2026-10-20T13:00:00Z', '2026-10-20T14:00:00Z', floating, false)).toEqual(['2026-10-20T09:00:00', '2026-10-20T10:00:00', false]);
   });
 
