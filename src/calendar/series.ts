@@ -675,18 +675,20 @@ export function editSeries(e: SeriesEdit): string | undefined {
         const days = allDay ? daysBetween(ymdOf(oStart), ymdOf(oEnd)) : 0;
         // An override that lasts as long as the series takes its new length: it ends where the series' length ends it
         // (however either is written), or both are the same exact span (floating ones by wall clock). Any other keeps
-        // its own: a DURATION as written; a floating DTEND moves by the same wall-clock delta as its start (its span
-        // is listed an hour off on a DST night, and writing that as a length would carry the distortion onto an
-        // ordinary day); else the span it is listed with.
+        // its own: a DURATION as written; a floating DTEND in a floating series moves by the same wall-clock delta as
+        // its start (its span is listed an hour off on a DST night, and writing that as a length would carry the
+        // distortion onto an ordinary day), and in a zoned one takes its wall length (a TZID wall time on a DST night
+        // is another instant than the floating one, and DTEND is floating only with DTSTART); else the span it is
+        // listed with.
         const own: Length = allDay ? { ms: 0 } : lengthOf(ovr, zone);
         const listed: Length = 'duration' in own ? own : { ms: allDay ? 0 : endInstantOf(ovr, zone).getTime() - instantOf(oStart, zone).getTime() };
         const sameSpan = 'ms' in own && own.ms === exactMs(oldLength);
         const follows = !allDay && times.endGiven && (sameSpan || endInstantOf(ovr, zone).getTime() === endAfter(oStart, oldLength, zone).getTime());
         const floatingEnd = !allDay && ovr.hasProperty('dtend') && oStart.zone === ICAL.Timezone.localTimezone && oEnd.zone === ICAL.Timezone.localTimezone;
-        if (!follows && floatingEnd) {
+        if (!follows && floatingEnd && newWz.kind === 'floating') {
           setTimeProp(ovr, 'dtstart', shift(oStart));
           setTimeProp(ovr, 'dtend', shift(oEnd));
-        } else withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, follows ? newLength : listed);
+        } else withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, follows ? newLength : floatingEnd ? own : listed);
       }
       touched.add(ovr);
     }
