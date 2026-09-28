@@ -406,6 +406,13 @@ export function roughMs(length: Length): number {
   return 'ms' in length ? length.ms : length.duration.toSeconds() * 1000;
 }
 
+/** A length in milliseconds when it is an exact one: a DURATION of hours, minutes and seconds only (its days are nominal). */
+export function exactMs(length: Length): number | undefined {
+  if ('ms' in length) return length.ms;
+  const d = length.duration;
+  return d.weeks === 0 && d.days === 0 && !d.isNegative ? d.toSeconds() * 1000 : undefined;
+}
+
 /**
  * The instant an event starting at `start` ends when it lasts `length`. A
  * DURATION's weeks and days are nominal (the same wall time that many days

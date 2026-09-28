@@ -13,6 +13,7 @@ import {
   endTimeOf,
   ensureOrganizer,
   eventParts,
+  exactMs,
   injectMissingTimezones,
   instantOf,
   isRecurringMaster,
@@ -382,6 +383,12 @@ describe('values and instants', () => {
     expect(endTimeOf(date, startTimeOf(date)).toString()).toBe('2026-10-21');
     const bare = event('DTSTART:20261020T130000Z');
     expect(endTimeOf(bare, startTimeOf(bare)).toString()).toBe('2026-10-20T13:00:00Z');
+  });
+
+  it('gives a length in milliseconds only when it is exact', () => {
+    expect(exactMs({ ms: 5400_000 })).toBe(5400_000);
+    expect(exactMs({ duration: ICAL.Duration.fromString('PT1H30M') })).toBe(5400_000);
+    for (const nominal of ['P1D', 'P1W', 'P1DT1H', '-PT1H']) expect(exactMs({ duration: ICAL.Duration.fromString(nominal) })).toBeUndefined();
   });
 });
 
