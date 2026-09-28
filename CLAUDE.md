@@ -137,7 +137,8 @@ walks a DAILY/WEEKLY rule's day filters over one 400-year cycle — ical.js step
 `FREQ=DAILY;INTERVAL=7;BYDAY=TU` from a Monday never returned — charging each day the times of day it tries,
 BYHOUR×BYMINUTE×BYSECOND; `timeProblem` walks a sub-daily rule's time filters over one day: ical.js steps
 `FREQ=SECONDLY;BYHOUR=3;BYMINUTE=0;BYSECOND=0` a minute at a time — running through its own BYSECOND list at every
-step, matching or not — and `FREQ=MINUTELY;INTERVAL=1440;BYHOUR=3` from midnight never reaches 3 AM) — keep those
+step, matching or not — and `FREQ=MINUTELY;INTERVAL=1440;BYHOUR=3` from midnight never reaches 3 AM; a costly
+rule whose COUNT/UNTIL keeps the whole walk short is let through, one that never matches never is) — keep those
 guards. `seriesWalker` doesn't trust ical.js's RecurExpansion with the
 whole set: it hands it a view (RDATE PERIODs as their starts, no EXDATE), skips an instant already given (per kind
 by rough value; across kinds only near an RDATE written another way than DTSTART), applies EXDATEs itself (ical.js's
@@ -169,9 +170,14 @@ hour's wall time as one pass (the second; the first where DST is negative, as in
 where that occurrence now is), and a zoned end (`setEnd`) from its start as read, in UTC when no wall time reads back
 as it. (A zoned start IN a repeated hour keeps a wall DTEND: RFC readers take the first pass, ical.js the second, so
 its length differs by reader — a known limit.) A value written another way than the series (a UTC RDATE) keeps its
-own form as RECURRENCE-ID/EXDATE, and when shifted, when the series' zone cannot name its instant. **Floating
-events are wall clock:** their length is the difference of their wall times (`lengthMs`) — for natural instances
-too — and DTEND is floating exactly when DTSTART is (RFC 5545), never UTC. UNTIL moves by the bound ical.js compares
+own form as RECURRENCE-ID/EXDATE; a series move converts such values to the zone like the rule's own instances (an
+EXDATE/RECURRENCE-ID must keep naming its rule instance) unless the zone could not name the value to begin with.
+**Lengths** (`lengthOf`): DURATION as written, a floating DTSTART/DTEND pair by its wall times (the author's
+02:30–03:30 is an hour even on a day DST makes it none), anything else by instants; every instance lasts the
+series' length in real time (RFC 5545 §3.8.5.3) — so a floating hour is an hour on DST days too. DURATION is read
+RFC-style (`endInstantOf`: days nominal, hours exact), not as ical.js adds it to the wall clock. A floating DTEND is
+written only when its wall time lasts the length where it is read, else DURATION — DTEND is floating exactly when
+DTSTART is (RFC 5545), never UTC. UNTIL moves by the bound ical.js compares
 (`untilShifted`: its fields read as UTC — a UTC UNTIL on a floating series and a floating one on a zoned series are
 compared that way), written floating for a floating series and UTC otherwise. API all-day end dates are INCLUSIVE;
 iCalendar DTEND is exclusive. Query

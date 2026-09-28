@@ -658,16 +658,17 @@ describe('series times next to DST changes', () => {
       expect(p.result.occurrence.start.getTime()).toBe(start);
       expect(p.result.occurrence.end.getTime()).toBe(start + 3_600_000);
     }
-    // A floating series is wall clock: 01:00–02:00 every day, which on the fall-back night is two hours. Its override
-    // and a split keep those wall times, and a floating DTEND (never a UTC one next to a floating DTSTART).
+    // A floating hour every day lasts an hour on the fall-back night too (RFC 5545: each instance lasts the series'
+    // length). Its override and a split keep the hour as DURATION — 02:00 comes two hours after 01:00 that night — and
+    // a floating DTEND is never replaced by a UTC one next to a floating DTSTART.
     dav.put('home', 'fs.ics', ics(...vevent('UID:fs', 'DTSTART:20261029T010000', 'DTEND:20261029T020000', 'RRULE:FREQ=DAILY;COUNT=7', 'SUMMARY:S')));
-    expect(spansOf(dav.get('home', 'fs.ics')!.ics, '2026-10-31', '2026-11-03')).toEqual(['2026-10-31T05:00:00Z 60', '2026-11-01T05:00:00Z 120', '2026-11-02T06:00:00Z 60']);
+    expect(spansOf(dav.get('home', 'fs.ics')!.ics, '2026-10-31', '2026-11-03')).toEqual(['2026-10-31T05:00:00Z 60', '2026-11-01T05:00:00Z 60', '2026-11-02T06:00:00Z 60']);
     const one = await update('home/fs.ics#occ=2026-11-01T05:00:00Z', { title: 'S2' });
-    expect(one.puts[0]!.body).toContain('DTEND:20261101T020000\r\n');
-    expect(spansOf(one.puts[0]!.body, '2026-11-01', '2026-11-02')).toEqual(['2026-11-01T05:00:00Z 120']);
+    expect(one.puts[0]!.body).toContain('DTSTART:20261101T010000\r\nDURATION:PT1H\r\n');
+    expect(spansOf(one.puts[0]!.body, '2026-11-01', '2026-11-02')).toEqual(['2026-11-01T05:00:00Z 60']);
     const split = await update('home/fs.ics#occ=2026-11-01T05:00:00Z', { span: 'futureEvents', title: 'S3' });
-    expect(split.puts[1]!.body).toContain('DTEND:20261101T020000\r\n');
-    expect(spansOf(split.puts[1]!.body).map((s) => s.split(' ')[1])).toEqual(['120', '60', '60', '60']);
+    expect(split.puts[1]!.body).toContain('DURATION:PT1H');
+    expect(spansOf(split.puts[1]!.body).map((s) => s.split(' ')[1])).toEqual(['60', '60', '60', '60']);
   });
 
   it('names an RDATE on the unread pass of a repeated hour by its own value, so an edit replaces it and a delete removes it', async () => {
@@ -794,6 +795,49 @@ describe('series times next to DST changes', () => {
     // A day later: 01:30 EDT on 11-02 does not exist twice, so it takes the series' zone.
     const day = await update('home/fp.ics#occ=2026-10-28T05:30:00Z', { span: 'allEvents', startDate: '2026-10-29T01:30' });
     expect(day.puts[0]!.body).toContain('RDATE;TZID=America/New_York:20261102T013000');
+  });
+
+  it('moves a UTC RECURRENCE-ID or EXDATE into the repeated hour as the zone wall time the rule instance there has', async () => {
+    const override = ['BEGIN:VEVENT', 'UID:e2', 'RECURRENCE-ID:20261101T043000Z', 'DTSTART:20261101T043000Z', 'DTEND:20261101T050000Z', 'SUMMARY:Night check (Sun)', 'END:VEVENT'];
+    const series = (name: string, rule: string, ...extra: string[]) =>
+      dav.put('home', name, ics(...NY_TZ, ...vevent(`UID:${name}`, 'DTSTART;TZID=America/New_York:20261029T003000', 'DTEND;TZID=America/New_York:20261029T010000', rule, 'SUMMARY:Night check', ...extra)).replace('END:VCALENDAR', [...override.map((l) => l.replace('UID:e2', `UID:${name}`)), 'END:VCALENDAR'].join('\r\n')));
+    const nov1 = (body: string) => expandSeries(eventParts(parseCalendar(body, 't')), { from: new Date('2026-11-01T04:00:00Z'), to: new Date('2026-11-02T04:00:00Z'), zone: NY }).occurrences.map((o) => `${o.occ} ${textProp(o.comp, 'summary')}`);
+    // An hour later: 00:30 EDT becomes 01:30 — which a New York wall time names as its second pass, as the rule does.
+    series('h1.ics', 'RRULE:FREQ=DAILY;COUNT=8');
+    const hour = await update('home/h1.ics', { span: 'allEvents', startDate: '2026-10-29T01:30' });
+    expect(hour.puts[0]!.body).toContain('RECURRENCE-ID;TZID=America/New_York:20261101T013000');
+    expect(nov1(hour.puts[0]!.body)).toEqual(['2026-11-01T06:30:00Z Night check (Sun)']);
+    // A day later, through another occurrence: Thursdays and Saturdays at 01:30 become Fridays and Sundays, and the
+    // Saturday override (its RECURRENCE-ID in UTC) lands on the fall-back Sunday at 01:30.
+    dav.put(
+      'home',
+      'd1.ics',
+      ics(
+        ...NY_TZ,
+        ...vevent('UID:d1', 'DTSTART;TZID=America/New_York:20261029T013000', 'DTEND;TZID=America/New_York:20261029T020000', 'RRULE:FREQ=WEEKLY;BYDAY=TH,SA;COUNT=6', 'SUMMARY:Night check'),
+        ...vevent('UID:d1', 'RECURRENCE-ID:20261031T053000Z', 'DTSTART:20261031T053000Z', 'DTEND:20261031T060000Z', 'SUMMARY:Night check (Sun)'),
+      ),
+    );
+    const day = await update('home/d1.ics#occ=2026-10-29T05:30:00Z', { span: 'allEvents', startDate: '2026-10-30T01:30' });
+    expect(nov1(day.puts[0]!.body)).toEqual(['2026-11-01T06:30:00Z Night check (Sun)']);
+    // An exclusion follows the same way, and the move is not refused.
+    dav.put('home', 'x1.ics', ics(...NY_TZ, ...vevent('UID:x1', 'DTSTART;TZID=America/New_York:20261029T003000', 'DTEND;TZID=America/New_York:20261029T010000', 'RRULE:FREQ=DAILY;COUNT=8', 'EXDATE:20261101T043000Z', 'SUMMARY:X')));
+    const excluded = await update('home/x1.ics', { span: 'allEvents', startDate: '2026-10-29T01:30' });
+    expect(excluded.puts[0]!.body).toContain('EXDATE;TZID=America/New_York:20261101T013000');
+    expect(nov1(excluded.puts[0]!.body)).toEqual([]);
+  });
+
+  it('gives each occurrence of a floating series the series\' length on DST days too, and keeps it when one is moved', async () => {
+    dav.put('home', 'fb.ics', ics(...vevent('UID:fb', 'DTSTART:20261029T013000', 'DTEND:20261029T023000', 'RRULE:FREQ=DAILY;COUNT=7', 'SUMMARY:F')));
+    const moved = await update('home/fb.ics#occ=2026-11-01T05:30:00Z', { startDate: '2026-11-05T10:00' });
+    expect(moved.puts[0]!.body).toContain('DTSTART:20261105T100000\r\nDTEND:20261105T110000\r\n');
+    dav.put('home', 'fs2.ics', ics(...vevent('UID:fs2', 'DTSTART:20270312T023000', 'DTEND:20270312T033000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:G')));
+    // 02:30 does not exist on 03-14: that occurrence is at 03:30 EDT, and lasts its hour.
+    expect(spansOf(dav.get('home', 'fs2.ics')!.ics, '2027-03-14', '2027-03-15')).toEqual(['2027-03-14T07:30:00Z 60']);
+    const later = await update('home/fs2.ics#occ=2027-03-14T07:30:00Z', { startDate: '2027-03-14T05:00' });
+    expect(later.result.occurrence.end.getTime() - later.result.occurrence.start.getTime()).toBe(3_600_000);
+    const end = await update('home/fs2.ics#occ=2027-03-14T07:30:00Z', { span: 'allEvents', endDate: '2027-03-14T05:00' });
+    expect(end.puts[0]!.body).toContain('DTSTART:20270312T023000\r\nDTEND:20270312T040000\r\n');
   });
 
   it('says when a series moved by an explicit offset starts on the other pass of a repeated hour', async () => {

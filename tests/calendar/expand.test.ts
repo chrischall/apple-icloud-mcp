@@ -463,6 +463,13 @@ describe('rules that cannot be walked', () => {
       expect(timeProblem(rule(ok), midnight), ok).toBeUndefined();
     }
     expect(MAX_STEPS_PER_INSTANCE).toBe(10);
+    // A costly one is still walked when COUNT or UNTIL keeps the whole walk short — never one that never matches.
+    const nine = at('2026-10-21T09:00:00');
+    expect(timeProblem(rule('FREQ=MINUTELY;BYMINUTE=0,15,30,45;BYHOUR=9;COUNT=8'), nine)).toBeUndefined();
+    expect(timeProblem(rule('FREQ=MINUTELY;BYMINUTE=0,30;BYHOUR=9,17;UNTIL=20261025T000000Z'), nine)).toBeUndefined();
+    expect(timeProblem(rule('FREQ=MINUTELY;BYMINUTE=0,15,30,45;BYHOUR=9;COUNT=100000'), nine)).toBe(tooMany('MINUTELY'));
+    expect(timeProblem(rule('FREQ=MINUTELY;BYMINUTE=0,30;BYHOUR=9,17;UNTIL=21000101T000000Z'), nine)).toBe(tooMany('MINUTELY'));
+    expect(timeProblem(rule('FREQ=MINUTELY;INTERVAL=1440;BYHOUR=3;COUNT=2'), midnight)).toBe('FREQ=MINUTELY whose time filters never match a time it steps on');
     expect(timeProblem(rule('FREQ=MINUTELY;BYHOUR=9;BYMINUTE=0'), midnight)).toBe(tooMany('MINUTELY')); // cached
     // Refused before ical.js sees it: a listing of a series from 1990 answers at once.
     const p = parts(...vevent('UID:sec', 'DTSTART:19900101T030000Z', 'DTEND:19900101T030100Z', 'RRULE:FREQ=SECONDLY;BYHOUR=3;BYMINUTE=0;BYSECOND=0'));
@@ -481,6 +488,17 @@ describe('rules that cannot be walked', () => {
     const gone = parts(...vevent('UID:dg', 'DTSTART:20261021T090000', 'DTEND:20261021T090001', 'RRULE:FREQ=MINUTELY', 'RDATE:20261021T200000Z', 'EXDATE:20261021T200000Z'));
     expect(() => firstInstance(gone.master as Component, NY, 100)).toThrow(/the series' first occurrence could not be located: the series has more than 100 occurrences/);
     expect(firstInstance(gone.master as Component, NY)?.toString()).toBe('2026-10-21T09:00:00');
+  });
+
+  it('reads a DURATION\'s hours as exact time and its days as calendar days, across a DST change', () => {
+    const span = (...lines: string[]) => expandSeries(parts(...NY_TZ, ...vevent('UID:du', ...lines)), { from: d('2026-10-01T00:00:00Z'), to: d('2026-12-01T00:00:00Z'), zone: NY }).occurrences[0]!;
+    // 00:30 EDT plus two hours is 01:30 EST (06:30Z), not the wall time 02:30 EST.
+    expect(span('DTSTART;TZID=America/New_York:20261101T003000', 'DURATION:PT2H').end.toISOString()).toBe('2026-11-01T06:30:00.000Z');
+    // A day is the same wall time the next day (noon to noon is 25 hours that weekend), then the hour.
+    expect(span('DTSTART;TZID=America/New_York:20261031T120000', 'DURATION:P1DT1H').end.toISOString()).toBe('2026-11-01T18:00:00.000Z');
+    // A negative one ends at the start.
+    const back = span('DTSTART;TZID=America/New_York:20261031T120000', 'DURATION:-PT1H');
+    expect(back.end.getTime()).toBe(back.start.getTime());
   });
 
   it('names the other instances an exclusion would also remove, and gives up loudly past its bound', () => {
