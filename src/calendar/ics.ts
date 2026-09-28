@@ -2,7 +2,7 @@ import ICAL from 'ical.js';
 import { tzlib_get_ical_block, tzlib_get_timezones } from 'timezones-ical-library';
 import { canonicalTimeZone } from '../config.js';
 import { InvalidArgumentError, UpstreamError } from '../errors.js';
-import { addDaysYmd, startOfDay, zonedParts, zonedToInstant } from '../time.js';
+import { addDaysYmd, formatInstant, startOfDay, zonedParts, zonedToInstant } from '../time.js';
 
 /**
  * iCalendar handling on top of ical.js: parsing a resource, resolving its
@@ -261,9 +261,154 @@ export function occKey(t: Time, zone: string): string {
 export function timeAt(instant: Date, wz: WriteZone): Time {
   const utc = ICAL.Time.fromJSDate(new Date(Math.floor(instant.getTime() / 1000) * 1000), true);
   if (wz.kind === 'utc') return utc;
-  if (wz.kind === 'tz') return utc.convertToZone(wz.tz);
+  if (wz.kind === 'tz') return zoneTime(utc, wz.tz);
   const p = zonedParts(instant, wz.zone);
   return ICAL.Time.fromData({ year: p.year, month: p.month, day: p.day, hour: p.hour, minute: p.minute, second: p.second, isDate: false });
+}
+
+/** One of a zone's changes as ical.js keeps them: the UTC instant it happens, and the offsets (seconds) either side. */
+interface ZoneChange {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  utcOffset: number;
+  prevUtcOffset: number;
+}
+
+/**
+ * The UTC offset (seconds) in force in `tz` at an instant, from the zone's
+ * own list of changes — ical.js expands a VTIMEZONE's observances into UTC
+ * instants. Not `tz.utcOffset`, which is keyed by a LOCAL time, so it cannot
+ * say which pass of a repeated hour an instant is (or what a skipped time is).
+ */
+function offsetAt(tz: Timezone, unixSeconds: number): number {
+  const year = new Date(unixSeconds * 1000).getUTCFullYear();
+  tz._ensureCoverage(year + 1);
+  const changes = tz.changes as ZoneChange[];
+  if (changes.length === 0) return 0; // as ical.js: a zone without observances
+  const instant = (c: ZoneChange) => Date.UTC(c.year, c.month - 1, c.day, c.hour, c.minute, c.second) / 1000;
+  // The last change at or before the instant (they are sorted).
+  let lo = 0;
+  let hi = changes.length - 1;
+  // Before the zone's first change ical.js reads every wall time at offset 0 (not the first TZOFFSETFROM): what it
+  // reads is what a written value means here, so a value from before a VTIMEZONE's first observance reads back.
+  if (instant(changes[0] as ZoneChange) > unixSeconds) return 0;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (instant(changes[mid] as ZoneChange) <= unixSeconds) lo = mid;
+    else hi = mid - 1;
+  }
+  return (changes[lo] as ZoneChange).utcOffset;
+}
+
+/**
+ * `utc` as a wall-clock time in `tz`: its fields plus the offset in force at
+ * that instant. Not ical.js's `convertToZone`, which reads the offset at the
+ * UTC wall clock as though it were local time — an hour off for the hours
+ * next to a DST change (half a day of them in a zone far from UTC).
+ */
+function zoneTime(utc: Time, tz: Timezone): Time {
+  const t = ICAL.Time.fromData({ year: utc.year, month: utc.month, day: utc.day, hour: utc.hour, minute: utc.minute, second: utc.second, isDate: false }, tz);
+  t.adjust(0, 0, 0, offsetAt(tz, utc.toUnixTime()));
+  return t;
+}
+
+/** Whether two date-time values have the same wall-clock fields. */
+function sameWall(a: Time, b: Time): boolean {
+  return a.year === b.year && a.month === b.month && a.day === b.day && a.hour === b.hour && a.minute === b.minute && a.second === b.second;
+}
+
+/**
+ * Whether a TZID value names a wall time its zone skips (02:30 on a
+ * spring-forward day). ical.js reads one with the offset AFTER the change —
+ * an hour early, at a time whose true wall clock is another — and RFC 5545
+ * (§3.3.5) with the offset before it, so readers disagree on its instant and
+ * on how long it lasts until an end written as a wall time.
+ */
+export function skippedWall(t: Time): boolean {
+  if (t.isDate || t.zone === ICAL.Timezone.utcTimezone || t.zone === ICAL.Timezone.localTimezone) return false;
+  return !sameWall(timeAt(new Date(t.toUnixTime() * 1000), { kind: 'tz', tz: t.zone as Timezone }), t);
+}
+
+/**
+ * The instant RFC 5545 gives a value: `instantOf`, except for a wall time a
+ * DST change skips, which it reads with the offset before the change — where
+ * that wall time would have been — not ical.js's (see `skippedWall`).
+ */
+export function rfcInstantOf(t: Time, zone: string): Date {
+  if (!skippedWall(t)) return instantOf(t, zone);
+  return new Date(Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute, t.second) - offsetAt(t.zone as Timezone, t.toUnixTime()) * 1000);
+}
+
+/**
+ * Refusal for a series whose new start is a wall-clock time the zone skips:
+ * the series would repeat at the time the clocks jumped to, not the one asked for.
+ */
+export function skippedStartError(zone: string): InvalidArgumentError {
+  return new InvalidArgumentError(
+    `startDate is a time of day that does not exist that day in ${zone} (the clocks skip it for daylight saving), and a repeating ` +
+      'event keeps its start\'s wall-clock time on every day, so it would repeat at the wrong time. Nothing was changed.',
+    'Start the series on another day, or at another time of day.',
+  );
+}
+
+/**
+ * Why a series' occurrence is an hour from the instant asked for: its wall
+ * clock comes twice as the clocks go back, and a series keeps its wall time,
+ * which is read as the other pass (see `setEventTimes`).
+ */
+export function otherPassNote(read: Date, asked: Date, zone: string): string {
+  return (
+    `The series now starts at ${formatInstant(read, zone).display}, not ${formatInstant(asked, zone).display}: that wall-clock time comes ` +
+    "twice as the clocks go back, and a repeating event keeps its start's wall-clock time, which is read as the other one."
+  );
+}
+
+/** The instant a value is read as, with floating values in the write zone's own zone. */
+function readAs(t: Time, wz: WriteZone): number {
+  return instantOf(t, wz.kind === 'floating' ? wz.zone : 'UTC').getTime();
+}
+
+/**
+ * Set a timed event's end, `ms` after `start` (a value already written, in
+ * write zone `wz`) as that start is READ, so every reader agrees on its length:
+ *  - after a start whose wall time the zone skips, as DURATION (readers
+ *    disagree on that start's instant, so no DTEND could keep the length);
+ *  - otherwise as DTEND, a wall time in `wz` when one reads back as the end,
+ *    else in UTC: in an hour a DST change repeats a wall time is read as one
+ *    pass (a floating one as the first), so the other has none of its own.
+ *    (RFC 5545 asks DTEND for DTSTART's value type, DATE-TIME, not its form.)
+ */
+export function setEnd(comp: Component, start: Time, ms: number, wz: WriteZone): void {
+  comp.removeAllProperties('duration');
+  if (skippedWall(start)) {
+    comp.removeAllProperties('dtend');
+    comp.addPropertyWithValue('duration', ICAL.Duration.fromSeconds(Math.round(ms / 1000)));
+    return;
+  }
+  const endAt = new Date(readAs(start, wz) + ms);
+  const end = timeAt(endAt, wz);
+  setTimeProp(comp, 'dtend', readAs(end, wz) === endAt.getTime() ? end : timeAt(endAt, { kind: 'utc' }));
+}
+
+/**
+ * Set DTSTART and DTEND (or DURATION, see `setEnd`) for [start, end) in the
+ * write zone. A wall time names one instant, except in an hour a DST change
+ * repeats: there ical.js (and so this server) reads it as one pass, and the
+ * other pass has no wall time of its own. A single event writes such an
+ * instant in UTC. A series keeps its wall time — its repeats follow DTSTART's
+ * wall clock — and so may start on the other pass; whether it does is
+ * returned (false when the start reads back as `start`).
+ */
+export function setEventTimes(comp: Component, start: Date, end: Date, wz: WriteZone, series: boolean): boolean {
+  let s = timeAt(start, wz);
+  if (!series && readAs(s, wz) !== start.getTime()) s = timeAt(start, { kind: 'utc' });
+  setTimeProp(comp, 'dtstart', s);
+  setEnd(comp, s, end.getTime() - start.getTime(), zoneOfTime(s, wz.kind === 'floating' ? wz.zone : 'UTC'));
+  return readAs(s, wz) !== start.getTime();
 }
 
 /**

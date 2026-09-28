@@ -23,7 +23,7 @@ import {
   type ContextFactory,
 } from './caldav.js';
 import { buildNewEvent, checkRecurrenceStart, resolveNewTimes, type CreateInput } from './create.js';
-import { occurrenceFor, planDelete, planUpdate, type PutOp, type Span, type UpdatePlan } from './edit.js';
+import { occurrenceFor, planDelete, planUpdate, rollbackBody, type PutOp, type Span, type UpdatePlan } from './edit.js';
 import { assertOffset, collectOccurrences, loadEvent, type Row } from './events.js';
 import { findOccurrence, overlaps, type Occurrence } from './expand.js';
 import { LIST_NOTES_CHARS, formatCompactOccurrence, formatOccurrence, invitationSummary, personLabel, whenLabel } from './format.js';
@@ -591,7 +591,8 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       const who = invites.length > 0 ? await identity(dav) : undefined;
       const uid = newUid();
       const stamp = now();
-      const vcal = buildNewEvent(input, { zone, now: stamp, uid, times, ...(who ? { organizer: who.organizer } : {}) });
+      const built: string[] = [];
+      const vcal = buildNewEvent(input, { zone, now: stamp, uid, times, notes: built, ...(who ? { organizer: who.organizer } : {}) });
       // Checked now, before the confirm gate: the text must hold exactly the attendees the gate is about to show.
       const body = serializeForWrite(vcal);
       const draft = occurrenceFor(eventParts(vcal), undefined, zone) as Occurrence;
@@ -627,6 +628,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       );
       const notes: string[] = [`Calendar: "${calendar.name}" (${reason}).`];
       if (sharing !== undefined) notes.push(sharing);
+      notes.push(...built);
       if (args.recurrence) notes.push('This id names the whole series; list the events to get the id of one occurrence.');
       if (invites.length > 0) notes.push('iCloud sends the invitations itself; each attendee\'s reply shows up in their status on this event.');
       const warnings = [...(warning !== undefined ? [warning] : []), ...check.warnings];
@@ -718,7 +720,16 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       let firstEtag: string | undefined;
       if (plan.move) {
         const dest = childUrl(plan.move.url, loaded.resource.name);
-        await dav.client.move(loaded.resource.url, dest, { ifMatch: loaded.resource.etag ?? '*' });
+        try {
+          await dav.client.move(loaded.resource.url, dest, { ifMatch: loaded.resource.etag ?? '*' });
+        } catch (err) {
+          // Unknown outcome with changes still to apply: say they were not, or a caller who finds the event moved
+          // would take the whole update as done.
+          if (first && err instanceof UnconfirmedWriteError) {
+            throw partial(err, `Moving the event to "${plan.move.name}" may or may not have happened, and the other changes were NOT applied:`);
+          }
+          throw err;
+        }
         if (first) {
           try {
             const moved = await dav.client.get(dest);
@@ -729,7 +740,22 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
           }
         }
       } else {
-        firstEtag = await put(dav, first as PutOp);
+        try {
+          firstEtag = await put(dav, first as PutOp);
+        } catch (err) {
+          // A split whose first write (ending the original series) has an unknown outcome: the new series was never
+          // attempted. Without saying so, a caller re-reading would find the following occurrences gone and nothing
+          // pointing at why.
+          if (plan.newSeriesId !== undefined && err instanceof UnconfirmedWriteError) {
+            throw partial(
+              err,
+              'Ending the original series before this occurrence may or may not have happened, and the new series (this ' +
+                'occurrence and the ones after it) was NOT created. If the series now ends before this occurrence, those ' +
+                'occurrences are gone and must be created again:',
+            );
+          }
+          throw err;
+        }
       }
       const second = plan.puts[1];
       if (second) {
@@ -744,15 +770,23 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
           }
           // A definitive refusal: nothing was created, so put the original series back as it was — over our own
           // truncation (its ETag). Only when iCloud sent no ETag for that write is it restored unconditionally.
+          let restore: ReturnType<typeof rollbackBody>;
           try {
-            await dav.client.put(loaded.resource.url, loaded.resource.ics, ICALENDAR_CONTENT_TYPE, { ifMatch: firstEtag ?? '*' });
+            restore = rollbackBody(loaded.resource.ics, (first as PutOp).body, now());
+            await dav.client.put(loaded.resource.url, restore.body, ICALENDAR_CONTENT_TYPE, { ifMatch: firstEtag ?? '*' });
           } catch (rollbackErr) {
             throw partial(
               err,
               `The original series was ended before this occurrence, the new series could not be created, and restoring the original failed (${errorMessage(rollbackErr)}). The failure:`,
             );
           }
-          throw partial(err, 'Nothing was changed (the original series was restored): creating the new series failed:');
+          throw partial(
+            err,
+            restore.notifiesAttendees
+              ? 'The original series was restored, but iCloud had already emailed its attendees the shortened series, so they ' +
+                  'were sent that and then the restored one: creating the new series failed:'
+              : 'Nothing was changed (the original series was restored): creating the new series failed:',
+          );
         }
       }
 
@@ -850,7 +884,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     description:
       'Find free time in your iCloud calendars: open slots per day within working hours (workdayStart/workdayEnd, default ' +
       '09:00–17:00, weekdays only by default) at least minDurationMinutes long (default 30). Busy = events not marked free, ' +
-      'not cancelled and not declined by you; all-day events block only with includeAllDay. Nothing before now is offered. ' +
+      'not cancelled and not declined by you; all-day events block only with includeAllDay (then even marked free). Nothing before now is offered. ' +
       'Window max 31 days. ' +
       DATES_NOTE,
     inputSchema: z.strictObject({
@@ -861,7 +895,10 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       workdayStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be HH:MM').optional().describe('Working day start, HH:MM (default 09:00).'),
       workdayEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be HH:MM').optional().describe('Working day end, HH:MM (default 17:00).'),
       weekdaysOnly: z.boolean().optional().describe('Skip Saturdays and Sundays (default true).'),
-      includeAllDay: z.boolean().optional().describe('Let all-day events block the whole day (default false).'),
+      includeAllDay: z
+        .boolean()
+        .optional()
+        .describe('Let all-day events block the whole day, even ones marked free (Apple Calendar marks all-day events free by default). Default false.'),
       calendars: calendarsParam,
       timeZone: timeZoneParam,
     }),
@@ -887,9 +924,12 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
         collected.rows
           .filter(({ occurrence: o }) => {
             const comp = o.comp;
-            if ((textProp(comp, 'transp') ?? '').toUpperCase() === 'TRANSPARENT') return false;
             if ((textProp(comp, 'status') ?? '').toUpperCase() === 'CANCELLED') return false;
-            if (o.allDay && !includeAllDay) return false;
+            // includeAllDay is the caller saying all-day events count: it overrides their free/busy flag, which Apple
+            // Calendar sets to free for all-day events by default — honouring it would make includeAllDay a no-op there.
+            if (o.allDay) {
+              if (!includeAllDay) return false;
+            } else if ((textProp(comp, 'transp') ?? '').toUpperCase() === 'TRANSPARENT') return false;
             const mine = comp.getAllProperties('attendee').find((p) => isSelf(p, me.addresses));
             return String(mine?.getFirstParameter('partstat') ?? '').toUpperCase() !== 'DECLINED';
           })
@@ -914,7 +954,9 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       const notes = [...collected.notes];
       notes.push(
         'Busy = events not marked free (transparent), not cancelled and not declined by you' +
-          (includeAllDay ? '; all-day events block their whole day.' : '; all-day events do not block time (includeAllDay: true to change that).'),
+          (includeAllDay
+            ? '; all-day events block their whole day, even ones marked free.'
+            : '; all-day events do not block time (includeAllDay: true to change that).'),
       );
       if (notBefore.getTime() >= win.to.getTime()) {
         notes.push(`The whole window is in the past; free time is only offered from now on (${formatInstant(notBefore, zone).display}).`);

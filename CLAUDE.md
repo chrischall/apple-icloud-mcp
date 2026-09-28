@@ -132,15 +132,60 @@ end). A bare id on a recurring series is refused for single-occurrence edits; ne
 occurrence. Recurrences are expanded client-side with ical.js (iCloud's server `expand` breaks all-day
 events). ical.js has NO loop limits: VTIMEZONE rules that aren't plain yearly are swapped for the standard
 zone (an invitation-controlled TZ once hung the server), and rules it would spin on are refused before it
-sees them — keep those guards. API all-day end dates are INCLUSIVE; iCalendar DTEND is exclusive. Query
+sees them (`ruleProblem`, incl. a negative BYMONTHDAY with DAILY, which ical.js never matches; `sparseProblem`
+walks a DAILY/WEEKLY rule's day filters over one 400-year cycle — ical.js steps those day by day in ONE call, and
+`FREQ=DAILY;INTERVAL=7;BYDAY=TU` from a Monday never returned — charging each day the times of day it tries,
+BYHOUR×BYMINUTE×BYSECOND; `timeProblem` walks a sub-daily rule's time filters over one day: ical.js steps
+`FREQ=SECONDLY;BYHOUR=3;BYMINUTE=0;BYSECOND=0` a minute at a time, and `FREQ=MINUTELY;INTERVAL=1440;BYHOUR=3` from
+midnight never reaches 3 AM) — keep those guards. `seriesWalker` doesn't trust ical.js's RecurExpansion with the
+whole set: it hands it a view (RDATE PERIODs as their starts, no EXDATE), skips an instant already given (per kind
+by rough value; across kinds only near an RDATE written another way than DTSTART), applies EXDATEs itself (ical.js's
+one-pass pointer let excluded instances through), and gives up after `MAX_SKIPPED` skips per walk. A series without
+an RRULE is walked by `listWalk` instead — DTSTART and the RDATEs sorted by instant (RFC 5545 makes DTSTART the
+first instance; ical.js yields it only through a rule, and finds its place in a bare list by a binary search that a
+value of another kind tying with it sends past it). A DATE instance of a timed series is excluded only by a
+date-time EXDATE at the midnight that starts its date, by that value's own wall clock (as `recurrenceValue` writes
+one) — never by an instant: midnight UTC is 8 PM in New York, another occurrence. Such an instance can be deleted
+(`planDelete` refuses, in memory, an EXDATE that would also remove another instance) but not edited alone, split
+at, or moved through — an override's RECURRENCE-ID takes the series' type and could not name it. Its walk's
+`exact` says whether it comes in start order: ical.js orders floating/DATE values as if UTC, so a series mixing them
+with fixed ones can stray by a zone offset — callers keep looking a margin past a target or window (`firstInstance`
+only until each kind nearby has shown one). A PERIOD instance keeps its own end; a series holding one is never
+retimed, split or cut short (refused). Without an RRULE, DTSTART is cut like an RDATE (one can precede it) and a
+split carries it over. Never ical.js's `convertToZone` (it takes the offset at the UTC wall clock as if local, an
+hour off next to DST changes): `timeAt` takes the offset in force from the zone's own UTC change list — and 0
+before its first change, as ical.js reads a wall time there. Never rebuild a value already written in the series'
+zone through its instant: ical.js reads a time a change skips (02:30 on spring-forward day) as an instant whose true
+wall time is 01:30, so `recurrenceValue`, overrides, series shifts (the reference too: DTSTART for a bare id), a
+floating UNTIL (`untilBefore`) keep such a value's own fields; `rfcInstantOf` is its RFC 5545 reading (the offset
+before the change) where a zone change needs one. Readers disagree on such a start's instant, so an event starting
+at one gets DURATION, not DTEND (`setEnd`); a new series or series move TO such a wall time is refused (every other
+day would repeat at the time the clocks jumped to). ical.js reads a repeated hour's wall time as one pass (the
+second; the first where DST is negative, as in Dublin; floating values the first): `setEventTimes` writes an instant
+on the other pass in UTC for a single event (a series keeps its wall time and says it now starts on the other
+pass), and every end (`setEnd`) from its start as read, in UTC when no wall time reads back as it. An RDATE on that
+pass keeps its own value as RECURRENCE-ID/EXDATE. API all-day end dates are INCLUSIVE; iCalendar DTEND is
+exclusive. Query
 windows are widened a day each side (iCloud evaluates all-day events in its own zone) then filtered exactly.
-`futureEvents` splits the series (UNTIL on the old, new UID for the new, COUNT adjusted; restore on failure);
-`allEvents` time changes shift DTSTART, EXDATE/RDATE/UNTIL, overrides AND plain BYDAY weekdays by wall
-clock. PUT with If-Match; 412 → "changed since read". **Every write goes through `serializeForWrite`**, which
+`futureEvents` splits the series (UNTIL on the old, new UID for the new, COUNT adjusted; restore on failure) —
+only at an occurrence the RRULE produces (an RDATE one is refused; a series of RDATEs only splits at any of them), and
+ending a series never rewrites a rule that
+already ends earlier (COUNT→UNTIL would EXTEND it). An unknown outcome on the split's first PUT says the new
+series was NOT created; a restore of a series with attendees carries a SEQUENCE above the shortened one they were
+sent (RFC 5546), and never claims "nothing was changed". `allEvents` time changes shift DTSTART,
+EXDATE/RDATE/UNTIL, overrides AND plain BYDAY weekdays by wall clock — DATE values (and the rule's days) by the
+calendar days DTSTART moves, whatever occurrence the call named (an RDATE at another time can cross midnight when
+DTSTART does not); every-Nth-week rules turn WKST with the days, every-Nth-month/year ones on named days are
+refused; then `checkShifted` compares the days of the old and new series' natural instances (not times of day, not
+overrides) and refuses (nothing written) a move that would gain, drop or re-day one — over the first 400 instances
+or ten years, whichever ends first, up to the day of the instance that stopped that walk (two days short of it
+when a walk can stray; unbounded, a sparse rule like Feb 29 on a Monday walked for millennia). PUT with If-Match; 412 → "changed since
+read". **Every write goes through `serializeForWrite`** (delete's EXDATE/truncation PUT too), which
 re-parses the ICS and refuses it if any line break slipped into a value or the ATTENDEE/ORGANIZER/UID set differs
 from what was built — a CR/LF in a `url` once injected an ATTENDEE past the confirm gate. Schemas refuse control
 characters (C0, C1, U+2028/9) in single-line fields. `list_events`/`search_events` default to a compact
-`view`. Additive mode refuses calendars shared with others (`CS:shared-owner` / sharee privileges, unverified live).
+`view`. Additive mode refuses calendars shared with others (`CS:shared` / `CS:shared-owner` in the resourcetype,
+unverified live). `find_free_time` `includeAllDay` blocks all-day events even when marked free (TRANSP).
 
 **Contacts** — vCard 3.0 edited as RAW LINES (a generic serializer rewrote Apple's `itemN.` groups); untouched
 lines round-trip byte-for-byte. `entryId` = hash of property+group+raw value, `~n` suffix for duplicates,

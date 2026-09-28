@@ -178,6 +178,7 @@ describe('parseDateInput', () => {
       dateOnly: true,
       ymd: '2026-10-03',
       hasOffset: false,
+      skipped: false,
     });
     expect(parseDateInput('  2026-10-03 ', 'fromDate', 'UTC').ymd).toBe('2026-10-03');
   });
@@ -192,9 +193,13 @@ describe('parseDateInput', () => {
     expect(iso(parseDateInput('2026-10-03T16:30', 'startDate', IST).instant)).toBe('2026-10-03T11:00:00.000Z');
   });
 
-  it('applies DST resolution to wall-clock input', () => {
-    expect(iso(parseDateInput('2026-03-08T02:30', 'startDate', NY).instant)).toBe('2026-03-08T07:30:00.000Z');
-    expect(iso(parseDateInput('2026-11-01T01:30', 'startDate', NY).instant)).toBe('2026-11-01T05:30:00.000Z');
+  it('applies DST resolution to wall-clock input, and says when the clocks skip the time given', () => {
+    expect(parseDateInput('2026-03-08T02:30', 'startDate', NY)).toMatchObject({ instant: new Date('2026-03-08T07:30:00.000Z'), skipped: true });
+    expect(parseDateInput('2026-11-01T01:30', 'startDate', NY)).toMatchObject({ instant: new Date('2026-11-01T05:30:00.000Z'), skipped: false });
+    // Santiago skips midnight; Samoa skipped a whole day (2011-12-30).
+    expect(parseDateInput('2026-09-06T00:15', 'startDate', 'America/Santiago').skipped).toBe(true);
+    expect(parseDateInput('2011-12-30T10:00', 'startDate', 'Pacific/Apia').skipped).toBe(true);
+    expect(parseDateInput('2026-03-08T02:30-05:00', 'startDate', NY).skipped).toBe(false);
   });
 
   it('honours Z and every offset spelling, and reports the date of the instant in the zone', () => {

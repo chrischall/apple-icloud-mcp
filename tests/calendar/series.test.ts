@@ -16,6 +16,7 @@ import {
 import {
   applyField,
   changedFields,
+  checkShifted,
   continuationSeries,
   createOverride,
   editSeries,
@@ -316,6 +317,19 @@ describe('shiftRule', () => {
     expect(shiftRule(rule('FREQ=WEEKLY;BYDAY=MO,WE'), 1, false).rule.toString()).toBe('FREQ=WEEKLY;BYDAY=TU,TH');
     expect(shiftRule(rule('FREQ=WEEKLY;BYDAY=SU,MO'), -1, false).rule.toString()).toBe('FREQ=WEEKLY;BYDAY=SA,SU');
     expect(shiftRule(rule('FREQ=DAILY;BYDAY=FR'), 10, false).rule.toString()).toBe('FREQ=DAILY;BYDAY=MO');
+    expect(shiftRule(rule('FREQ=MONTHLY;BYDAY=MO'), 1, false).rule.toString()).toBe('FREQ=MONTHLY;BYDAY=TU');
+  });
+
+  it('turns the week start with the days of an every-Nth-week rule, so no day changes week', () => {
+    const moved = shiftRule(rule('FREQ=WEEKLY;INTERVAL=2;BYDAY=SA,SU'), 1, false);
+    expect(moved.rule.toString()).toBe('FREQ=WEEKLY;INTERVAL=2;BYDAY=SU,MO;WKST=TU');
+    expect(moved.note).toBe('The repeat days moved with it: SA,SU → SU,MO. Its weeks now start on TU instead of MO (WKST), so it keeps the same weeks.');
+    expect(shiftRule(rule('FREQ=WEEKLY;INTERVAL=3;BYDAY=MO;WKST=SU'), -1, false).rule.toString()).toBe('FREQ=WEEKLY;INTERVAL=3;BYDAY=SU;WKST=SA');
+    // Back to Monday, the default week start.
+    expect(shiftRule(rule('FREQ=WEEKLY;INTERVAL=2;BYDAY=SA;WKST=SU'), 1, false).rule.toString()).toBe('FREQ=WEEKLY;INTERVAL=2;BYDAY=SU');
+    // Every week, or every other day: the week start plays no part and is left alone.
+    expect(shiftRule(rule('FREQ=WEEKLY;BYDAY=SA'), 1, false).rule.toString()).toBe('FREQ=WEEKLY;BYDAY=SU');
+    expect(shiftRule(rule('FREQ=DAILY;INTERVAL=2;BYDAY=SA'), 1, false).rule.toString()).toBe('FREQ=DAILY;INTERVAL=2;BYDAY=SU');
   });
 
   it('leaves a rule alone when nothing it pins moves', () => {
@@ -334,6 +348,8 @@ describe('shiftRule', () => {
       ['FREQ=YEARLY;BYMONTH=10;BYDAY=-1FR', 7, false, /\(BYMONTH, a numbered BYDAY\)/],
       ['FREQ=MONTHLY;BYDAY=MO,TU;BYSETPOS=-1', -1, false, /\(BYSETPOS\)/],
       ['FREQ=DAILY;BYHOUR=9,17', 0, true, /fixes the time of day \(BYHOUR\)/],
+      ['FREQ=MONTHLY;INTERVAL=2;BYDAY=MO', 1, false, /repeats on named days every 2 months/],
+      ['FREQ=YEARLY;INTERVAL=3;BYDAY=FR', -1, false, /repeats on named days every 3 years/],
     ];
     for (const [text, days, timeShifted, message] of cases) {
       expect(() => shiftRule(rule(text), days, timeShifted), text).toThrow(message);
@@ -416,6 +432,64 @@ describe('editSeries and the repeat rule', () => {
   });
 });
 
+describe('editSeries and values of the other type', () => {
+  const keys = (vcal: Component) =>
+    expandSeries(eventParts(parseCalendar(serialize(vcal), 't')), { from: new Date('2026-09-01T00:00:00Z'), to: new Date('2027-03-01T00:00:00Z'), zone: NY }).occurrences.map(
+      (o) => o.startYmd ?? o.start.toISOString(),
+    );
+  const moveAll = (l: { vcal: Component; parts: EventParts }, occ: string, startDate: string) => {
+    const target = findOccurrence(l.parts, occ, NY) as Occurrence;
+    const input = { startDate };
+    editSeries({ vcal: l.vcal, master: l.parts.master as Component, overrides: l.parts.overrides, target, times: planTimes(target, input, NY, true), timeInput: input, fields: {}, who: undefined, zone: NY, now: NOW });
+  };
+
+  it('moves a DATE-TIME UNTIL of an all-day series by whole days, keeping the final occurrence', () => {
+    const l = load(...vevent('UID:a', 'DTSTART;VALUE=DATE:20261005', 'DTEND;VALUE=DATE:20261006', 'RRULE:FREQ=WEEKLY;UNTIL=20261026T035959Z'));
+    expect(keys(l.vcal)).toEqual(['2026-10-05', '2026-10-12', '2026-10-19', '2026-10-26']);
+    moveAll(l, '2026-10-05', '2026-10-07');
+    expect(serialize(l.vcal)).toContain('UNTIL=20261028T035959Z');
+    expect(keys(l.vcal)).toEqual(['2026-10-07', '2026-10-14', '2026-10-21', '2026-10-28']);
+  });
+
+  it('moves a DATE UNTIL or EXDATE of a timed series by the days its occurrences move', () => {
+    const u = load(
+      ...NY_TZ,
+      ...vevent('UID:t', 'DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000', 'RRULE:FREQ=WEEKLY;UNTIL=20261020'),
+    );
+    expect(keys(u.vcal)).toEqual(['2026-10-05T13:00:00.000Z', '2026-10-12T13:00:00.000Z', '2026-10-19T13:00:00.000Z']);
+    moveAll(u, '2026-10-05T13:00:00Z', '2026-10-06T09:00');
+    expect(keys(u.vcal)).toEqual(['2026-10-06T13:00:00.000Z', '2026-10-13T13:00:00.000Z', '2026-10-20T13:00:00.000Z']);
+
+    const x = load(
+      ...NY_TZ,
+      ...vevent('UID:x', 'DTSTART;TZID=America/New_York:20261005T090000', 'DTEND;TZID=America/New_York:20261005T100000', 'RRULE:FREQ=WEEKLY;COUNT=4', 'EXDATE;VALUE=DATE:20261012'),
+    );
+    expect(keys(x.vcal)).toEqual(['2026-10-05T13:00:00.000Z', '2026-10-19T13:00:00.000Z', '2026-10-26T13:00:00.000Z']);
+    moveAll(x, '2026-10-05T13:00:00Z', '2026-10-06T09:00');
+    expect(serialize(x.vcal)).toContain('EXDATE;VALUE=DATE:20261013');
+    expect(keys(x.vcal)).toEqual(['2026-10-06T13:00:00.000Z', '2026-10-20T13:00:00.000Z', '2026-10-27T13:00:00.000Z']);
+  });
+});
+
+describe('checkShifted', () => {
+  const rule = ICAL.Recur.fromString('FREQ=MONTHLY');
+
+  it('accepts a series whose every instance moved by the shift', () => {
+    expect(() => checkShifted(['2026-10-31', '2026-12-31'], ['2026-10-31', '2026-12-31'], rule)).not.toThrow();
+    expect(() => checkShifted([], [], undefined)).not.toThrow();
+  });
+
+  it('refuses one that gains, drops or re-days an occurrence, naming the first', () => {
+    expect(() => checkShifted(['2026-10-31'], ['2026-10-31', '2026-11-30'], rule)).toThrow(
+      'occurrence 2 should become no occurrence, but the rewritten series would have one on 2026-11-30',
+    );
+    expect(() => checkShifted(['2026-10-31', '2026-12-01'], ['2026-10-31'], undefined)).toThrow(
+      'calendar: this series cannot be moved by moving its start: occurrence 2 should become an occurrence on 2026-12-01, but the rewritten series would have none',
+    );
+    expect(() => checkShifted(['2026-10-31'], ['2026-11-01'], rule)).toThrow(AppleToolError);
+  });
+});
+
 describe('splitting', () => {
   it('knows the first instance and the instant of an #occ value', () => {
     const { parts } = load(...vevent('UID:s', 'DTSTART:20261019T130000Z', 'RRULE:FREQ=DAILY'));
@@ -447,7 +521,7 @@ describe('splitting', () => {
     const target = findOccurrence(l.parts, '2026-10-23T13:00:00Z', NY) as Occurrence;
     const carried = l.parts.overrides.slice(1);
     const next = continuationSeries(l.vcal, master, carried, target, 4, { uid: 'NEW', now: NOW, zone: NY });
-    const removed = truncateSeries(l.vcal, master, l.parts.overrides, '2026-10-23T13:00:00Z', NY, NOW);
+    const removed = truncateSeries(l.vcal, master, l.parts.overrides, target, NY, NOW);
     expect(removed).toHaveLength(1);
     const oldText = unfold(serialize(l.vcal));
     expect(oldText).toContain('RRULE:FREQ=DAILY;UNTIL=20261023T125959Z');
@@ -476,20 +550,20 @@ describe('splitting', () => {
     const d = load(...vevent('UID:d', 'DTSTART;VALUE=DATE:20261019', 'RRULE:FREQ=DAILY'));
     const dt = findOccurrence(d.parts, '2026-10-22', NY) as Occurrence;
     const dn = continuationSeries(d.vcal, d.parts.master as Component, [], dt, 3, { uid: 'D2', now: NOW, zone: NY });
-    truncateSeries(d.vcal, d.parts.master as Component, [], '2026-10-22', NY, NOW);
+    truncateSeries(d.vcal, d.parts.master as Component, [], dt, NY, NOW);
     expect(serialize(d.vcal)).toContain('RRULE:FREQ=DAILY;UNTIL=20261021');
     expect(serialize(dn.vcal)).toContain('DTSTART;VALUE=DATE:20261022');
     expect(serialize(dn.vcal)).toContain('DTEND;VALUE=DATE:20261023');
     expect(serialize(dn.vcal)).toContain('RRULE:FREQ=DAILY\r\n');
 
     const f = load(...vevent('UID:f', 'DTSTART:20261019T090000', 'RRULE:FREQ=DAILY'));
-    truncateSeries(f.vcal, f.parts.master as Component, [], '2026-10-22T13:00:00Z', NY, NOW);
+    truncateSeries(f.vcal, f.parts.master as Component, [], findOccurrence(f.parts, '2026-10-22T13:00:00Z', NY) as Occurrence, NY, NOW);
     expect(serialize(f.vcal)).toContain('UNTIL=20261022T085959');
 
     const r = load(...vevent('UID:r', 'DTSTART:20261019T130000Z', 'RDATE:20261022T130000Z,20261025T130000Z'));
     const rt = findOccurrence(r.parts, '2026-10-22T13:00:00Z', NY) as Occurrence;
     const rn = continuationSeries(r.vcal, r.parts.master as Component, [], rt, 0, { uid: 'R2', now: NOW, zone: NY });
-    truncateSeries(r.vcal, r.parts.master as Component, [], '2026-10-22T13:00:00Z', NY, NOW);
+    truncateSeries(r.vcal, r.parts.master as Component, [], rt, NY, NOW);
     expect(serialize(r.vcal)).not.toContain('RDATE');
     expect(serialize(rn.vcal)).toContain('RDATE:20261022T130000Z,20261025T130000Z'.split(',')[1]);
     expect(startTimeOf(rn.master).toString()).toBe('2026-10-22T13:00:00Z');

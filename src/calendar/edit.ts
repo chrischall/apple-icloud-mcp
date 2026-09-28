@@ -1,7 +1,7 @@
 import { AppleToolError, InvalidArgumentError } from '../errors.js';
 import { childUrl } from '../dav/client.js';
 import { assertWritable, resolveCalendar, type CalendarInfo } from './caldav.js';
-import { countRuleInstancesBefore, expandSeries, findOccurrence, seriesWalker, singleOccurrence, type Occurrence } from './expand.js';
+import { expandSeries, findOccurrence, rulePosition, seriesWalker, singleOccurrence, type Occurrence } from './expand.js';
 import type { LoadedEvent } from './events.js';
 import { formatOccurrence, recurrenceOf, whenLabel } from './format.js';
 import { formatEventId, formatOccurrenceId } from './ids.js';
@@ -11,8 +11,9 @@ import {
   instantOf,
   isRecurringMaster,
   isSelf,
+  parseCalendar,
   readAttendees,
-  serialize,
+  ruleOf,
   serializeForWrite,
   textProp,
   touch,
@@ -97,12 +98,19 @@ function hasAttendees(vcal: Component): boolean {
  * is assumed to). Deleting the last one by EXDATE would otherwise leave a
  * resource that shows nothing anywhere yet still exists.
  */
-function hasInstance(master: Component): boolean {
+function hasInstance(master: Component, zone: string): boolean {
   try {
-    return seriesWalker(master)() !== null;
+    return seriesWalker(master, zone)() !== null;
   } catch {
     return true;
   }
+}
+
+/** The keys of a master's own instances within two days of an occurrence (what an EXDATE for it could also match). */
+function instancesNear(master: Component, target: Occurrence, zone: string): Set<string> {
+  const at = instantOf(target.recurrenceTime as Time, zone).getTime();
+  const near = expandSeries({ master, overrides: [] }, { from: new Date(at - 2 * 86_400_000), to: new Date(at + 2 * 86_400_000), zone });
+  return new Set(near.occurrences.map((o) => o.occ as string));
 }
 
 function ridInstant(comp: Component, zone: string): number {
@@ -178,7 +186,8 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
   const notifiesAttendees = hasAttendees(vcal) || (input.attendees?.length ?? 0) > 0;
   const ifMatch = resource.etag ?? '*';
   const notes: string[] = [];
-  const edit = { times, timeInput: input, fields: input, who: env.who, zone, now: env.now, notes };
+  const checks: Array<() => void> = [];
+  const edit = { times, timeInput: input, fields: input, who: env.who, zone, now: env.now, notes, checks };
 
   let effective: Span | 'single' = span;
   let resultVcal = vcal;
@@ -213,11 +222,21 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
   } else {
     const occ = target.occ as string;
     const at = occInstant(occ, zone).getTime();
-    const used = countRuleInstancesBefore(parts.master, new Date(at), zone);
+    const position = rulePosition(parts.master, new Date(at), zone);
+    if (ruleOf(parts.master) && position.next?.getTime() !== at) {
+      // An occurrence added by RDATE: the continuation would start its rule there — on the wrong weekday, or (past a
+      // COUNT) with no end at all — and list the occurrence twice.
+      throw new AppleToolError(
+        'UNSUPPORTED',
+        `calendar: this occurrence was added to the series individually (an RDATE), not by its repeat rule, so the series cannot be split at it. Nothing was changed.`,
+        { hint: 'Change this occurrence alone (span "thisEvent"), change the whole series (span "allEvents"), or split at an occurrence the rule produces.' },
+      );
+    }
+    const used = position.before;
     const carried = parts.overrides.filter((o) => ridInstant(o, zone) >= at);
     const uid = env.newUid();
     const next = continuationSeries(vcal, parts.master, carried, target, used, { uid, now: env.now, zone });
-    truncateSeries(vcal, parts.master, parts.overrides, occ, zone, env.now);
+    truncateSeries(vcal, parts.master, parts.overrides, target, zone, env.now);
     const nextTarget = findOccurrence({ master: next.master, overrides: next.overrides }, occ, zone) as Occurrence;
     key = editSeries({ ...edit, vcal: next.vcal, master: next.master, overrides: next.overrides, target: nextTarget });
     resultVcal = next.vcal;
@@ -242,6 +261,8 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
       { hint: 'Edit this occurrence alone (span "thisEvent"), or delete the series and create it again with the new times.' },
     );
   }
+  // Then that every other occurrence moved with it (still in memory: a refusal writes nothing).
+  for (const check of checks) check();
   const after = formatOccurrence(edited, { calendar: destCal, baseId, zone });
   return {
     span: effective,
@@ -254,6 +275,27 @@ export function planUpdate(loaded: LoadedEvent, input: UpdateInput, env: EditEnv
     notifiesAttendees,
     ...(newSeriesId !== undefined ? { newSeriesId } : {}),
   };
+}
+
+/**
+ * The text that puts a series back after a split whose second half could not
+ * be created. Without attendees it is the original, byte for byte. With them,
+ * iCloud has already emailed the shortened series (`sent`, at a higher
+ * SEQUENCE), and an attendee's calendar ignores an update whose SEQUENCE is
+ * not above the one it holds (RFC 5546 §2.1.4) — so every component of the
+ * restore carries a SEQUENCE above any the shortened series carried, or the
+ * attendees would keep the shortened one.
+ */
+export function rollbackBody(original: string, sent: string, now: Date): { body: string; notifiesAttendees: boolean } {
+  const vcal = parseCalendar(original, 'the original series');
+  if (!hasAttendees(vcal)) return { body: original, notifiesAttendees: false };
+  const sequences = (v: Component) => v.getAllSubcomponents('vevent').map((ev) => Number(ev.getFirstPropertyValue('sequence') ?? 0));
+  const top = Math.max(...sequences(vcal), ...sequences(parseCalendar(sent, 'the shortened series')));
+  for (const ev of vcal.getAllSubcomponents('vevent')) {
+    ev.updatePropertyWithValue('sequence', top);
+    touch(ev, now); // top + 1, with fresh DTSTAMP / LAST-MODIFIED
+  }
+  return { body: serializeForWrite(vcal), notifiesAttendees: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -300,20 +342,33 @@ export function planDelete(loaded: LoadedEvent, span: Span, env: { zone: string;
     const master = parts.master;
     if (span === 'thisEvent') {
       if (master) {
+        const before = instancesNear(master, target, zone);
         addTimeProp(master, 'exdate', recurrenceValue(master, target, zone));
+        const after = instancesNear(master, target, zone);
+        const lost = [...before].filter((key) => key !== occ && !after.has(key));
+        if (lost.length > 0) {
+          // Planned in memory: nothing has been written.
+          throw new AppleToolError(
+            'UNSUPPORTED',
+            `calendar: this occurrence cannot be deleted on its own: the exclusion (EXDATE) that removes it would also remove ${lost.join(', ')} — ` +
+              'an all-day date and a timed occurrence at its midnight are one value to an exclusion. Nothing was changed.',
+            { hint: 'Delete the series (span "allEvents"), or change it in Apple Calendar.' },
+          );
+        }
         touch(master, now);
       }
       if (target.isOverride) vcal.removeSubcomponent(target.comp);
     } else if (master) {
-      truncateSeries(vcal, master, parts.overrides, occ, zone, now);
+      truncateSeries(vcal, master, parts.overrides, target, zone, now);
     } else {
       const at = ridInstant(target.comp, zone);
       for (const o of parts.overrides) if (ridInstant(o, zone) >= at) vcal.removeSubcomponent(o);
     }
     scope = SCOPE[span];
     const left = eventParts(vcal);
-    if (left.overrides.length > 0 || (left.master && hasInstance(left.master))) {
-      op = { kind: 'put', url: resource.url, body: serialize(vcal), ifMatch };
+    if (left.overrides.length > 0 || (left.master && hasInstance(left.master, zone))) {
+      // Checked like every other write: a stored value holding a stray CR (another app's) is refused, never re-sent.
+      op = { kind: 'put', url: resource.url, body: serializeForWrite(vcal), ifMatch };
       verify = { occ };
     } else notes.push('No occurrence would be left, so the whole event is deleted.');
   }
