@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.1](https://github.com/chrischall/apple-icloud-mcp/compare/v0.2.0...v0.2.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **calendar:** list a many-day all-day series instance that began days before the window ([#30](https://github.com/chrischall/apple-icloud-mcp/issues/30)) ([42b85fc](https://github.com/chrischall/apple-icloud-mcp/commit/42b85fc4dd40ff57b5937a398d2319eb57d6c2da))
+* **calendar:** read floating values in DISPLAY_TZ whatever timeZone a call passes ([#28](https://github.com/chrischall/apple-icloud-mcp/issues/28)) ([4fc2860](https://github.com/chrischall/apple-icloud-mcp/commit/4fc2860285db2beb6fb4a1c11466379b13c7597c))
+* **calendar:** write a floating override's wall length through setEnd when its series is zoned ([#25](https://github.com/chrischall/apple-icloud-mcp/issues/25)) ([67d4c38](https://github.com/chrischall/apple-icloud-mcp/commit/67d4c38ea135cba6b9aaf7908fea4916fd81d4a2))
+
+
+### Performance
+
+* **calendar:** read a zone's offset from Intl once per UTC hour ([#27](https://github.com/chrischall/apple-icloud-mcp/issues/27)) ([8f507e2](https://github.com/chrischall/apple-icloud-mcp/commit/8f507e298805cc809ae277349a974f97ff830278))
+
 ## [0.2.0](https://github.com/chrischall/apple-icloud-mcp/compare/v0.1.0...v0.2.0) (2026-09-28)
 
 
