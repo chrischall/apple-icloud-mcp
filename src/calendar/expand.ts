@@ -6,15 +6,18 @@ import {
   daysBetween,
   endTimeOf,
   instantOf,
+  endAfter,
   endInstantOf,
   isRecurringMaster,
   lengthOf,
   occKey,
+  roughMs,
   ruleOf,
   startTimeOf,
   ymdOf,
   type Component,
   type EventParts,
+  type Length,
   type Recur,
   type Time,
 } from './ics.js';
@@ -261,14 +264,10 @@ export function timeProblem(recur: Recur, dtstart: Time): string | undefined {
     }
     return matches === 0 ? Number.POSITIVE_INFINITY : period / matches;
   });
-  // Never matching, it spins whatever COUNT or UNTIL says: ical.js checks UNTIL only between the instances it finds.
   if (ratio === Number.POSITIVE_INFINITY) return `FREQ=${freq} whose time filters never match a time it steps on`;
-  if (ratio <= MAX_STEPS_PER_INSTANCE) return undefined;
-  // A costly rule is still walkable when its COUNT or UNTIL keeps the whole walk within what MAX_STEPS_PER_INSTANCE
-  // allows a walk to MAX_EXPANSION_STEPS instances.
-  const until = recur.until ? (Date.UTC(recur.until.year, recur.until.month - 1, recur.until.day, recur.until.hour, recur.until.minute, recur.until.second) - Date.UTC(dtstart.year, dtstart.month - 1, dtstart.day, dtstart.hour, dtstart.minute, dtstart.second)) / 1000 / step * Math.max(1, own.length) : Number.POSITIVE_INFINITY;
-  const walk = Math.min(recur.count ? recur.count * ratio : Number.POSITIVE_INFINITY, until);
-  return walk <= MAX_EXPANSION_STEPS * MAX_STEPS_PER_INSTANCE ? undefined : `FREQ=${freq} with time filters that skip too many of the times it steps on`;
+  // Refused even when COUNT or UNTIL bounds it: estimating that walk means modelling every list ical.js runs through
+  // (a MINUTELY rule steps its BYSECOND list too), and no calendar app writes such rules — invitations do.
+  return ratio > MAX_STEPS_PER_INSTANCE ? `FREQ=${freq} with time filters that skip too many of the times it steps on` : undefined;
 }
 
 /** Run an ical.js step, turning its errors into `UnexpandableRuleError`. */
@@ -572,7 +571,7 @@ function overrideOccurrence(ovr: Component, master: Component | undefined, key: 
 interface SeriesShape {
   allDay: boolean;
   days: number;
-  durationMs: number;
+  length: Length;
   /** A timed instance's end instant (ms) by its `#occ=` key, for an instance an RDATE PERIOD gives its own length. */
   periodEnds: Map<string, number>;
   /** The longest any instance lasts (ms). */
@@ -581,11 +580,11 @@ interface SeriesShape {
 
 function seriesShape(master: Component, zone: string): SeriesShape {
   const s = componentSpan(master, zone);
-  // Every instance lasts the series' own length (RFC 5545 §3.8.5.3) — for a floating one, that of its wall times,
-  // which its own DTSTART's day can read otherwise (see lengthOf).
-  const durationMs = s.allDay ? 0 : Math.max(0, lengthOf(master, zone));
+  // Every instance lasts the series' own length (RFC 5545 §3.8.5.3; see Length).
+  const length = s.allDay ? { ms: 0 } : lengthOf(master, zone);
   const periodEnds = new Map<string, number>();
-  let longestMs = durationMs;
+  // A DURATION's day is 25 hours across a DST change.
+  let longestMs = Math.max(0, roughMs(length)) + ('ms' in length ? 0 : 3_600_000);
   let values: Array<Time | Period> = [];
   try {
     values = rdateValues(master);
@@ -602,7 +601,7 @@ function seriesShape(master: Component, zone: string): SeriesShape {
   return {
     allDay: s.allDay,
     days: s.allDay ? daysBetween(s.startYmd as string, s.endYmd as string) + 1 : 0,
-    durationMs,
+    length,
     periodEnds,
     longestMs,
   };
@@ -613,7 +612,9 @@ function naturalOccurrence(master: Component, t: Time, key: string, shape: Serie
   if (shape.allDay) span = allDaySpan(ymdOf(t), shape.days, zone);
   else {
     const start = instantOf(t, zone);
-    span = { allDay: false, start, end: new Date(shape.periodEnds.get(key) ?? start.getTime() + shape.durationMs) };
+    const length = shape.length;
+    const end = shape.periodEnds.get(key) ?? ('ms' in length ? start.getTime() + length.ms : endAfter(t, length, zone).getTime());
+    span = { allDay: false, start, end: new Date(Math.max(start.getTime(), end)) };
   }
   return { comp: master, master, ...span, occ: key, recurrenceTime: t, isOverride: false, recurring: true };
 }
