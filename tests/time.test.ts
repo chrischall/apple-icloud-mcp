@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  OFFSET_CACHE_LIMIT,
   addDaysYmd,
   formatDateOnly,
   formatInstant,
@@ -90,6 +91,81 @@ describe('zonedToInstant', () => {
     const t = zonedToInstant({ year: 50, month: 3, day: 1, hour: 12 }, 'UTC');
     expect(t.getUTCFullYear()).toBe(50);
     expect(zonedParts(t, 'UTC')).toMatchObject({ year: 50, month: 3, day: 1, hour: 12 });
+  });
+});
+
+describe('cached zone offsets', () => {
+  // Intl, read afresh: what zonedParts / zoneOffsetMs / zonedToInstant returned before the cache.
+  const fresh = (zone: string) => new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', weekday: 'short' });
+  const refParts = (t: number, zone: string) => {
+    const o: Record<string, string> = {};
+    for (const p of fresh(zone).formatToParts(new Date(t))) o[p.type] = p.value;
+    return { year: +o.year!, month: +o.month!, day: +o.day!, hour: +o.hour!, minute: +o.minute!, second: +o.second!, weekday: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(o.weekday!) };
+  };
+  const refOffset = (t: number, zone: string) => {
+    const p = refParts(t, zone);
+    const u = new Date(0);
+    u.setUTCFullYear(p.year, p.month - 1, p.day);
+    u.setUTCHours(p.hour, p.minute, p.second, 0);
+    return u.getTime() - (t - new Date(t).getUTCMilliseconds());
+  };
+  const refInstant = (w: { year: number; month: number; day: number; hour: number; minute: number }, zone: string) => {
+    const local = Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute);
+    const DAY = 86_400_000;
+    const hits = [...new Set([refOffset(local - DAY, zone), refOffset(local, zone), refOffset(local + DAY, zone)])]
+      .map((off) => local - off)
+      .filter((t) => { const p = refParts(t, zone); return p.day === w.day && p.hour === w.hour && p.minute === w.minute; });
+    return hits.length ? Math.min(...hits) : local - refOffset(local - DAY, zone);
+  };
+  // Each zone around a change: a UTC-hour one (New York), half-hour zones whose changes fall inside a UTC hour
+  // (Lord Howe's 30-minute shift, Adelaide, Chatham's +12:45), Kathmandu's 1986 move to +05:45, and Samoa's
+  // skipped 2011-12-30.
+  const CHANGES: [string, string][] = [
+    [NY, '2026-03-08T07:00:00Z'], [NY, '2026-11-01T06:00:00Z'],
+    [LHI, '2026-10-03T15:30:00Z'], [LHI, '2026-04-04T15:00:00Z'],
+    [ADL, '2026-10-03T16:30:00Z'], ['Pacific/Chatham', '2026-09-26T14:00:00Z'],
+    ['Asia/Kathmandu', '1985-12-31T18:30:00Z'], ['Pacific/Apia', '2011-12-30T10:00:00Z'],
+  ];
+
+  it('reads the same offsets and wall fields as Intl on both sides of each change', () => {
+    for (const [zone, at] of CHANGES) {
+      const mid = Date.parse(at);
+      for (let t = mid - 26 * H; t <= mid + 26 * H; t += 7 * 60_000 + 13_250) {
+        expect([zone, t, zoneOffsetMs(t, zone)]).toEqual([zone, t, refOffset(t, zone)]);
+        expect([zone, t, zonedParts(new Date(t), zone)]).toEqual([zone, t, refParts(t, zone)]);
+      }
+    }
+  });
+
+  it('resolves every wall time of the days around each change as before', () => {
+    for (const [zone, at] of CHANGES) {
+      const first = zonedParts(new Date(Date.parse(at) - 26 * H), zone);
+      for (let i = 0; i < 4 * 24 * 4; i++) {
+        const w = { year: first.year, month: first.month, day: first.day + Math.floor(i / 96), hour: Math.floor((i % 96) / 4), minute: (i % 4) * 15 };
+        const norm = new Date(Date.UTC(w.year, w.month - 1, w.day));
+        const wall = { ...w, month: norm.getUTCMonth() + 1, day: norm.getUTCDate(), year: norm.getUTCFullYear() };
+        expect([zone, wall, zonedToInstant(wall, zone).getTime()]).toEqual([zone, wall, refInstant(wall, zone)]);
+      }
+    }
+  });
+
+  it('reads Intl once or twice per zone and hour, not for every value (#18)', () => {
+    const calls = vi.spyOn(Intl.DateTimeFormat.prototype, 'formatToParts');
+    try {
+      // An hour of consecutive seconds in Tokyo, which no other test here reads.
+      for (let s = 0; s < 3600; s++) zonedToInstant({ year: 2026, month: 10, day: 20, hour: 9, minute: Math.floor(s / 60), second: s % 60 }, 'Asia/Tokyo');
+      expect(calls.mock.calls.length).toBeLessThanOrEqual(12);
+    } finally {
+      calls.mockRestore();
+    }
+  });
+
+  it('stays correct past its bound, and leaves an invalid date to Intl', () => {
+    const zone = 'Etc/GMT+3';
+    for (let h = 0; h <= OFFSET_CACHE_LIMIT; h++) expect(zoneOffsetMs(h * H, zone)).toBe(-3 * H);
+    expect(zoneOffsetMs(0, zone)).toBe(-3 * H);
+    expect(() => zoneOffsetMs(Number.NaN, NY)).toThrow(RangeError);
+    expect(() => zonedParts(new Date(Number.NaN), NY)).toThrow(RangeError);
   });
 });
 

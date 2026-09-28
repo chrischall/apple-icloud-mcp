@@ -65,8 +65,8 @@ function partsFormatter(zone: string): Intl.DateTimeFormat {
   return f;
 }
 
-/** The wall-clock fields of `date` in `zone`. */
-export function zonedParts(date: Date, zone: string): ZonedParts {
+/** The wall-clock fields of `date` in `zone`, read from Intl (see `zonedParts` for the cached reading). */
+function intlParts(date: Date, zone: string): ZonedParts {
   const out: Record<string, string> = {};
   for (const p of partsFormatter(zone).formatToParts(date)) out[p.type] = p.value;
   return {
@@ -80,13 +80,54 @@ export function zonedParts(date: Date, zone: string): ZonedParts {
   };
 }
 
+/** The zone's offset at `instantMs` from Intl, at whole-second precision (the formatter drops milliseconds). */
+function intlOffsetMs(instantMs: number, zone: string): number {
+  const d = new Date(instantMs);
+  const p = intlParts(d, zone);
+  return utcMs(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0) - (instantMs - d.getUTCMilliseconds());
+}
+
+/**
+ * Offsets by zone and UTC hour. Intl costs tens of microseconds a call, and a
+ * dense floating rule reads a zone for every instance it walks (#18), so an
+ * hour whose offset is the same at its first and last second is read once. An
+ * hour a transition falls in (a half-hour zone's changes do not start on a UTC
+ * hour) is `null` and read from Intl every time. Bounded: the oldest entries go
+ * first.
+ */
+const offsetCache = new Map<string, number | null>();
+export const OFFSET_CACHE_LIMIT = 4096;
+const HOUR_MS = 3_600_000;
+
 /** The zone's UTC offset at `instantMs`, in milliseconds (e.g. -4h for EDT). */
 export function zoneOffsetMs(instantMs: number, zone: string): number {
-  const d = new Date(instantMs);
-  const p = zonedParts(d, zone);
-  const asUtc = utcMs(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0);
-  // Compare at whole-second precision: the formatter drops milliseconds.
-  return asUtc - (instantMs - d.getUTCMilliseconds());
+  if (!Number.isFinite(instantMs)) return intlOffsetMs(instantMs, zone);
+  const hour = Math.floor(instantMs / HOUR_MS);
+  const key = `${zone}|${hour}`;
+  let cached = offsetCache.get(key);
+  if (cached === undefined) {
+    const first = intlOffsetMs(hour * HOUR_MS, zone);
+    cached = intlOffsetMs((hour + 1) * HOUR_MS - 1000, zone) === first ? first : null;
+    if (offsetCache.size >= OFFSET_CACHE_LIMIT) offsetCache.delete(offsetCache.keys().next().value as string);
+    offsetCache.set(key, cached);
+  }
+  return cached ?? intlOffsetMs(instantMs, zone);
+}
+
+/** The wall-clock fields of `date` in `zone`. */
+export function zonedParts(date: Date, zone: string): ZonedParts {
+  const t = date.getTime();
+  if (!Number.isFinite(t)) return intlParts(date, zone);
+  const w = new Date(t + zoneOffsetMs(t, zone));
+  return {
+    year: w.getUTCFullYear(),
+    month: w.getUTCMonth() + 1,
+    day: w.getUTCDate(),
+    hour: w.getUTCHours(),
+    minute: w.getUTCMinutes(),
+    second: w.getUTCSeconds(),
+    weekday: w.getUTCDay(),
+  };
 }
 
 export interface WallClock {
@@ -115,13 +156,8 @@ export function zonedToInstant(wall: WallClock, zone: string): Date {
   const DAY = 86_400_000;
   const offsets = [...new Set([zoneOffsetMs(local - DAY, zone), zoneOffsetMs(local, zone), zoneOffsetMs(local + DAY, zone)])];
   const matches: number[] = [];
-  for (const off of offsets) {
-    const t = local - off;
-    const p = zonedParts(new Date(t), zone);
-    if (p.year === wall.year && p.month === wall.month && p.day === wall.day && p.hour === h && p.minute === mi && p.second === s) {
-      matches.push(t);
-    }
-  }
+  // The clock reads `wall` at `local - off` exactly when the zone's offset there is `off`.
+  for (const off of offsets) if (zoneOffsetMs(local - off, zone) === off) matches.push(local - off);
   if (matches.length > 0) return new Date(Math.min(...matches));
   // In a gap: apply the offset in force BEFORE the transition, which lands
   // the requested wall time shifted forward by the size of the gap.
