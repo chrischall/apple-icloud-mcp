@@ -463,12 +463,11 @@ describe('rules that cannot be walked', () => {
       expect(timeProblem(rule(ok), midnight), ok).toBeUndefined();
     }
     expect(MAX_STEPS_PER_INSTANCE).toBe(10);
-    // A costly one is still walked when COUNT or UNTIL keeps the whole walk short — never one that never matches.
+    // COUNT or UNTIL does not change the answer: estimating a bounded walk means modelling every list ical.js runs
+    // through (a MINUTELY rule steps its BYSECOND list too), and such rules only come in invitations.
     const nine = at('2026-10-21T09:00:00');
-    expect(timeProblem(rule('FREQ=MINUTELY;BYMINUTE=0,15,30,45;BYHOUR=9;COUNT=8'), nine)).toBeUndefined();
-    expect(timeProblem(rule('FREQ=MINUTELY;BYMINUTE=0,30;BYHOUR=9,17;UNTIL=20261025T000000Z'), nine)).toBeUndefined();
-    expect(timeProblem(rule('FREQ=MINUTELY;BYMINUTE=0,15,30,45;BYHOUR=9;COUNT=100000'), nine)).toBe(tooMany('MINUTELY'));
-    expect(timeProblem(rule('FREQ=MINUTELY;BYMINUTE=0,30;BYHOUR=9,17;UNTIL=21000101T000000Z'), nine)).toBe(tooMany('MINUTELY'));
+    expect(timeProblem(rule('FREQ=MINUTELY;BYMINUTE=0,15,30,45;BYHOUR=9;COUNT=8'), nine)).toBe(tooMany('MINUTELY'));
+    expect(timeProblem(rule('FREQ=MINUTELY;BYHOUR=3;BYMINUTE=0;BYSECOND=0,30;UNTIL=20400101T000000Z'), nine)).toBe(tooMany('MINUTELY'));
     expect(timeProblem(rule('FREQ=MINUTELY;INTERVAL=1440;BYHOUR=3;COUNT=2'), midnight)).toBe('FREQ=MINUTELY whose time filters never match a time it steps on');
     expect(timeProblem(rule('FREQ=MINUTELY;BYHOUR=9;BYMINUTE=0'), midnight)).toBe(tooMany('MINUTELY')); // cached
     // Refused before ical.js sees it: a listing of a series from 1990 answers at once.
@@ -499,6 +498,12 @@ describe('rules that cannot be walked', () => {
     // A negative one ends at the start.
     const back = span('DTSTART;TZID=America/New_York:20261031T120000', 'DURATION:-PT1H');
     expect(back.end.getTime()).toBe(back.start.getTime());
+    // A series with a DURATION gives it to each instance nominally: noon to noon, 25 hours across the change (its own
+    // first occurrence included); one with a DTEND gives every instance the same exact length (RFC 5545 §3.8.5.3).
+    const ends = (...lines: string[]) =>
+      expandSeries(parts(...NY_TZ, ...vevent('UID:ds', ...lines)), { from: d('2026-10-01T00:00:00Z'), to: d('2026-12-01T00:00:00Z'), zone: NY }).occurrences.map((o) => o.end.toISOString());
+    expect(ends('DTSTART;TZID=America/New_York:20261031T120000', 'DURATION:P1D', 'RRULE:FREQ=WEEKLY;COUNT=2')).toEqual(['2026-11-01T17:00:00.000Z', '2026-11-08T17:00:00.000Z']);
+    expect(ends('DTSTART;TZID=America/New_York:20261024T120000', 'DTEND;TZID=America/New_York:20261025T120000', 'RRULE:FREQ=WEEKLY;COUNT=2')).toEqual(['2026-10-25T16:00:00.000Z', '2026-11-01T16:00:00.000Z']);
   });
 
   it('names the other instances an exclusion would also remove, and gives up loudly past its bound', () => {

@@ -378,42 +378,80 @@ export function ownWallMs(t: Time): number {
 }
 
 /**
- * How long a timed event lasts, from its own values: a DURATION as it says
- * (exact), a floating DTSTART/DTEND pair by the difference of its wall times
- * (floating is wall clock: the author's 02:30–03:30 is an hour wherever it is
- * read, even on a day a DST change makes it none), anything else by the time
- * between its instants.
+ * How long a timed event lasts (RFC 5545 §3.8.5.3): a DURATION as written —
+ * nominal, so each instance of a series ends by its own start's calendar (see
+ * `endAfter`) — or an exact span that every instance shares: DTEND less
+ * DTSTART, for a floating pair by its wall times (floating is wall clock: the
+ * author's 02:30–03:30 is an hour, even on a day a DST change makes it none).
  */
-export function lengthOf(comp: Component, zone: string): number {
+export type Length = { duration: Duration } | { ms: number };
+
+function durationOf(comp: Component): Duration | null {
+  return comp.hasProperty('dtend') ? null : (comp.getFirstPropertyValue('duration') as Duration | null);
+}
+
+/** A timed event's length, from its own values (see `Length`). */
+export function lengthOf(comp: Component, zone: string): Length {
   const start = startTimeOf(comp);
-  const duration = comp.hasProperty('dtend') ? null : (comp.getFirstPropertyValue('duration') as Duration | null);
-  if (duration) return duration.toSeconds() * 1000;
+  const duration = durationOf(comp);
+  if (duration) return { duration };
   const end = endTimeOf(comp, start);
   const floating = (t: Time) => t.zone === ICAL.Timezone.localTimezone;
-  if (floating(start) && floating(end)) return ownWallMs(end) - ownWallMs(start);
-  return instantOf(end, zone).getTime() - instantOf(start, zone).getTime();
+  if (floating(start) && floating(end)) return { ms: ownWallMs(end) - ownWallMs(start) };
+  return { ms: instantOf(end, zone).getTime() - instantOf(start, zone).getTime() };
+}
+
+/** Whether two lengths are the same length, written the same way. */
+export function sameLength(a: Length, b: Length): boolean {
+  if ('ms' in a) return 'ms' in b && a.ms === b.ms;
+  return !('ms' in b) && a.duration.toString() === b.duration.toString();
+}
+
+/** A length in milliseconds, roughly: a DURATION's days as 24 hours (for margins, not for ends). */
+export function roughMs(length: Length): number {
+  return 'ms' in length ? length.ms : length.duration.toSeconds() * 1000;
 }
 
 /**
- * The instant a timed event ends. A DURATION's weeks and days are nominal
- * (the same wall time that many days on) and its hours, minutes and seconds
- * exact (RFC 5545 §3.3.6) — not ical.js's reading, which adds them all to the
- * wall clock, an hour off across a DST change.
+ * The instant an event starting at `start` ends when it lasts `length`. A
+ * DURATION's weeks and days are nominal (the same wall time that many days
+ * on) and its hours, minutes and seconds exact (RFC 5545 §3.3.6) — not
+ * ical.js's reading, which adds them all to the wall clock, an hour off
+ * across a DST change.
  */
+export function endAfter(start: Time, length: Length, zone: string): Date {
+  if ('ms' in length) return new Date(instantOf(start, zone).getTime() + length.ms);
+  const d = length.duration;
+  const sign = d.isNegative ? -1 : 1;
+  const day = start.clone();
+  day.adjust(sign * (d.weeks * 7 + d.days), 0, 0, 0);
+  return new Date(instantOf(day, zone).getTime() + sign * (d.hours * 3600 + d.minutes * 60 + d.seconds) * 1000);
+}
+
+/** The instant a timed event ends (see `endAfter` for a DURATION). */
 export function endInstantOf(comp: Component, zone: string): Date {
   const start = startTimeOf(comp);
-  const duration = comp.hasProperty('dtend') ? null : (comp.getFirstPropertyValue('duration') as Duration | null);
-  if (!duration) return instantOf(endTimeOf(comp, start), zone);
-  const sign = duration.isNegative ? -1 : 1;
-  const day = start.clone();
-  day.adjust(sign * (duration.weeks * 7 + duration.days), 0, 0, 0);
-  return new Date(instantOf(day, zone).getTime() + sign * (duration.hours * 3600 + duration.minutes * 60 + duration.seconds) * 1000);
+  const duration = durationOf(comp);
+  return duration ? endAfter(start, { duration }, zone) : instantOf(endTimeOf(comp, start), zone);
+}
+
+/** A DURATION of exactly `ms`, in hours, minutes and seconds — never days, which are nominal (see `endAfter`). */
+function exactDuration(ms: number): Duration {
+  const total = Math.round(Math.abs(ms) / 1000);
+  return ICAL.Duration.fromData({ hours: Math.floor(total / 3600), minutes: Math.floor((total % 3600) / 60), seconds: total % 60, isNegative: ms < 0 });
+}
+
+/** Set a timed event's length after `start`: a DURATION as it is written, an exact span by `setEnd`. */
+export function setLength(comp: Component, start: Time, length: Length, wz: WriteZone): void {
+  if ('ms' in length) return setEnd(comp, start, length.ms, wz);
+  comp.removeAllProperties('dtend');
+  comp.removeAllProperties('duration');
+  comp.addPropertyWithValue('duration', length.duration.clone());
 }
 
 /**
- * Set a timed event's end, `ms` (see `lengthOf`) after `start` (a value
- * already written, in write zone `wz`), so that every reader agrees on the
- * length:
+ * Set a timed event's end, exactly `ms` after `start` (a value already
+ * written, in write zone `wz`), so that every reader agrees on the length:
  *  - floating (RFC 5545 has DTEND floating exactly when DTSTART is): as DTEND,
  *    the start's wall time plus the length — unless a DST change in the zone
  *    it is read in comes between, where the wall times would last longer or
@@ -429,7 +467,7 @@ export function setEnd(comp: Component, start: Time, ms: number, wz: WriteZone):
   comp.removeAllProperties('duration');
   const asDuration = () => {
     comp.removeAllProperties('dtend');
-    comp.addPropertyWithValue('duration', ICAL.Duration.fromSeconds(Math.round(ms / 1000)));
+    comp.addPropertyWithValue('duration', exactDuration(ms));
   };
   if (wz.kind === 'floating') {
     const end = wallTime(new Date(ownWallMs(start) + ms), wz);
