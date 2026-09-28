@@ -1,6 +1,6 @@
 import { AppleToolError, InvalidArgumentError } from '../errors.js';
 import { parseDateInput, startOfDay, ymdInZone } from '../time.js';
-import { firstInstance, hasPeriodDates, periodOf, rulePosition, seriesWalker, type Occurrence } from './expand.js';
+import { firstInstance, hasPeriodDates, rulePosition, seriesWalker, type Occurrence } from './expand.js';
 import {
   ICAL,
   WEEKDAYS,
@@ -13,7 +13,7 @@ import {
   ensureOrganizer,
   instantOf,
   isRecurringMaster,
-  lengthMs,
+  lengthOf,
   occKey,
   otherPassNote,
   ownWallMs,
@@ -320,13 +320,9 @@ export function createOverride(vcal: Component, master: Component, target: Occur
   if (target.allDay) {
     writeTimes(ovr, { allDay: true, start: target.start, end: target.end, startYmd: target.startYmd, endYmd: target.endYmd, endGiven: false }, wz);
   } else {
-    // It starts where the instance does, written the same way (see recurrenceValue), and keeps its length — a floating
-    // instance's in wall clock, from the values that give it (see lengthMs).
+    // It starts where the instance does, written the same way (see recurrenceValue), and keeps its length.
     setTimeProp(ovr, 'dtstart', rid.clone());
-    const period = periodOf(master, target.occ as string, zone);
-    const from = period?.start ?? startTimeOf(master);
-    const ms = rid.zone === ICAL.Timezone.localTimezone ? lengthMs(from, period?.end ?? endTimeOf(master, from), zone) : target.end.getTime() - target.start.getTime();
-    setEnd(ovr, rid, ms, zoneOfTime(rid, zone));
+    setEnd(ovr, rid, target.end.getTime() - target.start.getTime(), zoneOfTime(rid, zone));
   }
   vcal.addSubcomponent(ovr);
   return ovr;
@@ -606,28 +602,28 @@ export function editSeries(e: SeriesEdit): string | undefined {
         c.adjust(allDay ? deltaDays : dayShift, 0, 0, 0);
         return c;
       }
-      const wall = wallOf(t, oldWz, zone) + deltaWall;
+      const own = wallOf(t, oldWz, zone);
+      const wall = own + deltaWall;
       const value = wallTime(new Date(wall * 1000), newWz);
       if (writtenIn(t, oldWz)) return value;
-      // A value written another way (an RDATE in UTC) names an instant: it moves to the instant on the same pass of
-      // the new wall time, and keeps its own form when the series' zone cannot name that (see recurrenceValue).
-      const guess = rfcInstantOf(t, zone).getTime() + deltaWall * 1000;
+      // A value written another way (a UTC RDATE, EXDATE or RECURRENCE-ID) takes the series' zone like the rule's own
+      // instances — unless the zone could not name it to begin with (the unread pass of a repeated hour, see
+      // recurrenceValue): then it moves to the instant on the same pass of its new wall time, keeping its own form
+      // when the zone cannot name that either.
+      const was = rfcInstantOf(t, zone).getTime();
+      if (instantOf(wallTime(new Date(own * 1000), oldWz), zone).getTime() === was) return value;
+      const guess = was + deltaWall * 1000;
       const at = wallSeconds(new Date(guess), newWz) === wall ? guess : instantOf(value, zone).getTime();
       return instantOf(value, zone).getTime() === at ? value : timeAt(new Date(at), zoneOfTime(t, zone));
     };
     // Lengths: the series keeps its own unless endDate was given.
     const oldDays = allDay ? daysBetween(ymdOf(mStart), ymdOf(mEnd)) : 0;
-    const oldMs = allDay ? 0 : lengthMs(mStart, mEnd, zone);
+    const oldMs = allDay ? 0 : lengthOf(master, zone);
     let newDays = oldDays;
     let newMs = oldMs;
     if (times.endGiven) {
       if (allDay) newDays = daysBetween(times.startYmd as string, times.endYmd as string) + 1;
-      else {
-        newMs = times.end.getTime() - times.start.getTime();
-        // A floating series' length is wall clock (see lengthMs).
-        const wallMs = (wallSeconds(times.end, newWz) - wallSeconds(times.start, newWz)) * 1000;
-        if (newWz.kind === 'floating' && wallMs > 0) newMs = wallMs;
-      }
+      else newMs = times.end.getTime() - times.start.getTime();
     }
     const withEnd = (comp: Component, start: Time, days: number, ms: number) => {
       setTimeProp(comp, 'dtstart', start);
@@ -660,7 +656,7 @@ export function editSeries(e: SeriesEdit): string | undefined {
       if (ovr === target.comp) writeTimes(ovr, times, newWz);
       else if (!retimed) {
         const days = allDay ? daysBetween(ymdOf(oStart), ymdOf(oEnd)) : 0;
-        const ms = allDay ? 0 : lengthMs(oStart, oEnd, zone);
+        const ms = allDay ? 0 : lengthOf(ovr, zone);
         withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, ms === oldMs ? newMs : ms);
       }
       touched.add(ovr);
@@ -793,7 +789,7 @@ export function continuationSeries(
   if (first.isDate) {
     next.removeAllProperties('duration');
     setTimeProp(next, 'dtend', dateValue(addDaysYmd(ymdOf(first), daysBetween(ymdOf(start), ymdOf(end)))));
-  } else setEnd(next, first, lengthMs(start, end, zone), zoneOfTime(first, zone));
+  } else setEnd(next, first, lengthOf(master, zone), zoneOfTime(first, zone));
   const rule = ruleOf(next);
   if (rule?.count) {
     const r = rule.clone();
