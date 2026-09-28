@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AppleToolError } from '../../src/errors.js';
 import {
   UnexpandableRuleError,
@@ -127,6 +127,22 @@ describe('expandSeries', () => {
     expect(isRecurringResource(parts(...vevent('UID:x', 'DTSTART:20261020T130000Z')))).toBe(false);
     expect(isRecurringResource(parts(...vevent('UID:i', 'RECURRENCE-ID:20261020T130000Z', 'DTSTART:20261020T150000Z')))).toBe(true);
     expect(isRecurringResource({ overrides: [] })).toBe(false);
+  });
+});
+
+describe('dense floating rules', () => {
+  it('reads each zone hour once, not every instance it walks (#18)', () => {
+    // Every second from 09:00 floating: a window six hours in walks 21,600 instances, each read in New York.
+    const secondly = parts(...vevent('UID:s', 'DTSTART:20261020T090000', 'RRULE:FREQ=SECONDLY', 'SUMMARY:S'));
+    const calls = vi.spyOn(Intl.DateTimeFormat.prototype, 'formatToParts');
+    try {
+      const got = expandSeries(secondly, { from: d('2026-10-20T19:00:00Z'), to: d('2026-10-20T19:10:00Z'), zone: NY });
+      expect(got.occurrences).toHaveLength(600);
+      expect(got.occurrences[0]!.start.toISOString()).toBe('2026-10-20T19:00:00.000Z');
+      expect(calls.mock.calls.length).toBeLessThan(200);
+    } finally {
+      calls.mockRestore();
+    }
   });
 });
 

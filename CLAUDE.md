@@ -36,7 +36,8 @@ src/
                     manual redirects, streamed size cap, UnconfirmedWriteError for unknown write outcomes)
   apple-keys.ts     .p8 normalization/validation, ES256 tokens for MusicKit, Maps (/v1/token exchange), WeatherKit
   icloud-auth.ts    ICLOUD_USERNAME/ICLOUD_APP_PASSWORD + the credential-rejection latch (memory + disk, 24 h)
-  time.ts           strict date parsing (offset-less = wall clock in DISPLAY_TZ), DST-correct formatting
+  time.ts           strict date parsing (offset-less = wall clock in DISPLAY_TZ), DST-correct formatting; zone
+                    offsets read from Intl once per zone and UTC hour (an hour a change falls in is read every time)
   state.ts          tiny 0600 JSON caches under $MCP_DATA_DIR/.apple-icloud-mcp, bound to the credential
   health.ts         HealthProbe contract + makeProbe; tools/healthcheck.ts runs them all (apple_healthcheck)
   tools/_shared.ts  defineTool (service switch + write-mode gate + structured scrubbed errors), ANNOTATIONS,
