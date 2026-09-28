@@ -1,6 +1,6 @@
 import { AppleToolError, InvalidArgumentError } from '../errors.js';
 import { parseDateInput, startOfDay, ymdInZone } from '../time.js';
-import { firstInstance, hasPeriodDates, rulePosition, seriesWalker, type Occurrence } from './expand.js';
+import { firstInstance, hasPeriodDates, periodOf, rulePosition, seriesWalker, type Occurrence } from './expand.js';
 import {
   ICAL,
   WEEKDAYS,
@@ -13,8 +13,10 @@ import {
   ensureOrganizer,
   instantOf,
   isRecurringMaster,
+  lengthMs,
   occKey,
   otherPassNote,
+  ownWallMs,
   rfcInstantOf,
   ruleOf,
   setAlarms,
@@ -24,6 +26,7 @@ import {
   setTextProp,
   setTimeProp,
   skippedStartError,
+  skippedWall,
   startTimeOf,
   textProp,
   timeAt,
@@ -302,7 +305,7 @@ function writtenIn(t: Time, wz: WriteZone): boolean {
 
 /** A value's wall clock in the write zone, in seconds: its own fields when it is written there, else its instant's. */
 function wallOf(t: Time, wz: WriteZone, zone: string): number {
-  if (writtenIn(t, wz)) return Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute, t.second) / 1000;
+  if (writtenIn(t, wz)) return ownWallMs(t) / 1000;
   return wallSeconds(rfcInstantOf(t, zone), wz);
 }
 
@@ -317,9 +320,13 @@ export function createOverride(vcal: Component, master: Component, target: Occur
   if (target.allDay) {
     writeTimes(ovr, { allDay: true, start: target.start, end: target.end, startYmd: target.startYmd, endYmd: target.endYmd, endGiven: false }, wz);
   } else {
-    // It starts where the instance does, written the same way (see recurrenceValue), and keeps its length.
+    // It starts where the instance does, written the same way (see recurrenceValue), and keeps its length — a floating
+    // instance's in wall clock, from the values that give it (see lengthMs).
     setTimeProp(ovr, 'dtstart', rid.clone());
-    setEnd(ovr, rid, target.end.getTime() - target.start.getTime(), zoneOfTime(rid, zone));
+    const period = periodOf(master, target.occ as string, zone);
+    const from = period?.start ?? startTimeOf(master);
+    const ms = rid.zone === ICAL.Timezone.localTimezone ? lengthMs(from, period?.end ?? endTimeOf(master, from), zone) : target.end.getTime() - target.start.getTime();
+    setEnd(ovr, rid, ms, zoneOfTime(rid, zone));
   }
   vcal.addSubcomponent(ovr);
   return ovr;
@@ -351,7 +358,7 @@ export interface SeriesEdit {
 /** Wall-clock seconds of an instant in a write zone (UTC fields for UTC, local fields otherwise). */
 function wallSeconds(instant: Date, wz: WriteZone): number {
   const t = timeAt(instant, wz);
-  return Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute, t.second) / 1000;
+  return ownWallMs(t) / 1000;
 }
 
 const DAY_PINNING_PARTS = ['BYMONTHDAY', 'BYYEARDAY', 'BYWEEKNO', 'BYSETPOS', 'BYMONTH'];
@@ -511,6 +518,36 @@ export function checkShifted(expected: readonly string[], actual: readonly strin
 }
 
 /**
+ * The wall-clock delta that moves a series to another zone keeping its
+ * instants: the difference of the two zones' wall times at the reference's
+ * instant — for a time the old zone skips, at the same wall time a day
+ * earlier, as that instant is on the far side of the change in a zone that
+ * changes at the same moment (Toronto for New York, Paris for Berlin) and
+ * would move every other occurrence an hour.
+ */
+function zoneShift(ref: Time, oldWz: WriteZone, newWz: WriteZone, zone: string): number {
+  const at = rfcInstantOf(ref, zone).getTime() - (skippedWall(ref) ? 86_400_000 : 0);
+  return wallSeconds(new Date(at), newWz) - wallSeconds(new Date(at), oldWz);
+}
+
+/**
+ * A date-time UNTIL moved with its series. ical.js bounds a series by
+ * comparing each instance with UNTIL: instants for zoned or UTC instances, and
+ * for floating ones (or a floating UNTIL) the fields read as UTC — so the
+ * bound an UNTIL stands for is its fields read as UTC (its instant, for UTC;
+ * an UNTIL inside an RRULE value has no TZID). That bound moves like an instance:
+ * by the wall-clock delta in the series' zone. It is written as RFC 5545 asks:
+ * floating for a floating series, UTC for any other. (Re-reading an UNTIL of
+ * the other form through the display zone moved it by a zone offset, dropping
+ * or adding the last occurrence.)
+ */
+function untilShifted(until: Time, oldWz: WriteZone, newWz: WriteZone, deltaWall: number, zone: string): Time {
+  const bound = new Date(ownWallMs(until));
+  const wall = new Date(((oldWz.kind === 'floating' ? bound.getTime() / 1000 : wallSeconds(bound, oldWz)) + deltaWall) * 1000);
+  return newWz.kind === 'floating' ? wallTime(wall, newWz) : timeAt(instantOf(wallTime(wall, newWz), zone), { kind: 'utc' });
+}
+
+/**
  * Apply a change to every occurrence of a series. Returns the new `#occ=` of
  * the target (undefined when it was addressed by its bare series id).
  *
@@ -551,9 +588,8 @@ export function editSeries(e: SeriesEdit): string | undefined {
     const deltaDays = moved && allDay ? daysBetween(ymdOf(ref), times.startYmd as string) : 0;
     // Wall clocks from the values' own fields where they are written in the zone (see recurrenceValue) — the
     // reference's too: ical.js's instant of a time a DST change skips has another wall time.
-    const wallIn = (wz: WriteZone) => wallOf(ref, wz, zone);
-    const refWall = allDay ? 0 : wallIn(oldWz);
-    const deltaWall = allDay ? 0 : (moved ? wallSeconds(times.start, newWz) : wallIn(newWz)) - refWall;
+    const refWall = allDay ? 0 : wallOf(ref, oldWz, zone);
+    const deltaWall = allDay ? 0 : moved ? wallSeconds(times.start, newWz) - refWall : zoneShift(ref, oldWz, newWz, zone);
     // The rule's instances share DTSTART's time of day, so they move by the calendar days DTSTART does — not by the
     // target's, which (an RDATE at another time) can cross midnight when they do not.
     const startWall = allDay ? 0 : wallOf(mStart, oldWz, zone);
@@ -570,16 +606,28 @@ export function editSeries(e: SeriesEdit): string | undefined {
         c.adjust(allDay ? deltaDays : dayShift, 0, 0, 0);
         return c;
       }
-      return wallTime(new Date((wallOf(t, oldWz, zone) + deltaWall) * 1000), newWz);
+      const wall = wallOf(t, oldWz, zone) + deltaWall;
+      const value = wallTime(new Date(wall * 1000), newWz);
+      if (writtenIn(t, oldWz)) return value;
+      // A value written another way (an RDATE in UTC) names an instant: it moves to the instant on the same pass of
+      // the new wall time, and keeps its own form when the series' zone cannot name that (see recurrenceValue).
+      const guess = rfcInstantOf(t, zone).getTime() + deltaWall * 1000;
+      const at = wallSeconds(new Date(guess), newWz) === wall ? guess : instantOf(value, zone).getTime();
+      return instantOf(value, zone).getTime() === at ? value : timeAt(new Date(at), zoneOfTime(t, zone));
     };
     // Lengths: the series keeps its own unless endDate was given.
     const oldDays = allDay ? daysBetween(ymdOf(mStart), ymdOf(mEnd)) : 0;
-    const oldMs = allDay ? 0 : instantOf(mEnd, zone).getTime() - instantOf(mStart, zone).getTime();
+    const oldMs = allDay ? 0 : lengthMs(mStart, mEnd, zone);
     let newDays = oldDays;
     let newMs = oldMs;
     if (times.endGiven) {
       if (allDay) newDays = daysBetween(times.startYmd as string, times.endYmd as string) + 1;
-      else newMs = times.end.getTime() - times.start.getTime();
+      else {
+        newMs = times.end.getTime() - times.start.getTime();
+        // A floating series' length is wall clock (see lengthMs).
+        const wallMs = (wallSeconds(times.end, newWz) - wallSeconds(times.start, newWz)) * 1000;
+        if (newWz.kind === 'floating' && wallMs > 0) newMs = wallMs;
+      }
     }
     const withEnd = (comp: Component, start: Time, days: number, ms: number) => {
       setTimeProp(comp, 'dtstart', start);
@@ -598,9 +646,8 @@ export function editSeries(e: SeriesEdit): string | undefined {
       if (until) {
         // UNTIL moves like the last instance it bounds: by the WALL-CLOCK delta. Moving it by DTSTART's instant delta
         // is an hour off when the move crosses a DST change, and drops the final occurrence.
-        // A floating series' UNTIL is floating, compared by wall clock; any other's is UTC (RFC 5545).
-        if (until.isDate || newWz.kind === 'floating') r.until = shift(until);
-        else r.until = timeAt(instantOf(shift(until), zone), { kind: 'utc' });
+        if (until.isDate || allDay) r.until = shift(until);
+        else r.until = untilShifted(until, oldWz, newWz, deltaWall, zone);
       }
       (master.getFirstProperty('rrule') as Property).setValue(r);
     }
@@ -613,14 +660,17 @@ export function editSeries(e: SeriesEdit): string | undefined {
       if (ovr === target.comp) writeTimes(ovr, times, newWz);
       else if (!retimed) {
         const days = allDay ? daysBetween(ymdOf(oStart), ymdOf(oEnd)) : 0;
-        const ms = allDay ? 0 : instantOf(oEnd, zone).getTime() - instantOf(oStart, zone).getTime();
+        const ms = allDay ? 0 : lengthMs(oStart, oEnd, zone);
         withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, ms === oldMs ? newMs : ms);
       }
       touched.add(ovr);
     }
-    // A move to a wall time the clocks go through twice lands where the series' wall time is read (setEventTimes).
-    const lands = allDay || !moved ? undefined : instantOf(shift(ref), zone);
-    if (lands && lands.getTime() !== times.start.getTime()) e.notes?.push(otherPassNote(lands, times.start, zone));
+    // A move to a wall time the clocks go through twice lands where the series' wall time is read (setEventTimes) —
+    // unless the occurrence is an override, whose own start is written exactly (writeTimes).
+    const lands = allDay || !moved || target.isOverride ? undefined : instantOf(shift(ref), zone);
+    if (lands && lands.getTime() !== Math.floor(times.start.getTime() / 1000) * 1000) {
+      e.notes?.push(otherPassNote('This occurrence is now', lands, times.start, zone));
+    }
     const check = () => checkShiftedSample(sample, shift, master, rule, zone);
     if (e.checks) e.checks.push(check);
     else check();
@@ -654,7 +704,7 @@ function untilBefore(master: Component, rid: Time, at: Date, zone: string): Time
   if (start.isDate) return dateValue(addDaysYmd(ymdOf(rid), -1));
   if (start.zone !== ICAL.Timezone.localTimezone) return timeAt(new Date(at.getTime() - 1000), { kind: 'utc' });
   const own = rid.isDate || rid.zone === ICAL.Timezone.localTimezone;
-  const wall = own ? Date.UTC(rid.year, rid.month - 1, rid.day, rid.hour, rid.minute, rid.second) : wallSeconds(at, { kind: 'floating', zone }) * 1000;
+  const wall = own ? ownWallMs(rid) : wallSeconds(at, { kind: 'floating', zone }) * 1000;
   return wallTime(new Date(wall - 1000), { kind: 'floating', zone });
 }
 
@@ -743,7 +793,7 @@ export function continuationSeries(
   if (first.isDate) {
     next.removeAllProperties('duration');
     setTimeProp(next, 'dtend', dateValue(addDaysYmd(ymdOf(first), daysBetween(ymdOf(start), ymdOf(end)))));
-  } else setEnd(next, first, instantOf(end, zone).getTime() - instantOf(start, zone).getTime(), zoneOfTime(first, zone));
+  } else setEnd(next, first, lengthMs(start, end, zone), zoneOfTime(first, zone));
   const rule = ruleOf(next);
   if (rule?.count) {
     const r = rule.clone();

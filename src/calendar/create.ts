@@ -143,7 +143,7 @@ export function buildNewEvent(
     setTimeProp(ev, 'dtstart', dateValue(times.startYmd as string));
     setTimeProp(ev, 'dtend', dateValue(addDaysYmd(times.endYmd as string, 1)));
   } else {
-    if (setEventTimes(ev, times.start, times.end, zoneForWrite(vcal, zone), input.recurrence !== undefined)) opts.notes?.push(otherPassNote(instantOf(startTimeOf(ev), zone), times.start, zone));
+    if (setEventTimes(ev, times.start, times.end, zoneForWrite(vcal, zone), input.recurrence !== undefined)) opts.notes?.push(otherPassNote('The series starts', instantOf(startTimeOf(ev), zone), times.start, zone));
   }
   setTextProp(ev, 'location', input.location);
   setTextProp(ev, 'description', input.notes);

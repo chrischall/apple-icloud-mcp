@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AppleToolError } from '../../src/errors.js';
 import {
   UnexpandableRuleError,
+  alsoExcluded,
   expandSeries,
   findOccurrence,
   hasPeriodDates,
@@ -439,6 +440,10 @@ describe('rules that cannot be walked', () => {
     expect(timeProblem(rule('FREQ=SECONDLY;BYMINUTE=0'), midnight)).toBe(tooMany('SECONDLY'));
     expect(timeProblem(rule('FREQ=MINUTELY;BYHOUR=9;BYMINUTE=0'), midnight)).toBe(tooMany('MINUTELY'));
     expect(timeProblem(rule('FREQ=MINUTELY;BYHOUR=9'), midnight)).toBe(tooMany('MINUTELY'));
+    // Its own list (BYSECOND for SECONDLY, BYMINUTE for MINUTELY) is run through at every step, matching or not: it
+    // multiplies the steps and the instances alike, so it does not thin the steps out.
+    expect(timeProblem(rule(`FREQ=SECONDLY;BYHOUR=3;BYMINUTE=0,1,2;BYSECOND=${Array.from({ length: 60 }, (_, i) => i).join(',')}`), midnight)).toBe(tooMany('SECONDLY'));
+    expect(timeProblem(rule(`FREQ=MINUTELY;BYHOUR=3;BYMINUTE=${Array.from({ length: 60 }, (_, i) => i).join(',')}`), midnight)).toBe(tooMany('MINUTELY'));
     // Every 1440 minutes from midnight is midnight again: 3 AM never comes, and ical.js would spin forever.
     expect(timeProblem(rule('FREQ=MINUTELY;INTERVAL=1440;BYHOUR=3'), midnight)).toBe('FREQ=MINUTELY whose time filters never match a time it steps on');
     expect(timeProblem(rule('FREQ=SECONDLY;INTERVAL=86400;BYMINUTE=5'), midnight)).toBe('FREQ=SECONDLY whose time filters never match a time it steps on');
@@ -476,6 +481,16 @@ describe('rules that cannot be walked', () => {
     const gone = parts(...vevent('UID:dg', 'DTSTART:20261021T090000', 'DTEND:20261021T090001', 'RRULE:FREQ=MINUTELY', 'RDATE:20261021T200000Z', 'EXDATE:20261021T200000Z'));
     expect(() => firstInstance(gone.master as Component, NY, 100)).toThrow(/the series' first occurrence could not be located: the series has more than 100 occurrences/);
     expect(firstInstance(gone.master as Component, NY)?.toString()).toBe('2026-10-21T09:00:00');
+  });
+
+  it('names the other instances an exclusion would also remove, and gives up loudly past its bound', () => {
+    const p = parts(...NY_TZ, ...vevent('UID:ax', 'DTSTART;TZID=America/New_York:20261021T000000', 'DURATION:PT1M', 'RRULE:FREQ=HOURLY;COUNT=200', 'RDATE;VALUE=DATE:20261023'));
+    const master = p.master as Component;
+    const midnight = ICAL.Time.fromData({ year: 2026, month: 10, day: 23, hour: 0, minute: 0, second: 0, isDate: false }, master.getFirstPropertyValue('dtstart').zone);
+    expect(alsoExcluded(master, midnight, '2026-10-23', d('2026-10-23T04:00:00Z'), NY)).toEqual(['2026-10-23T04:00:00Z']);
+    expect(() => alsoExcluded(master, midnight, '2026-10-23', d('2026-10-23T04:00:00Z'), NY, 10)).toThrow(/the occurrences next to 2026-10-23 could not be located/);
+    // A series of one kind only has nothing to collide with.
+    expect(alsoExcluded(parts(...STANDUP).master as Component, midnight, '2026-10-23', d('2026-10-23T04:00:00Z'), NY)).toEqual([]);
   });
 
   it('removes an all-day date by an EXDATE at the midnight that starts it in the writer\'s zone, wherever it is read', () => {

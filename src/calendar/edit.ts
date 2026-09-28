@@ -1,7 +1,7 @@
 import { AppleToolError, InvalidArgumentError } from '../errors.js';
 import { childUrl } from '../dav/client.js';
 import { assertWritable, resolveCalendar, type CalendarInfo } from './caldav.js';
-import { expandSeries, findOccurrence, rulePosition, seriesWalker, singleOccurrence, type Occurrence } from './expand.js';
+import { alsoExcluded, expandSeries, findOccurrence, rulePosition, seriesWalker, singleOccurrence, type Occurrence } from './expand.js';
 import type { LoadedEvent } from './events.js';
 import { formatOccurrence, recurrenceOf, whenLabel } from './format.js';
 import { formatEventId, formatOccurrenceId } from './ids.js';
@@ -104,13 +104,6 @@ function hasInstance(master: Component, zone: string): boolean {
   } catch {
     return true;
   }
-}
-
-/** The keys of a master's own instances within two days of an occurrence (what an EXDATE for it could also match). */
-function instancesNear(master: Component, target: Occurrence, zone: string): Set<string> {
-  const at = instantOf(target.recurrenceTime as Time, zone).getTime();
-  const near = expandSeries({ master, overrides: [] }, { from: new Date(at - 2 * 86_400_000), to: new Date(at + 2 * 86_400_000), zone });
-  return new Set(near.occurrences.map((o) => o.occ as string));
 }
 
 function ridInstant(comp: Component, zone: string): number {
@@ -342,19 +335,18 @@ export function planDelete(loaded: LoadedEvent, span: Span, env: { zone: string;
     const master = parts.master;
     if (span === 'thisEvent') {
       if (master) {
-        const before = instancesNear(master, target, zone);
-        addTimeProp(master, 'exdate', recurrenceValue(master, target, zone));
-        const after = instancesNear(master, target, zone);
-        const lost = [...before].filter((key) => key !== occ && !after.has(key));
+        const value = recurrenceValue(master, target, zone);
+        const lost = alsoExcluded(master, value, occ, instantOf(target.recurrenceTime as Time, zone), zone);
         if (lost.length > 0) {
           // Planned in memory: nothing has been written.
           throw new AppleToolError(
             'UNSUPPORTED',
-            `calendar: this occurrence cannot be deleted on its own: the exclusion (EXDATE) that removes it would also remove ${lost.join(', ')} — ` +
-              'an all-day date and a timed occurrence at its midnight are one value to an exclusion. Nothing was changed.',
+            `calendar: this occurrence cannot be deleted on its own: the exclusion (EXDATE) that removes it also matches ${lost.join(', ')} — ` +
+              'another occurrence on the same date, or at the same midnight. Nothing was changed.',
             { hint: 'Delete the series (span "allEvents"), or change it in Apple Calendar.' },
           );
         }
+        addTimeProp(master, 'exdate', value);
         touch(master, now);
       }
       if (target.isOverride) vcal.removeSubcomponent(target.comp);

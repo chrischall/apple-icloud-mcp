@@ -360,10 +360,10 @@ export function skippedStartError(zone: string): InvalidArgumentError {
  * clock comes twice as the clocks go back, and a series keeps its wall time,
  * which is read as the other pass (see `setEventTimes`).
  */
-export function otherPassNote(read: Date, asked: Date, zone: string): string {
+export function otherPassNote(what: string, read: Date, asked: Date, zone: string): string {
   return (
-    `The series now starts at ${formatInstant(read, zone).display}, not ${formatInstant(asked, zone).display}: that wall-clock time comes ` +
-    "twice as the clocks go back, and a repeating event keeps its start's wall-clock time, which is read as the other one."
+    `${what} at ${formatInstant(read, zone).display}, not ${formatInstant(asked, zone).display}: that wall-clock time comes twice as ` +
+    "the clocks go back, and a repeating event keeps its wall-clock time, which is read as the other one."
   );
 }
 
@@ -372,18 +372,43 @@ function readAs(t: Time, wz: WriteZone): number {
   return instantOf(t, wz.kind === 'floating' ? wz.zone : 'UTC').getTime();
 }
 
+/** A value's own wall-clock fields, as milliseconds of a zone-free (UTC) carrier. */
+export function ownWallMs(t: Time): number {
+  return Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute, t.second);
+}
+
+/**
+ * How long an event from `start` to `end` (its own values) lasts. A floating
+ * event is wall clock — the same wall times for every reader in every zone —
+ * so its length is the difference of its wall times; any other, the time
+ * between its instants.
+ */
+export function lengthMs(start: Time, end: Time, zone: string): number {
+  const floating = (t: Time) => !t.isDate && t.zone === ICAL.Timezone.localTimezone;
+  if (floating(start) && floating(end)) return ownWallMs(end) - ownWallMs(start);
+  return instantOf(end, zone).getTime() - instantOf(start, zone).getTime();
+}
+
 /**
  * Set a timed event's end, `ms` after `start` (a value already written, in
- * write zone `wz`) as that start is READ, so every reader agrees on its length:
+ * write zone `wz`; for a floating start `ms` is wall-clock time, see
+ * `lengthMs`):
+ *  - floating: as DTEND, the start's wall time plus the length — floating
+ *    ends are wall clock too (RFC 5545 has DTEND floating exactly when
+ *    DTSTART is), so every reader in every zone gets the same length;
  *  - after a start whose wall time the zone skips, as DURATION (readers
  *    disagree on that start's instant, so no DTEND could keep the length);
- *  - otherwise as DTEND, a wall time in `wz` when one reads back as the end,
- *    else in UTC: in an hour a DST change repeats a wall time is read as one
- *    pass (a floating one as the first), so the other has none of its own.
- *    (RFC 5545 asks DTEND for DTSTART's value type, DATE-TIME, not its form.)
+ *  - otherwise as DTEND, measured from the start as read: a wall time in the
+ *    zone when one reads back as the end, else in UTC — in an hour a DST
+ *    change repeats a zone's wall time is read as one pass, so the other has
+ *    none of its own.
  */
 export function setEnd(comp: Component, start: Time, ms: number, wz: WriteZone): void {
   comp.removeAllProperties('duration');
+  if (wz.kind === 'floating') {
+    setTimeProp(comp, 'dtend', wallTime(new Date(ownWallMs(start) + ms), wz));
+    return;
+  }
   if (skippedWall(start)) {
     comp.removeAllProperties('dtend');
     comp.addPropertyWithValue('duration', ICAL.Duration.fromSeconds(Math.round(ms / 1000)));
@@ -398,17 +423,24 @@ export function setEnd(comp: Component, start: Time, ms: number, wz: WriteZone):
  * Set DTSTART and DTEND (or DURATION, see `setEnd`) for [start, end) in the
  * write zone. A wall time names one instant, except in an hour a DST change
  * repeats: there ical.js (and so this server) reads it as one pass, and the
- * other pass has no wall time of its own. A single event writes such an
- * instant in UTC. A series keeps its wall time — its repeats follow DTSTART's
- * wall clock — and so may start on the other pass; whether it does is
- * returned (false when the start reads back as `start`).
+ * other pass has no wall time of its own. A single event takes UTC for an
+ * instant it cannot name — start and end, for a floating one, whose DTEND is
+ * floating exactly when DTSTART is. A series keeps its wall time — its
+ * repeats follow DTSTART's wall clock — and so may start on the other pass;
+ * whether it does is returned (always false for a single event).
  */
 export function setEventTimes(comp: Component, start: Date, end: Date, wz: WriteZone, series: boolean): boolean {
+  // Whole seconds, as values hold them.
+  const whole = (d: Date) => Math.floor(d.getTime() / 1000) * 1000;
   let s = timeAt(start, wz);
-  if (!series && readAs(s, wz) !== start.getTime()) s = timeAt(start, { kind: 'utc' });
+  const unnamed = (t: Time, at: Date) => readAs(t, wz) !== whole(at);
+  if (!series && (unnamed(s, start) || (wz.kind === 'floating' && unnamed(timeAt(end, wz), end)))) s = timeAt(start, { kind: 'utc' });
   setTimeProp(comp, 'dtstart', s);
-  setEnd(comp, s, end.getTime() - start.getTime(), zoneOfTime(s, wz.kind === 'floating' ? wz.zone : 'UTC'));
-  return readAs(s, wz) !== start.getTime();
+  const sz = zoneOfTime(s, wz.kind === 'floating' ? wz.zone : 'UTC');
+  // A floating end is the wall time of the instant it ends at (never at or before the start's).
+  const wallLength = ownWallMs(timeAt(end, wz)) - ownWallMs(s);
+  setEnd(comp, s, sz.kind === 'floating' && wallLength > 0 ? wallLength : whole(end) - whole(start), sz);
+  return series && unnamed(s, start);
 }
 
 /**
