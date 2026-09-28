@@ -180,7 +180,9 @@ the series' clock and the request's clock agree on it (what the series repeats o
 occurrence named says where it now ends), else the real time — when only one clock changes during that occurrence
 the other shows every other occurrence's length; the real time too for a start that is not a wall time the named
 occurrence has (one whose own time the clocks skip). An override follows a new series length when it ends where the
-series' length ends it or has the same exact span; any other keeps its DURATION, or the span it is listed with. An exact DURATION this server
+series' length ends it or has the same exact span (a DURATION of hours only is exact); any other keeps its DURATION, a
+floating DTEND moves by the same wall-clock delta as its start (a DST night lists it an hour off — writing that span
+as a length carried the distortion onto an ordinary day), else it keeps the span it is listed with. An exact DURATION this server
 writes is in hours (`PT25H`), never days. A floating DTEND is written only when its wall time lasts the length where
 it is read, else DURATION — DTEND is floating exactly when DTSTART is (RFC 5545), never UTC. UNTIL moves by the bound ical.js compares
 (`untilShifted`: its fields read as UTC — a UTC UNTIL on a floating series and a floating one on a zoned series are

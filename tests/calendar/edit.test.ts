@@ -929,6 +929,38 @@ describe('series times next to DST changes', () => {
     // A start moved on another day keeps it as it is listed.
     const moved = await update('home/fo.ics#occ=2026-10-30T05:00:00Z', { span: 'allEvents', startDate: '2026-10-30T01:15' });
     expect(spansOf(moved.puts[0]!.body, '2026-11-01', '2026-11-02')).toEqual(['2026-11-01T05:15:00Z 120']);
+    // A move a day later takes its wall times to an ordinary day, an hour long like its neighbours — not the two
+    // hours it was listed with on the DST night.
+    const later = await update('home/fo.ics#occ=2026-10-30T05:00:00Z', { span: 'allEvents', startDate: '2026-10-31T01:00' });
+    expect(later.puts[0]!.body).toContain('DTSTART:20261102T010000\r\nDTEND:20261102T020000');
+    expect(spansOf(later.puts[0]!.body, '2026-10-31', '2026-11-05').map((x) => x.split(' ')[1])).toEqual(['60', '60', '60', '60', '60']);
+    // The other way, onto the DST night, it keeps its wall times too, and is listed as any 01:00–02:00 there is.
+    dav.put('home', 'fb.ics', ics(...vevent('UID:fb', 'DTSTART:20261029T010000', 'DTEND:20261029T020000', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:F')).replace('END:VCALENDAR', ['BEGIN:VEVENT', 'UID:fb', 'RECURRENCE-ID:20261031T010000', 'DTSTART:20261031T010000', 'DTEND:20261031T020000', 'SUMMARY:F renamed', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n')));
+    const onto = await update('home/fb.ics#occ=2026-10-30T05:00:00Z', { span: 'allEvents', startDate: '2026-10-31T01:00' });
+    expect(onto.puts[0]!.body).toContain('DTSTART:20261101T010000\r\nDTEND:20261101T020000');
+  });
+
+  it('moves a floating override copied on a spring-forward night by its wall times, not the span it is listed with', async () => {
+    // Daily 02:30–03:30 floating; another app renamed the 03-08 occurrence, whose 02:30 the clocks skip (listed 0 min).
+    const skipped = ['BEGIN:VEVENT', 'UID:k', 'RECURRENCE-ID:20260308T023000', 'DTSTART:20260308T023000', 'DTEND:20260308T033000', 'SUMMARY:K full', 'END:VEVENT'];
+    dav.put('home', 'k.ics', ics(...vevent('UID:k', 'DTSTART:20260305T023000', 'DTEND:20260305T033000', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:K')).replace('END:VCALENDAR', [...skipped, 'END:VCALENDAR'].join('\r\n')));
+    const k = await update('home/k.ics#occ=2026-03-06T07:30:00Z', { span: 'allEvents', startDate: '2026-03-07T02:30' });
+    expect(k.puts[0]!.body).toContain('DTSTART:20260309T023000\r\nDTEND:20260309T033000');
+    expect(spansOf(k.puts[0]!.body, '2026-03-09', '2026-03-10')).toEqual(['2026-03-09T06:30:00Z 60']);
+    // Daily 01:00–03:30 floating; the 03-08 copy spans the jump (listed 90 min). A day later it is 150 minutes again.
+    const across = ['BEGIN:VEVENT', 'UID:m', 'RECURRENCE-ID:20260308T010000', 'DTSTART:20260308T010000', 'DTEND:20260308T033000', 'SUMMARY:M full', 'END:VEVENT'];
+    dav.put('home', 'm.ics', ics(...vevent('UID:m', 'DTSTART:20260305T010000', 'DTEND:20260305T033000', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:M')).replace('END:VCALENDAR', [...across, 'END:VCALENDAR'].join('\r\n')));
+    const m = await update('home/m.ics#occ=2026-03-06T06:00:00Z', { span: 'allEvents', startDate: '2026-03-07T01:00' });
+    expect(m.puts[0]!.body).toContain('DTSTART:20260309T010000\r\nDTEND:20260309T033000');
+    expect(spansOf(m.puts[0]!.body, '2026-03-09', '2026-03-10')).toEqual(['2026-03-09T05:00:00Z 150']);
+  });
+
+  it('lets a floating override with the series\' wall length follow a new length whether the series has a DTEND or an equal DURATION', async () => {
+    const renamed = ['BEGIN:VEVENT', 'UID:fd', 'RECURRENCE-ID:20261101T010000', 'DTSTART:20261101T010000', 'DTEND:20261101T020000', 'SUMMARY:F renamed', 'END:VEVENT'];
+    dav.put('home', 'fd.ics', ics(...vevent('UID:fd', 'DTSTART:20261029T010000', 'DURATION:PT1H', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:F')).replace('END:VCALENDAR', [...renamed, 'END:VCALENDAR'].join('\r\n')));
+    const p = await update('home/fd.ics#occ=2026-10-30T05:00:00Z', { span: 'allEvents', endDate: '2026-10-30T02:30' });
+    expect(p.puts[0]!.body).toContain('DTSTART:20261101T010000\r\nDURATION:PT1H30M');
+    expect(spansOf(p.puts[0]!.body, '2026-10-29', '2026-11-04').map((x) => x.split(' ')[1])).toEqual(['90', '90', '90', '90', '90', '90']);
   });
 
   it('measures a new length from a retimed override\'s own start when the series is changed through it', async () => {

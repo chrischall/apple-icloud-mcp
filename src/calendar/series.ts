@@ -12,6 +12,7 @@ import {
   endTimeOf,
   ensureOrganizer,
   endAfter,
+  exactMs,
   instantOf,
   isRecurringMaster,
   lengthOf,
@@ -674,12 +675,18 @@ export function editSeries(e: SeriesEdit): string | undefined {
         const days = allDay ? daysBetween(ymdOf(oStart), ymdOf(oEnd)) : 0;
         // An override that lasts as long as the series takes its new length: it ends where the series' length ends it
         // (however either is written), or both are the same exact span (floating ones by wall clock). Any other keeps
-        // its own: a DURATION as written, else the span it is listed with.
+        // its own: a DURATION as written; a floating DTEND moves by the same wall-clock delta as its start (its span
+        // is listed an hour off on a DST night, and writing that as a length would carry the distortion onto an
+        // ordinary day); else the span it is listed with.
         const own: Length = allDay ? { ms: 0 } : lengthOf(ovr, zone);
         const listed: Length = 'duration' in own ? own : { ms: allDay ? 0 : endInstantOf(ovr, zone).getTime() - instantOf(oStart, zone).getTime() };
-        const sameSpan = 'ms' in own && 'ms' in oldLength && own.ms === oldLength.ms;
+        const sameSpan = 'ms' in own && own.ms === exactMs(oldLength);
         const follows = !allDay && times.endGiven && (sameSpan || endInstantOf(ovr, zone).getTime() === endAfter(oStart, oldLength, zone).getTime());
-        withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, follows ? newLength : listed);
+        const floatingEnd = !allDay && ovr.hasProperty('dtend') && oStart.zone === ICAL.Timezone.localTimezone && oEnd.zone === ICAL.Timezone.localTimezone;
+        if (!follows && floatingEnd) {
+          setTimeProp(ovr, 'dtstart', shift(oStart));
+          setTimeProp(ovr, 'dtend', shift(oEnd));
+        } else withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, follows ? newLength : listed);
       }
       touched.add(ovr);
     }
