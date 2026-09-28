@@ -628,15 +628,17 @@ export function editSeries(e: SeriesEdit): string | undefined {
     if (times.endGiven) {
       if (allDay) newDays = daysBetween(times.startYmd as string, times.endYmd as string) + 1;
       else {
-        // A series repeats its times: the length asked for is the wall time from the new start to the new end, on the
-        // clock the request was read by — not the real time between them, which the night that clock changes makes
-        // an hour more or less than every other occurrence's. Unless the start is not a wall time the occurrence has
-        // (an end alone given through an occurrence whose own time the clocks skip, listed an hour off), or no wall
-        // time separates the two: then the real time.
-        const clock: WriteZone = { kind: 'floating', zone };
-        const wallMs = (wallSeconds(times.end, clock) - wallSeconds(times.start, clock)) * 1000;
-        const onSlot = moved || wallSeconds(times.start, oldWz) === wallOf(ref, oldWz, zone);
-        newLength = { ms: onSlot && wallMs > 0 ? wallMs : times.end.getTime() - times.start.getTime() };
+        // A series repeats its wall times: on the night the clocks change during the occurrence named, the length
+        // asked for is the wall time from the new start to the new end, not the real time between them (an hour more
+        // or less than every other occurrence's) — when the series' clock and the clock the request was read by agree
+        // on it. When only one of them changes that night, the other shows the length every other occurrence has,
+        // and that is the real time. The real time too for a start that is not a wall time the occurrence has (an
+        // end alone given through one whose own time the clocks skip, listed an hour off).
+        const wallOn = (wz: WriteZone) => (wallSeconds(times.end, wz) - wallSeconds(times.start, wz)) * 1000;
+        const wallMs = wallOn({ kind: 'floating', zone });
+        const own = target.isOverride ? startTimeOf(target.comp) : ref;
+        const onSlot = moved || wallSeconds(times.start, oldWz) === wallOf(own, oldWz, zone);
+        newLength = { ms: onSlot && wallMs > 0 && wallMs === wallOn(newWz) ? wallMs : times.end.getTime() - times.start.getTime() };
       }
     }
     const withEnd = (comp: Component, start: Time, days: number, length: Length) => {
@@ -670,9 +672,14 @@ export function editSeries(e: SeriesEdit): string | undefined {
       if (ovr === target.comp) writeTimes(ovr, times, newWz);
       else if (!retimed) {
         const days = allDay ? daysBetween(ymdOf(oStart), ymdOf(oEnd)) : 0;
-        // An override that lasts as long as the series (however either is written) takes its new length.
-        const follows = !allDay && times.endGiven && endInstantOf(ovr, zone).getTime() === endAfter(oStart, oldLength, zone).getTime();
-        withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, follows ? newLength : allDay ? { ms: 0 } : lengthOf(ovr, zone));
+        // An override that lasts as long as the series takes its new length: it ends where the series' length ends it
+        // (however either is written), or both are the same exact span (floating ones by wall clock). Any other keeps
+        // its own: a DURATION as written, else the span it is listed with.
+        const own: Length = allDay ? { ms: 0 } : lengthOf(ovr, zone);
+        const listed: Length = 'duration' in own ? own : { ms: allDay ? 0 : endInstantOf(ovr, zone).getTime() - instantOf(oStart, zone).getTime() };
+        const sameSpan = 'ms' in own && 'ms' in oldLength && own.ms === oldLength.ms;
+        const follows = !allDay && times.endGiven && (sameSpan || endInstantOf(ovr, zone).getTime() === endAfter(oStart, oldLength, zone).getTime());
+        withEnd(ovr, shift(oStart), days === oldDays ? newDays : days, follows ? newLength : listed);
       }
       touched.add(ovr);
     }
