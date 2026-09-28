@@ -955,6 +955,27 @@ describe('series times next to DST changes', () => {
     expect(spansOf(m.puts[0]!.body, '2026-03-09', '2026-03-10')).toEqual(['2026-03-09T05:00:00Z 150']);
   });
 
+  it('writes a floating override by its wall length when the series is stored in a zone', async () => {
+    // Daily 01:30–02:30 floating, with the 03-08 copy renamed by another app. A timeZone stores the series in New York,
+    // where 02:30 on 03-08 is not a wall time: the copy keeps its hour as a real one, not a zero-length TZID pair.
+    const spring = ['BEGIN:VEVENT', 'UID:c1', 'RECURRENCE-ID:20260308T013000', 'DTSTART:20260308T013000', 'DTEND:20260308T023000', 'SUMMARY:C full', 'END:VEVENT'];
+    dav.put('home', 'c1.ics', ics(...vevent('UID:c1', 'DTSTART:20260305T013000', 'DTEND:20260305T023000', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:C')).replace('END:VCALENDAR', [...spring, 'END:VCALENDAR'].join('\r\n')));
+    const c1 = await update('home/c1.ics#occ=2026-03-06T06:30:00Z', { span: 'allEvents', startDate: '2026-03-06T01:30', timeZone: NY });
+    expect(c1.puts[0]!.body).not.toContain('DTEND;TZID=America/New_York:20260308T023000');
+    expect(spansOf(c1.puts[0]!.body, '2026-03-05', '2026-03-11').map((x) => x.split(' ')[1])).toEqual(['60', '60', '60', '60', '60', '60']);
+    // Daily 00:30–01:30 floating with the 11-01 copy renamed: a TZID 01:30 would be the second one, an hour late.
+    const fall = ['BEGIN:VEVENT', 'UID:f1', 'RECURRENCE-ID:20261101T003000', 'DTSTART:20261101T003000', 'DTEND:20261101T013000', 'SUMMARY:F full', 'END:VEVENT'];
+    dav.put('home', 'f1.ics', ics(...vevent('UID:f1', 'DTSTART:20261029T003000', 'DTEND:20261029T013000', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:F')).replace('END:VCALENDAR', [...fall, 'END:VCALENDAR'].join('\r\n')));
+    const f1 = await update('home/f1.ics#occ=2026-10-30T04:30:00Z', { span: 'allEvents', startDate: '2026-10-30T00:30', timeZone: NY });
+    expect(spansOf(f1.puts[0]!.body, '2026-10-29', '2026-11-04').map((x) => x.split(' ')[1])).toEqual(['60', '60', '60', '60', '60', '60']);
+    // A zoned series with a floating override: its end is written in the start's form, never floating beside a TZID.
+    const own = ['BEGIN:VEVENT', 'UID:zf', 'RECURRENCE-ID;TZID=America/New_York:20261101T003000', 'DTSTART:20261101T003000', 'DTEND:20261101T013000', 'SUMMARY:Z full', 'END:VEVENT'];
+    dav.put('home', 'zf.ics', ics(...NY_TZ, ...vevent('UID:zf', 'DTSTART;TZID=America/New_York:20261029T003000', 'DTEND;TZID=America/New_York:20261029T013000', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:Z')).replace('END:VCALENDAR', [...own, 'END:VCALENDAR'].join('\r\n')));
+    const zf = await update('home/zf.ics#occ=2026-10-30T04:30:00Z', { span: 'allEvents', startDate: '2026-10-30T00:45' });
+    expect(zf.puts[0]!.body).not.toContain('DTEND:20261101T014500\r\n');
+    expect(spansOf(zf.puts[0]!.body, '2026-10-29', '2026-11-04').map((x) => x.split(' ')[1])).toEqual(['60', '60', '60', '60', '60', '60']);
+  });
+
   it('lets a floating override with the series\' wall length follow a new length whether the series has a DTEND or an equal DURATION', async () => {
     const renamed = ['BEGIN:VEVENT', 'UID:fd', 'RECURRENCE-ID:20261101T010000', 'DTSTART:20261101T010000', 'DTEND:20261101T020000', 'SUMMARY:F renamed', 'END:VEVENT'];
     dav.put('home', 'fd.ics', ics(...vevent('UID:fd', 'DTSTART:20261029T010000', 'DURATION:PT1H', 'RRULE:FREQ=DAILY;COUNT=6', 'SUMMARY:F')).replace('END:VCALENDAR', [...renamed, 'END:VCALENDAR'].join('\r\n')));
