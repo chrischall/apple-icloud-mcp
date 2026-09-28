@@ -23,6 +23,7 @@ import {
 import { ICAL } from '../../src/calendar/ics.js';
 import { eventParts, parseCalendar, textProp, type Component, type EventParts } from '../../src/calendar/ics.js';
 import { NY_TZ, ics, vevent } from './fake-caldav.js';
+import { startOfDay } from '../../src/time.js';
 
 const NY = 'America/New_York';
 
@@ -127,6 +128,19 @@ describe('expandSeries', () => {
     expect(isRecurringResource(parts(...vevent('UID:x', 'DTSTART:20261020T130000Z')))).toBe(false);
     expect(isRecurringResource(parts(...vevent('UID:i', 'RECURRENCE-ID:20261020T130000Z', 'DTSTART:20261020T150000Z')))).toBe(true);
     expect(isRecurringResource({ overrides: [] })).toBe(false);
+  });
+});
+
+describe('many-day all-day series', () => {
+  it('lists an instance that began days before the window and reaches into it, in any zone (#29)', () => {
+    // Weekly, four days each (the 10-17 instance runs to 10-20), and three days each (10-18 to 10-20).
+    const four = parts(...vevent('UID:m4', 'DTSTART;VALUE=DATE:20261010', 'DTEND;VALUE=DATE:20261014', 'RRULE:FREQ=WEEKLY;COUNT=5'));
+    const three = parts(...vevent('UID:m3', 'DTSTART;VALUE=DATE:20261011', 'DTEND;VALUE=DATE:20261014', 'RRULE:FREQ=WEEKLY;COUNT=5'));
+    for (const zone of [NY, 'America/Los_Angeles', 'Asia/Tokyo']) {
+      const win = { from: startOfDay('2026-10-20', zone), to: startOfDay('2026-10-22', zone), zone };
+      expect(expandSeries(four, win).occurrences.map((o) => [o.occ, o.startYmd, o.endYmd]), zone).toEqual([['2026-10-17', '2026-10-17', '2026-10-20']]);
+      expect(expandSeries(three, win).occurrences.map((o) => [o.occ, o.startYmd, o.endYmd]), zone).toEqual([['2026-10-18', '2026-10-18', '2026-10-20']]);
+    }
   });
 });
 

@@ -592,8 +592,10 @@ function seriesShape(master: Component, zone: string): SeriesShape {
   // Every instance lasts the series' own length (RFC 5545 §3.8.5.3; see Length).
   const length = s.allDay ? { ms: 0 } : lengthOf(master, zone);
   const periodEnds = new Map<string, number>();
-  // A DURATION's day is 25 hours across a DST change.
-  let longestMs = Math.max(0, roughMs(length)) + ('ms' in length ? 0 : 3_600_000);
+  const days = s.allDay ? daysBetween(s.startYmd as string, s.endYmd as string) + 1 : 0;
+  // A DURATION's day, and an all-day instance's, is 25 hours across a DST change. An all-day series' length is its
+  // days: counted as none, a many-day instance that began two days before a window was skipped though it reached in.
+  let longestMs = s.allDay ? days * DAY_MS + 3_600_000 : Math.max(0, roughMs(length)) + ('ms' in length ? 0 : 3_600_000);
   let values: Array<Time | Period> = [];
   try {
     values = rdateValues(master);
@@ -609,7 +611,7 @@ function seriesShape(master: Component, zone: string): SeriesShape {
   }
   return {
     allDay: s.allDay,
-    days: s.allDay ? daysBetween(s.startYmd as string, s.endYmd as string) + 1 : 0,
+    days,
     length,
     periodEnds,
     longestMs,

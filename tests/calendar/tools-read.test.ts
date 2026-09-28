@@ -461,6 +461,15 @@ describe('floating times and all-day days under a request timeZone', () => {
     expect(ended.json.notes).toEqual([FLOATING_NOTE]);
   });
 
+  it('lists a many-day all-day series instance that began days before the window (#29)', async () => {
+    h.dav.put('z', 'md.ics', ics(...vevent('UID:md', 'DTSTART;VALUE=DATE:20261010', 'DTEND;VALUE=DATE:20261014', 'RRULE:FREQ=WEEKLY;COUNT=5', 'SUMMARY:Trip')));
+    h.dav.put('z', 'md1.ics', ics(...vevent('UID:md1', 'DTSTART;VALUE=DATE:20261017', 'DTEND;VALUE=DATE:20261021', 'SUMMARY:Single')));
+    for (const tool of ['apple_calendar_list_events', 'apple_calendar_search_events']) {
+      const r = await h.call(tool, { fromDate: '2026-10-20', toDate: '2026-10-22', calendars: ['Zones'], ...(tool.includes('search') ? { query: '' } : {}) });
+      expect(ids(r).sort(), tool).toEqual(['z/md.ics#occ=2026-10-17', 'z/md1.ics']);
+    }
+  });
+
   it('bounds an all-day event by the days of the zone the window was asked in', async () => {
     h.dav.put('z', 'ad.ics', ics(...vevent('UID:ad', 'DTSTART;VALUE=DATE:20261020', 'DTEND;VALUE=DATE:20261021', 'SUMMARY:Offsite')));
     // In New York (DISPLAY_TZ) the 20th runs until 05:00 on the 21st in London; London's own 21st does not include it.
