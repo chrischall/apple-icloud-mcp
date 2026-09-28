@@ -7,6 +7,8 @@ import { resolveWindow } from '../../src/calendar/window.js';
 import { FakeCalDav, NOW, NY_TZ, ics, vevent } from './fake-caldav.js';
 
 const NY = 'America/New_York';
+/** Both zones of a call made without `timeZone`. */
+const NYZ = { zone: NY, displayZone: NY };
 let dav: FakeCalDav;
 
 beforeEach(() => {
@@ -19,7 +21,7 @@ const win = (args: { fromDate?: string; daysAhead?: number } = {}) => resolveWin
 async function collect(opts: { strict?: boolean } = {}, w = win()) {
   const ctx = dav.context();
   const { calendars } = await listCalendars(ctx);
-  return collectOccurrences(ctx, calendars, w, opts);
+  return collectOccurrences(ctx, calendars, w, { displayZone: NY, ...opts });
 }
 
 describe('collectOccurrences', () => {
@@ -180,28 +182,45 @@ describe('loadEvent', () => {
 
   it('loads occurrences, single events and series', async () => {
     const ctx = dav.context();
-    const occ = await loadEvent(ctx, 'work/s.ics#occ=2026-10-21T13:00:00Z', NY);
+    const occ = await loadEvent(ctx, 'work/s.ics#occ=2026-10-21T13:00:00Z', NYZ);
     expect(occ).toMatchObject({ recurring: true, calendar: { id: 'work' }, resource: { etag: '"e1"' }, target: { isOverride: true } });
-    const natural = await loadEvent(ctx, 'work/s.ics#occ=2026-10-22T13:00:00Z', NY);
+    const natural = await loadEvent(ctx, 'work/s.ics#occ=2026-10-22T13:00:00Z', NYZ);
     expect(natural.target).toMatchObject({ isOverride: false, occ: '2026-10-22T13:00:00Z' });
-    const series = await loadEvent(ctx, 'work/s.ics', NY);
+    const series = await loadEvent(ctx, 'work/s.ics', NYZ);
     expect(series.target).toMatchObject({ recurring: true, isOverride: false });
     expect(series.target.occ).toBeUndefined();
     expect(series.target.master).toBe(series.parts.master);
-    const single = await loadEvent(ctx, 'home/one.ics', NY);
+    const single = await loadEvent(ctx, 'home/one.ics', NYZ);
     expect(single).toMatchObject({ recurring: false, target: { recurring: false } });
-    const invite = await loadEvent(ctx, 'home/inv.ics', NY);
+    const invite = await loadEvent(ctx, 'home/inv.ics', NYZ);
     expect(textProp(invite.target.comp, 'summary')).toBe('Earlier');
     expect(invite.target.occ).toBe('2026-10-22T13:00:00Z');
   });
 
+  it('finds a floating occurrence by the key DISPLAY_TZ made, under any request zone, bounding all-day days in the request\'s', async () => {
+    dav.put('home', 'fl.ics', ics(...vevent('UID:fl', 'DTSTART:20261019T090000', 'DTEND:20261019T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:Floating')));
+    dav.put('home', 'ad.ics', ics(...vevent('UID:ad', 'DTSTART;VALUE=DATE:20261019', 'RRULE:FREQ=DAILY;COUNT=5')));
+    dav.put('home', 'one.ics', ics(...vevent('UID:one', 'DTSTART:20261021T090000', 'SUMMARY:Once')));
+    const ctx = dav.context();
+    const chicago = { zone: 'America/Chicago', displayZone: NY };
+    // The key a listing made in New York: 09:00 there, 13:00Z (in Chicago's reading it would be 14:00Z, and not found).
+    const occ = await loadEvent(ctx, 'home/fl.ics#occ=2026-10-21T13:00:00Z', chicago);
+    expect(occ.target).toMatchObject({ occ: '2026-10-21T13:00:00Z', start: new Date('2026-10-21T13:00:00Z') });
+    const single = await loadEvent(ctx, 'home/one.ics', chicago);
+    expect(single.target.start).toEqual(new Date('2026-10-21T13:00:00Z'));
+    const day = await loadEvent(ctx, 'home/ad.ics#occ=2026-10-21', chicago);
+    expect(day.target).toMatchObject({ startYmd: '2026-10-21', start: new Date('2026-10-21T05:00:00Z') });
+    const series = await loadEvent(ctx, 'home/ad.ics', chicago);
+    expect(series.target.start).toEqual(new Date('2026-10-19T05:00:00Z'));
+  });
+
   it('refuses what it cannot resolve — never a different occurrence', async () => {
     const ctx = dav.context();
-    await expect(loadEvent(ctx, 'nope/one.ics', NY)).rejects.toMatchObject({ code: 'NOT_FOUND', message: expect.stringMatching(/names calendar "nope"/) });
-    await expect(loadEvent(ctx, 'home/missing.ics', NY)).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    await expect(loadEvent(ctx, 'home/empty.ics', NY)).rejects.toThrow(/holds no event/);
-    await expect(loadEvent(ctx, 'home/one.ics#occ=2026-10-21T13:00:00Z', NY)).rejects.toBeInstanceOf(InvalidArgumentError);
-    const gone = await loadEvent(ctx, 'work/s.ics#occ=2026-10-19T14:00:00Z', NY).catch((e: unknown) => e);
+    await expect(loadEvent(ctx, 'nope/one.ics', NYZ)).rejects.toMatchObject({ code: 'NOT_FOUND', message: expect.stringMatching(/names calendar "nope"/) });
+    await expect(loadEvent(ctx, 'home/missing.ics', NYZ)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(loadEvent(ctx, 'home/empty.ics', NYZ)).rejects.toThrow(/holds no event/);
+    await expect(loadEvent(ctx, 'home/one.ics#occ=2026-10-21T13:00:00Z', NYZ)).rejects.toBeInstanceOf(InvalidArgumentError);
+    const gone = await loadEvent(ctx, 'work/s.ics#occ=2026-10-19T14:00:00Z', NYZ).catch((e: unknown) => e);
     expect(gone).toBeInstanceOf(AppleToolError);
     expect(gone).toMatchObject({ code: 'NOT_FOUND', message: expect.stringMatching(/does not exist .* Nothing was changed/) });
   });

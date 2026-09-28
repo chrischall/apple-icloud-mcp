@@ -18,11 +18,14 @@ import {
   type Person,
   type Time,
 } from './ics.js';
+import type { CallZones } from './window.js';
 
 /**
  * The JSON shape of one event occurrence. Instants are emitted with an
- * explicit offset plus a `…Display` label in the display zone; all-day events
- * carry INCLUSIVE `startDate` / `endDate` (`YYYY-MM-DD`), because iCalendar's
+ * explicit offset plus a `…Display` label in the request's zone (`zone`: the
+ * call's `timeZone`, else DISPLAY_TZ); a floating value is read in the
+ * display zone first (`displayZone`, see `CallZones`). All-day events carry
+ * INCLUSIVE `startDate` / `endDate` (`YYYY-MM-DD`), because iCalendar's
  * exclusive all-day DTEND reads as one day too many to everyone else.
  */
 
@@ -32,25 +35,24 @@ export const LIST_NOTES_CHARS = 500;
 /** How much of an event's notes a `compact` list row carries. */
 export const COMPACT_NOTES_CHARS = 200;
 
-export interface FormatContext {
+export interface FormatContext extends CallZones {
   calendar: { id: string; name: string };
   /** The series (resource) id, `<calendarId>/<file>`. */
   baseId: string;
-  zone: string;
   /** Truncate notes to this many characters (list/search); omit for the full text. */
   notesLimit?: number;
 }
 
-/** A time value as a label in `zone` (a DATE is zone-free). */
-export function timeLabel(t: Time, zone: string): string {
-  return t.isDate ? formatDateOnly(ymdOf(t)) : formatInstant(instantOf(t, zone), zone).display;
+/** A time value as a label in `zones.zone`, a floating one read in `zones.displayZone` (a DATE is zone-free). */
+export function timeLabel(t: Time, zones: CallZones): string {
+  return t.isDate ? formatDateOnly(ymdOf(t)) : formatInstant(instantOf(t, zones.displayZone), zones.zone).display;
 }
 
 /** `{rule, summary}` for a recurring master, or a summary alone for an RDATE-only series. */
-export function recurrenceOf(master: Component, zone: string): { rule?: string; summary: string } | undefined {
+export function recurrenceOf(master: Component, zones: CallZones): { rule?: string; summary: string } | undefined {
   const rule = ruleOf(master);
   if (rule) {
-    const until = rule.until ? timeLabel(rule.until, zone) : undefined;
+    const until = rule.until ? timeLabel(rule.until, zones) : undefined;
     return { rule: rule.toString(), summary: describeRule(rule, until) };
   }
   return master.hasProperty('rdate') ? { summary: 'On specific dates (RDATE)' } : undefined;
@@ -87,7 +89,7 @@ export function formatOccurrence(o: Occurrence, fc: FormatContext): Record<strin
   const transp = textProp(comp, 'transp');
   const organizer = readOrganizer(comp);
   const attendees = readAttendees(comp);
-  const alarms = readAlarms(comp, o.start, o.end, fc.zone);
+  const alarms = readAlarms(comp, o.start, o.end, fc.displayZone);
   Object.assign(
     out,
     compactObject({
@@ -100,14 +102,14 @@ export function formatOccurrence(o: Occurrence, fc: FormatContext): Record<strin
     }),
   );
   out.recurring = o.recurring;
-  const recurrence = o.master ? recurrenceOf(o.master, fc.zone) : undefined;
+  const recurrence = o.master ? recurrenceOf(o.master, fc) : undefined;
   if (recurrence) out.recurrence = recurrence;
   if (o.occ !== undefined) out.occurrenceOf = fc.baseId;
   if (organizer) out.organizer = organizer;
   if (attendees.length > 0) out.attendees = attendees;
   if (alarms.length > 0) out.alarms = alarms;
   const modified = comp.getFirstPropertyValue('last-modified') as Time | null;
-  if (modified) putInstant(out, 'lastModified', instantOf(modified, fc.zone), fc.zone);
+  if (modified) putInstant(out, 'lastModified', instantOf(modified, fc.displayZone), fc.zone);
   return out;
 }
 
@@ -151,11 +153,12 @@ export function personLabel(p: Person): string {
  * approving an email must see all of what it sends — a preview without the
  * notes approves a message whose body nobody read.
  */
-export function invitationSummary(o: Occurrence, zone: string): Record<string, unknown> {
+export function invitationSummary(o: Occurrence, zones: CallZones): Record<string, unknown> {
+  const { zone } = zones;
   const comp = o.comp;
   const organizer = readOrganizer(comp);
   const attendees = readAttendees(comp);
-  const recurrence = o.master ? recurrenceOf(o.master, zone) : undefined;
+  const recurrence = o.master ? recurrenceOf(o.master, zones) : undefined;
   return compactObject({
     event: textProp(comp, 'summary') ?? '(untitled)',
     when: whenLabel(o, zone),

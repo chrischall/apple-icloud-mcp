@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { InvalidArgumentError } from '../../src/errors.js';
-import { addDaysWall, resolveWindow, resolveZone, windowJson } from '../../src/calendar/window.js';
+import { addDaysWall, resolveWindow, resolveZone, resolveZones, windowJson } from '../../src/calendar/window.js';
 
 const NY = 'America/New_York';
 const NOW = new Date('2026-10-20T16:00:00Z');
@@ -21,6 +21,17 @@ describe('resolveZone', () => {
     expect(resolveZone('US/Eastern')).toBe(NY);
     expect(() => resolveZone('-04:00')).toThrow(InvalidArgumentError);
     expect(() => resolveZone('Nowhere/Land')).toThrow(/not a known IANA time zone/);
+  });
+});
+
+describe('resolveZones', () => {
+  it('gives both zones DISPLAY_TZ without timeZone, and a timeZone to the request\'s zone only', () => {
+    process.env.DISPLAY_TZ = 'asia/tokyo';
+    // One read, in its canonical spelling: the same string for both.
+    expect(resolveZones(undefined)).toEqual({ zone: 'Asia/Tokyo', displayZone: 'Asia/Tokyo' });
+    expect(resolveZones('america/new_york')).toEqual({ zone: NY, displayZone: 'Asia/Tokyo' });
+    expect(resolveZones('Asia/Tokyo')).toEqual({ zone: 'Asia/Tokyo', displayZone: 'Asia/Tokyo' });
+    expect(() => resolveZones('Mars/Base')).toThrow(/not a known IANA time zone/);
   });
 });
 

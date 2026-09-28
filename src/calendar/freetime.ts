@@ -2,8 +2,10 @@ import { addDaysYmd, formatDateOnly, putInstant, ymdInZone, zonedToInstant } fro
 
 /**
  * Free-time arithmetic: merge busy intervals, then subtract them from each
- * day's working hours in the display zone (built per day, so DST changes move
- * the working hours with the clock, not with UTC).
+ * day's working hours in the request's zone (`zone`: the call's `timeZone`,
+ * else DISPLAY_TZ; built per day, so DST changes move the working hours with
+ * the clock, not with UTC). The busy intervals come already resolved: floating
+ * events at their DISPLAY_TZ instants, all-day ones on this zone's days.
  */
 
 export interface Interval {

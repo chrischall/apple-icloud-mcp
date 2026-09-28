@@ -423,3 +423,99 @@ describe('apple_calendar_find_free_time', () => {
     expect(partial.isError).toBe(true);
   });
 });
+
+describe('floating times and all-day days under a request timeZone', () => {
+  const LONDON = 'Europe/London';
+  const FLOATING_NOTE = 'Times with no zone of their own (floating, or a date in a timed series) are read in DISPLAY_TZ (America/New_York), shown here in Europe/London.';
+  const ids = (r: { json: { events: Array<{ id: string }> } }) => r.json.events.map((e) => e.id);
+
+  beforeEach(() => {
+    h.dav.addCalendar({ id: 'z', name: 'Zones', order: 2 }).addCalendar({ id: 'z2', name: 'Days', order: 3 });
+  });
+
+  it('excludes a floating EXDATE from a zoned series the same way whatever timeZone the listing is in', async () => {
+    h.dav.put(
+      'z',
+      'zx.ics',
+      ics(...NY_TZ, ...vevent('UID:zx', 'DTSTART;TZID=America/New_York:20261020T090000', 'DTEND;TZID=America/New_York:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'EXDATE:20261022T090000', 'SUMMARY:Zoned')),
+    );
+    const want = ['20', '21', '23', '24'].map((d) => `z/zx.ics#occ=2026-10-${d}T13:00:00Z`);
+    for (const timeZone of [undefined, 'America/Chicago', 'Asia/Tokyo']) {
+      const r = await h.call('apple_calendar_list_events', { fromDate: '2026-10-19', toDate: '2026-10-26', calendars: ['Zones'], ...(timeZone ? { timeZone } : {}) });
+      expect(ids(r), timeZone).toEqual(want);
+      // Nothing floating is shown here: no note about it.
+      expect(r.json.notes.some((n: string) => n.includes('floating')), timeZone).toBe(false);
+    }
+  });
+
+  it('explains a date in a timed series, and a floating end, both read in DISPLAY_TZ', async () => {
+    // A New York series with one extra DATE occurrence: its midnight in New York is 05:00 in London.
+    h.dav.put('z', 'm.ics', ics(...NY_TZ, ...vevent('UID:m', 'DTSTART;TZID=America/New_York:20261020T090000', 'DTEND;TZID=America/New_York:20261020T100000', 'RDATE;VALUE=DATE:20261021', 'SUMMARY:Mixed')));
+    const dated = await h.call('apple_calendar_list_events', { fromDate: '2026-10-21', toDate: '2026-10-22', calendars: ['Zones'], timeZone: LONDON });
+    expect(dated.json.events.map((e: { id: string; start: string }) => [e.id, e.start])).toEqual([['z/m.ics#occ=2026-10-21', '2026-10-21T05:00:00+01:00']]);
+    expect(dated.json.notes).toContain(FLOATING_NOTE);
+    // A zoned start with a floating end: the end is New York's 10:00.
+    h.dav.put('z2', 'mix.ics', ics(...NY_TZ, ...vevent('UID:mix', 'DTSTART;TZID=America/New_York:20261021T090000', 'DTEND:20261021T100000', 'SUMMARY:Half')));
+    const ended = await h.call('apple_calendar_get_event', { eventId: 'z2/mix.ics', timeZone: LONDON });
+    expect(ended.json.event).toMatchObject({ start: '2026-10-21T14:00:00+01:00', end: '2026-10-21T15:00:00+01:00' });
+    expect(ended.json.notes).toEqual([FLOATING_NOTE]);
+  });
+
+  it('bounds an all-day event by the days of the zone the window was asked in', async () => {
+    h.dav.put('z', 'ad.ics', ics(...vevent('UID:ad', 'DTSTART;VALUE=DATE:20261020', 'DTEND;VALUE=DATE:20261021', 'SUMMARY:Offsite')));
+    // In New York (DISPLAY_TZ) the 20th runs until 05:00 on the 21st in London; London's own 21st does not include it.
+    const next = await h.call('apple_calendar_list_events', { fromDate: '2026-10-21', toDate: '2026-10-22', calendars: ['Zones'], timeZone: LONDON });
+    expect(next.json.events).toEqual([]);
+    const same = await h.call('apple_calendar_list_events', { fromDate: '2026-10-20', toDate: '2026-10-21', calendars: ['Zones'], timeZone: LONDON });
+    expect(same.json.events.map((e: { id: string; startDate: string }) => [e.id, e.startDate])).toEqual([['z/ad.ics', '2026-10-20']]);
+  });
+
+  it('finds free time with floating events at DISPLAY_TZ\'s instants and all-day events on the requested zone\'s days', async () => {
+    h.dav.put('z', 'fl.ics', ics(...vevent('UID:fl', 'DTSTART:20261021T090000', 'DTEND:20261021T100000', 'SUMMARY:Floating')));
+    h.dav.put('z', 'a20.ics', ics(...vevent('UID:a20', 'DTSTART;VALUE=DATE:20261020', 'DTEND;VALUE=DATE:20261021', 'SUMMARY:Tuesday')));
+    h.dav.put('z2', 'a21.ics', ics(...vevent('UID:a21', 'DTSTART;VALUE=DATE:20261021', 'DTEND;VALUE=DATE:20261022', 'SUMMARY:Wednesday')));
+    const slots = (r: { json: { days: Array<{ date: string; free: Array<{ start: string; end: string }> }> } }) =>
+      r.json.days.map((d) => [d.date, d.free.map((s) => `${s.start.slice(11, 16)}-${s.end.slice(11, 16)}`)]);
+    const args = { fromDate: '2026-10-21', daysAhead: 1, timeZone: LONDON };
+    // 09:00–10:00 in New York is 14:00–15:00 in London.
+    const floating = await h.call('apple_calendar_find_free_time', { ...args, calendars: ['Zones'] });
+    expect(slots(floating)).toEqual([['2026-10-21', ['09:00-14:00', '15:00-17:00']]]);
+    expect(floating.json.notes).toContain(FLOATING_NOTE);
+    // Around the clock: the 20th (New York's day would reach 05:00 London on the 21st) blocks nothing on the 21st…
+    const allDay = { ...args, includeAllDay: true, workdayStart: '00:00', workdayEnd: '23:30' };
+    expect(slots(await h.call('apple_calendar_find_free_time', { ...allDay, calendars: ['Zones'] }))).toEqual([['2026-10-21', ['00:00-14:00', '15:00-23:30']]]);
+    // …and the 21st blocks the whole London day (in New York's it would leave 00:00–05:00 free).
+    const wholeDay = await h.call('apple_calendar_find_free_time', { ...allDay, calendars: ['Days'] });
+    expect(slots(wholeDay)).toEqual([['2026-10-21', []]]);
+    expect(wholeDay.json.notes.some((n: string) => n.includes('floating'))).toBe(false);
+  });
+
+  it('answers exactly the same without timeZone as with DISPLAY_TZ\'s own zone, however it is spelled', async () => {
+    h.dav.put('z', 'fl.ics', ics(...vevent('UID:fl', 'DTSTART:20261020T090000', 'DTEND:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:Floating')));
+    h.dav.put(
+      'z',
+      'zx.ics',
+      ics(...NY_TZ, ...vevent('UID:zx', 'DTSTART;TZID=America/New_York:20261020T090000', 'DTEND;TZID=America/New_York:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'EXDATE:20261022T090000', 'SUMMARY:Zoned')),
+    );
+    h.dav.put('z', 'fr2.ics', ics(...vevent('UID:fr2', 'DTSTART:20261020T090000', 'DTEND:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'RDATE:20261025T180000Z', 'SUMMARY:Plus')));
+    h.dav.put('z', 'ad.ics', ics(...vevent('UID:ad', 'DTSTART;VALUE=DATE:20261021', 'DTEND;VALUE=DATE:20261022', 'SUMMARY:Offsite')));
+    h.dav.put(
+      'z',
+      'mx.ics',
+      ics(...NY_TZ, ...vevent('UID:mx', 'DTSTART;TZID=America/New_York:20261020T120000', 'DTEND;TZID=America/New_York:20261020T130000', 'RRULE:FREQ=DAILY;COUNT=3', 'RDATE;VALUE=DATE:20261024', 'SUMMARY:Mixed')),
+    );
+    const answers = async (extra: Record<string, unknown>) => {
+      const list = await h.call('apple_calendar_list_events', { fromDate: '2026-10-19', toDate: '2026-10-27', calendars: ['Zones'], view: 'full', ...extra });
+      const eventIds = [...list.json.events.map((e: { id: string }) => e.id), 'z/fl.ics', 'z/fr2.ics', 'z/ad.ics'];
+      const gets: unknown[] = [];
+      for (const eventId of eventIds) gets.push((await h.call('apple_calendar_get_event', { eventId, ...extra })).json);
+      const free = await h.call('apple_calendar_find_free_time', { fromDate: '2026-10-20', daysAhead: 7, includeAllDay: true, calendars: ['Zones'], ...extra });
+      return { list: list.json, gets, free: free.json };
+    };
+    const plain = await answers({});
+    expect(plain.list.total).toBe(20); // 5 + 4 + 6 + 1 + 4
+    expect(plain.gets.every((g) => !(g as { error?: unknown }).error)).toBe(true);
+    expect(await answers({ timeZone: 'America/New_York' })).toEqual(plain);
+    expect(await answers({ timeZone: 'america/new_york' })).toEqual(plain);
+  });
+});

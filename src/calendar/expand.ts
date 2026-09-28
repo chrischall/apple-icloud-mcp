@@ -502,7 +502,11 @@ export interface Occurrence {
   /** The series master, for an occurrence of a recurring series that has one. */
   master?: Component;
   allDay: boolean;
-  /** Instants. For an all-day occurrence: the day boundaries in the display zone. */
+  /**
+   * Instants. For an all-day occurrence: the day boundaries in the request's
+   * zone (`dayZone`), so a window keeps the days it was asked for; its key
+   * (`occ`, the date) depends on no zone.
+   */
   start: Date;
   end: Date;
   /** All-day only: the first and LAST day (inclusive). */
@@ -525,26 +529,30 @@ interface Span {
   endYmd?: string;
 }
 
-function allDaySpan(startYmd: string, days: number, zone: string): Span {
+function allDaySpan(startYmd: string, days: number, dayZone: string): Span {
   const endExclusive = addDaysYmd(startYmd, days);
   return {
     allDay: true,
-    start: startOfDay(startYmd, zone),
-    end: startOfDay(endExclusive, zone),
+    start: startOfDay(startYmd, dayZone),
+    end: startOfDay(endExclusive, dayZone),
     startYmd,
     endYmd: addDaysYmd(endExclusive, -1),
   };
 }
 
-/** The span of a component from its own DTSTART / DTEND (or DURATION). */
-function componentSpan(comp: Component, zone: string): Span {
+/**
+ * The span of a component from its own DTSTART / DTEND (or DURATION): an
+ * all-day one between midnights in `dayZone` (the request's), a timed one read
+ * in `zone` (the display zone, which reads floating values).
+ */
+function componentSpan(comp: Component, zone: string, dayZone: string): Span {
   const startT = startTimeOf(comp);
   const endT = endTimeOf(comp, startT);
   if (startT.isDate) {
     const startYmd = ymdOf(startT);
     // An all-day DTEND is exclusive; one on or before DTSTART (or a date-time) means one day.
     const days = endT.isDate ? daysBetween(startYmd, ymdOf(endT)) : 1;
-    return allDaySpan(startYmd, Math.max(1, days), zone);
+    return allDaySpan(startYmd, Math.max(1, days), dayZone);
   }
   const start = instantOf(startT, zone);
   const end = endInstantOf(comp, zone);
@@ -555,11 +563,11 @@ function recurrenceIdOf(comp: Component): Time {
   return comp.getFirstPropertyValue('recurrence-id') as Time;
 }
 
-function overrideOccurrence(ovr: Component, master: Component | undefined, key: string, zone: string): Occurrence {
+function overrideOccurrence(ovr: Component, master: Component | undefined, key: string, zone: string, dayZone: string): Occurrence {
   return {
     comp: ovr,
     ...(master ? { master } : {}),
-    ...componentSpan(ovr, zone),
+    ...componentSpan(ovr, zone, dayZone),
     occ: key,
     recurrenceTime: recurrenceIdOf(ovr),
     isOverride: true,
@@ -579,7 +587,8 @@ interface SeriesShape {
 }
 
 function seriesShape(master: Component, zone: string): SeriesShape {
-  const s = componentSpan(master, zone);
+  // Only its kind and days are used: no day boundary is drawn here.
+  const s = componentSpan(master, zone, zone);
   // Every instance lasts the series' own length (RFC 5545 §3.8.5.3; see Length).
   const length = s.allDay ? { ms: 0 } : lengthOf(master, zone);
   const periodEnds = new Map<string, number>();
@@ -607,9 +616,16 @@ function seriesShape(master: Component, zone: string): SeriesShape {
   };
 }
 
-function naturalOccurrence(master: Component, t: Time, key: string, shape: SeriesShape, zone: string): Occurrence {
+/**
+ * A natural instance of a series. An all-day series' days are bounded in
+ * `dayZone`; a timed series' instances are read in `zone` — a DATE one (an
+ * RDATE;VALUE=DATE) too, at its midnight there: the walk is ordered in that
+ * zone, and a start from another could end it before an instance it has yet
+ * to give.
+ */
+function naturalOccurrence(master: Component, t: Time, key: string, shape: SeriesShape, zone: string, dayZone: string): Occurrence {
   let span: Span;
-  if (shape.allDay) span = allDaySpan(ymdOf(t), shape.days, zone);
+  if (shape.allDay) span = allDaySpan(ymdOf(t), shape.days, dayZone);
   else {
     const start = instantOf(t, zone);
     const length = shape.length;
@@ -619,9 +635,9 @@ function naturalOccurrence(master: Component, t: Time, key: string, shape: Serie
   return { comp: master, master, ...span, occ: key, recurrenceTime: t, isOverride: false, recurring: true };
 }
 
-/** The single occurrence of a non-recurring event. */
-export function singleOccurrence(master: Component, zone: string): Occurrence {
-  return { comp: master, ...componentSpan(master, zone), isOverride: false, recurring: false };
+/** The single occurrence of a non-recurring event (floating times read in `zone`, all-day days bounded in `dayZone`). */
+export function singleOccurrence(master: Component, zone: string, dayZone: string = zone): Occurrence {
+  return { comp: master, ...componentSpan(master, zone, dayZone), isOverride: false, recurring: false };
 }
 
 /** Whether an occurrence overlaps `[from, to)`; a zero-length one must start inside it. */
@@ -636,7 +652,10 @@ export interface ExpandOptions {
   from: Date;
   /** Exclusive. */
   to: Date;
+  /** The display zone: reads floating values, and so makes every `#occ=` key. */
   zone: string;
+  /** Where an all-day occurrence's days begin and end: the zone the window was asked in. Default: `zone`. */
+  dayZone?: string;
   maxOccurrences?: number;
   maxSteps?: number;
 }
@@ -664,9 +683,10 @@ export function isRecurringResource(parts: EventParts): boolean {
  */
 export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResult {
   const { from, to, zone } = opts;
+  const dayZone = opts.dayZone ?? zone;
   const { master, overrides } = parts;
   if (master && !isRecurringMaster(master)) {
-    const single = singleOccurrence(master, zone);
+    const single = singleOccurrence(master, zone, dayZone);
     return { occurrences: overlaps(single, from, to) ? [single] : [] };
   }
   const maxOccurrences = opts.maxOccurrences ?? MAX_OCCURRENCES_PER_SERIES;
@@ -686,7 +706,7 @@ export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResu
     let slack = 0;
     const consider = (t: Time): 'next' | 'stop' => {
       const key = occKey(t, zone);
-      const natural = naturalOccurrence(master, t, key, shape, zone);
+      const natural = naturalOccurrence(master, t, key, shape, zone, dayZone);
       // Past the window, only moved overrides can still matter (below).
       if (natural.start.getTime() >= to.getTime() + slack) return 'stop';
       if (natural.start.getTime() >= to.getTime()) return 'next';
@@ -694,7 +714,7 @@ export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResu
       let occ = natural;
       if (ovr) {
         visited.add(key);
-        occ = overrideOccurrence(ovr, master, key, zone);
+        occ = overrideOccurrence(ovr, master, key, zone, dayZone);
       }
       if (!overlaps(occ, from, to)) return 'next';
       if (out.length >= maxOccurrences) {
@@ -739,7 +759,7 @@ export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResu
   // Overrides the walk did not reach: moved in from beyond the window, or of a series we only hold part of.
   for (const [key, ovr] of byKey) {
     if (visited.has(key)) continue;
-    const occ = overrideOccurrence(ovr, master, key, zone);
+    const occ = overrideOccurrence(ovr, master, key, zone, dayZone);
     if (overlaps(occ, from, to)) out.push(occ);
   }
   return { occurrences: out, ...(truncated ? { truncated } : {}), ...(problem !== undefined ? { ruleProblem: problem } : {}) };
@@ -754,12 +774,20 @@ function tooLong(what: string, maxSteps: number): AppleToolError {
 /**
  * The occurrence a `#occ=` value names, or undefined when the series has no
  * such occurrence (deleted, or moved more than the id can follow). Never a
- * fallback to another occurrence.
+ * fallback to another occurrence. `zone` is the display zone the key was
+ * made in; `opts.dayZone` bounds an all-day occurrence's days (default `zone`).
  */
-export function findOccurrence(parts: EventParts, occ: string, zone: string, maxSteps: number = MAX_EXPANSION_STEPS): Occurrence | undefined {
+export function findOccurrence(
+  parts: EventParts,
+  occ: string,
+  zone: string,
+  opts: { dayZone?: string; maxSteps?: number } = {},
+): Occurrence | undefined {
   const { master, overrides } = parts;
+  const dayZone = opts.dayZone ?? zone;
+  const maxSteps = opts.maxSteps ?? MAX_EXPANSION_STEPS;
   for (const o of overrides) {
-    if (occKey(recurrenceIdOf(o), zone) === occ) return overrideOccurrence(o, master, occ, zone);
+    if (occKey(recurrenceIdOf(o), zone) === occ) return overrideOccurrence(o, master, occ, zone, dayZone);
   }
   if (!master || !isRecurringMaster(master)) return undefined;
   const shape = seriesShape(master, zone);
@@ -772,7 +800,7 @@ export function findOccurrence(parts: EventParts, occ: string, zone: string, max
     if (!t) return undefined;
     if (roughStartMs(t) < target - ROUGH_MARGIN_MS) continue;
     const key = occKey(t, zone);
-    if (key === occ) return naturalOccurrence(master, t, key, shape, zone);
+    if (key === occ) return naturalOccurrence(master, t, key, shape, zone, dayZone);
     if (instantOf(t, zone).getTime() > past) return undefined;
   }
   throw tooLong(`occurrence ${occ}`, maxSteps);

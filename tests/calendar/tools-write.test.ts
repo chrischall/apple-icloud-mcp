@@ -792,3 +792,124 @@ describe('apple_calendar_delete_event', () => {
     expect(textProp(parts.master!, 'summary')).toBe('Review');
   });
 });
+
+describe('floating times under a request timeZone (DISPLAY_TZ reads them; timeZone only reads input and shows times)', () => {
+  const CHICAGO = 'America/Chicago';
+  const FLOATING_NOTE = 'Times with no zone of their own (floating, or a date in a timed series) are read in DISPLAY_TZ (America/New_York), shown here in America/Chicago.';
+  const days = (file: string, hour: string, ...dates: string[]) => dates.map((d) => `home/${file}#occ=2026-10-${d}T${hour}:00:00Z`);
+
+  beforeEach(() => {
+    // A floating daily series (09:00 New York, DISPLAY_TZ), the issue's zoned series with a floating EXDATE, and a
+    // floating series with one UTC RDATE (18:00Z: 14:00 in New York, 13:00 in Chicago).
+    h.dav.put('home', 'fl.ics', ics(...vevent('UID:fl', 'DTSTART:20261020T090000', 'DTEND:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:Floating')));
+    h.dav.put(
+      'home',
+      'zx.ics',
+      ics(...NY_TZ, ...vevent('UID:zx', 'DTSTART;TZID=America/New_York:20261020T090000', 'DTEND;TZID=America/New_York:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'EXDATE:20261022T090000', 'SUMMARY:Zoned')),
+    );
+    h.dav.put('home', 'fr2.ics', ics(...vevent('UID:fr2', 'DTSTART:20261020T090000', 'DTEND:20261020T100000', 'RRULE:FREQ=DAILY;COUNT=5', 'RDATE:20261025T180000Z', 'SUMMARY:Plus')));
+  });
+
+  /** The events a listing of Home shows for one file (default: no timeZone). */
+  const listed = async (file: string, extra: Record<string, unknown> = {}) =>
+    (await h.call('apple_calendar_list_events', { fromDate: '2026-10-19', toDate: '2026-10-27', calendars: ['Home'], ...extra })).json.events.filter(
+      (e: { id: string }) => e.id.startsWith(`home/${file}#`),
+    ) as Array<{ id: string; start: string }>;
+
+  it('lists a floating series with the same ids under any timeZone, and gets one by that id', async () => {
+    const want = days('fl.ics', '13', '20', '21', '22', '23', '24');
+    expect((await listed('fl.ics')).map((e) => e.id)).toEqual(want);
+    const chicago = await h.call('apple_calendar_list_events', { fromDate: '2026-10-19', toDate: '2026-10-27', calendars: ['Home'], timeZone: CHICAGO });
+    const rows = chicago.json.events.filter((e: { id: string }) => e.id.startsWith('home/fl.ics#'));
+    expect(rows.map((e: { id: string }) => e.id)).toEqual(want);
+    // 09:00 in New York, shown in Chicago.
+    expect(rows[1]).toMatchObject({ start: '2026-10-21T08:00:00-05:00', end: '2026-10-21T09:00:00-05:00' });
+    expect(chicago.json.notes).toContain(FLOATING_NOTE);
+    const got = await h.call('apple_calendar_get_event', { eventId: want[1], timeZone: CHICAGO });
+    expect(got.isError).toBe(false);
+    expect(got.json.event).toMatchObject({ id: want[1], start: '2026-10-21T08:00:00-05:00', end: '2026-10-21T09:00:00-05:00' });
+    expect(got.json.notes).toEqual([FLOATING_NOTE]);
+  });
+
+  it('edits one occurrence of a floating series under a request timeZone, keeping its id', async () => {
+    const id = 'home/fl.ics#occ=2026-10-21T13:00:00Z';
+    const r = await h.call('apple_calendar_update_event', { eventId: id, startDate: '2026-10-21T10:00', timeZone: CHICAGO });
+    expect(r.json).toMatchObject({ updated: true, verified: true, applied: 'this occurrence only', eventId: id, event: { start: '2026-10-21T10:00:00-05:00' } });
+    const stored = unfold(h.dav.get('home', 'fl.ics')!.ics);
+    // The override names its instance as the series writes it (floating); its new time is written in the zone asked.
+    expect(stored).toContain('RECURRENCE-ID:20261021T090000');
+    expect(stored).toContain('DTSTART;TZID=America/Chicago:20261021T100000');
+    expect((await listed('fl.ics')).map((e) => [e.id, e.start])).toContainEqual([id, '2026-10-21T11:00:00-04:00']);
+  });
+
+  it('deletes one occurrence of a floating series under a request timeZone', async () => {
+    const done = json(await callConfirmed(gated('apple_calendar_delete_event'), { eventId: 'home/fl.ics#occ=2026-10-22T13:00:00Z', timeZone: CHICAGO }));
+    expect(done).toMatchObject({ deleted: true, verified: true, applied: 'this occurrence only' });
+    expect(unfold(h.dav.get('home', 'fl.ics')!.ics)).toContain('EXDATE:20261022T090000');
+    expect((await listed('fl.ics')).map((e) => e.id)).toEqual(days('fl.ics', '13', '20', '21', '23', '24'));
+  });
+
+  it('moves a zoned series with a floating EXDATE into another zone, keeping the EXDATE on its occurrence (the issue\'s repro)', async () => {
+    const r = await h.call('apple_calendar_update_event', {
+      eventId: 'home/zx.ics#occ=2026-10-21T13:00:00Z',
+      span: 'allEvents',
+      startDate: '2026-10-21T10:00',
+      timeZone: CHICAGO,
+    });
+    expect(r.json).toMatchObject({ updated: true, verified: true, applied: 'every occurrence of the series', eventId: 'home/zx.ics#occ=2026-10-21T15:00:00Z' });
+    const stored = unfold(h.dav.get('home', 'zx.ics')!.ics);
+    expect(stored).toContain('DTSTART;TZID=America/Chicago:20261020T100000');
+    // 09:00 New York (DISPLAY_TZ's reading) moved an hour on: 10:00 Chicago, the instance's new time — not 11:00.
+    expect(stored).toContain('EXDATE;TZID=America/Chicago:20261022T100000');
+    expect((await listed('zx.ics')).map((e) => e.id)).toEqual(days('zx.ics', '15', '20', '21', '23', '24'));
+  });
+
+  it('moves a floating series into a zone keeping its instants (as DISPLAY_TZ reads them), with the end asked for', async () => {
+    const id = 'home/fl.ics#occ=2026-10-21T13:00:00Z';
+    const r = await h.call('apple_calendar_update_event', { eventId: id, span: 'allEvents', endDate: '2026-10-21T09:30', timeZone: CHICAGO });
+    expect(r.json).toMatchObject({ updated: true, verified: true, eventId: id, event: { start: '2026-10-21T08:00:00-05:00', end: '2026-10-21T09:30:00-05:00' } });
+    const stored = unfold(h.dav.get('home', 'fl.ics')!.ics);
+    expect(stored).toContain('DTSTART;TZID=America/Chicago:20261020T080000');
+    expect(stored).toContain('DTEND;TZID=America/Chicago:20261020T093000');
+    expect((await listed('fl.ics')).map((e) => e.id)).toEqual(days('fl.ics', '13', '20', '21', '22', '23', '24'));
+  });
+
+  it('moves a floating series into a zone through an occurrence DISPLAY_TZ skips, measuring the shift a day earlier', async () => {
+    // 02:30 does not exist in New York on 2027-03-14 (read as 03:30 EDT, 07:30Z). Every other day it is 01:30 in
+    // Chicago, whose clocks change an hour later: measured on the far side of New York's change it would be 00:30.
+    h.dav.put('home', 'gap.ics', ics(...vevent('UID:gap', 'DTSTART:20270310T023000', 'DTEND:20270310T033000', 'RRULE:FREQ=DAILY;COUNT=7', 'SUMMARY:Pill')));
+    const ids = async () =>
+      (await h.call('apple_calendar_list_events', { fromDate: '2027-03-09', toDate: '2027-03-18', calendars: ['Home'] })).json.events.map((e: { id: string }) => e.id);
+    const before = await ids();
+    const r = await h.call('apple_calendar_update_event', { eventId: 'home/gap.ics#occ=2027-03-14T07:30:00Z', span: 'allEvents', endDate: '2027-03-14T03:30', timeZone: CHICAGO });
+    expect(r.json).toMatchObject({ updated: true, verified: true, eventId: 'home/gap.ics#occ=2027-03-14T07:30:00Z' });
+    const stored = unfold(h.dav.get('home', 'gap.ics')!.ics);
+    expect(stored).toContain('DTSTART;TZID=America/Chicago:20270310T013000');
+    expect(stored).toContain('DTEND;TZID=America/Chicago:20270310T023000');
+    expect(await ids()).toEqual(before);
+  });
+
+  it('shifts nothing for a UTC series with a floating RDATE DISPLAY_TZ skips, moved into DISPLAY_TZ\'s own zone', async () => {
+    // The skipped-time rule above is for a floating series. This one is on UTC's clock, which skips nothing: moved
+    // into New York (DISPLAY_TZ, however it is spelled) with only a new end, every occurrence stays where it was.
+    for (const timeZone of ['America/New_York', 'america/new_york']) {
+      h.dav.put('home', 'u.ics', ics(...vevent('UID:u', 'DTSTART:20270310T120000Z', 'DTEND:20270310T130000Z', 'RRULE:FREQ=DAILY;COUNT=8', 'RDATE:20270314T023000', 'SUMMARY:U')));
+      const id = 'home/u.ics#occ=2027-03-14T07:30:00Z';
+      const r = await h.call('apple_calendar_update_event', { eventId: id, span: 'allEvents', endDate: '2027-03-14T09:00:00Z', timeZone });
+      expect(r.json, timeZone).toMatchObject({ updated: true, verified: true, eventId: id, event: { start: '2027-03-14T03:30:00-04:00', end: '2027-03-14T05:00:00-04:00' } });
+      const stored = unfold(h.dav.get('home', 'u.ics')!.ics);
+      expect(stored, timeZone).toContain('DTSTART;TZID=America/New_York:20270310T080000');
+      expect(stored, timeZone).toContain('RDATE;TZID=America/New_York:20270314T033000');
+    }
+  });
+
+  it('deletes a UTC occurrence of a floating series under a request timeZone at DISPLAY_TZ\'s wall time, so it is really gone', async () => {
+    const done = json(await callConfirmed(gated('apple_calendar_delete_event'), { eventId: 'home/fr2.ics#occ=2026-10-25T18:00:00Z', timeZone: CHICAGO }));
+    expect(done).toMatchObject({ deleted: true, verified: true, applied: 'this occurrence only' });
+    const stored = unfold(h.dav.get('home', 'fr2.ics')!.ics);
+    // 18:00Z is 14:00 in New York, where the series' floating values are read (13:00 would be Chicago's wall time).
+    expect(stored).toContain('EXDATE:20261025T140000');
+    expect(stored).not.toContain('EXDATE:20261025T130000');
+    expect((await listed('fr2.ics')).map((e) => e.id)).toEqual(days('fr2.ics', '13', '20', '21', '22', '23', '24'));
+  });
+});

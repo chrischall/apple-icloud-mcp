@@ -12,7 +12,9 @@ import { InvalidArgumentError } from '../errors.js';
  *  - An OCCURRENCE of a recurring series appends `#occ=<RECURRENCE-ID>`: the
  *    occurrence's ORIGINAL start in UTC (`2026-10-20T13:00:00Z`) or, for an
  *    all-day series, its date (`2026-10-20`). The original start is stable when
- *    that one occurrence is moved, so the id keeps naming it.
+ *    that one occurrence is moved, so the id keeps naming it. A floating
+ *    (zone-less) start is its wall clock read in DISPLAY_TZ — never in a
+ *    call's `timeZone` — so an id means the same in every call.
  *
  * A bare series id never silently stands for "the first occurrence": acting on
  * a series through it would hit the whole series, which is refused unless the

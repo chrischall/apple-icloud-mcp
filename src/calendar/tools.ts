@@ -29,9 +29,9 @@ import { findOccurrence, overlaps, type Occurrence } from './expand.js';
 import { LIST_NOTES_CHARS, formatCompactOccurrence, formatOccurrence, invitationSummary, personLabel, whenLabel } from './format.js';
 import { computeFreeTime, mergeIntervals, parseClock } from './freetime.js';
 import { formatEventId, parseEventId } from './ids.js';
-import { WEEKDAYS, eventParts, isSelf, parseCalendar, serializeForWrite, textProp, type Person } from './ics.js';
+import { WEEKDAYS, endTimeOf, eventParts, isFloating, isSelf, parseCalendar, serializeForWrite, startTimeOf, textProp, type Person } from './ics.js';
 import type { Identity } from './series.js';
-import { resolveWindow, resolveZone, windowJson, type Window } from './window.js';
+import { resolveWindow, resolveZones, windowJson, type CallZones, type Window } from './window.js';
 
 /**
  * iCloud Calendar over CalDAV: list/search/read events, create/update/delete
@@ -57,15 +57,19 @@ const MAX_FREE_TIME_DAYS = 31;
 // ---------------------------------------------------------------------------
 
 const DATES_NOTE =
-  'Dates are ISO-8601: YYYY-MM-DD, or YYYY-MM-DDTHH:MM[:SS] with an optional Z or ±HH:MM. A time without an offset is ' +
-  'wall-clock time in timeZone (default DISPLAY_TZ), never UTC.';
+  'Dates are ISO-8601: YYYY-MM-DD or YYYY-MM-DDTHH:MM[:SS], optional Z or ±HH:MM. An offset-less time is wall clock in ' +
+  'timeZone (default DISPLAY_TZ), never UTC; a stored floating one is read in DISPLAY_TZ.';
 
 const timeZoneParam = z
   .string()
   .min(1)
   .max(64)
   .optional()
-  .describe('IANA time zone (e.g. America/New_York) for dates you pass without an offset and for the times returned. Default: DISPLAY_TZ.');
+  .describe(
+    'IANA time zone (e.g. America/New_York) for dates you pass without an offset and for the times returned. Default: ' +
+      'DISPLAY_TZ. Events stored without a zone of their own (floating) are always read in DISPLAY_TZ, never in this one, ' +
+      'so their ids do not depend on it; a server that runs in UTC needs DISPLAY_TZ set for them.',
+  );
 
 const dateParam = (what: string) => z.string().min(1).max(40).optional().describe(what);
 
@@ -206,9 +210,29 @@ function windowLabel(w: Window): string {
 }
 
 /** A list/search row: `compact` (default) or `full` (notes cut to LIST_NOTES_CHARS; get_event returns them whole). */
-function formatRow(row: Row, zone: string, view: View, self: ReadonlySet<string>): Record<string, unknown> {
-  const fc = { calendar: row.resource.calendar, baseId: row.baseId, zone };
+function formatRow(row: Row, zones: CallZones, view: View, self: ReadonlySet<string>): Record<string, unknown> {
+  const fc = { calendar: row.resource.calendar, baseId: row.baseId, ...zones };
   return view === 'full' ? formatOccurrence(row.occurrence, { ...fc, notesLimit: LIST_NOTES_CHARS }) : formatCompactOccurrence(row.occurrence, fc, self);
+}
+
+/**
+ * Said when a time shown in the request's zone is a floating one, read in
+ * DISPLAY_TZ — so a caller passing `timeZone` knows why a floating 09:00
+ * shows as another hour (and a hosted server without DISPLAY_TZ, where
+ * that zone is UTC, is not mistaken for a wrong event).
+ */
+function floatingNote(zones: CallZones, occurrences: Iterable<Occurrence>): string[] {
+  if (zones.zone === zones.displayZone) return [];
+  for (const o of occurrences) {
+    const shown = o.isOverride || o.recurrenceTime === undefined ? startTimeOf(o.comp) : o.recurrenceTime;
+    // A timed occurrence read in DISPLAY_TZ: a floating start or end, or a date in a timed series (its midnight there).
+    if (!o.allDay && (isFloating(shown) || shown.isDate || isFloating(endTimeOf(o.comp, startTimeOf(o.comp))))) {
+      return [
+        `Times with no zone of their own (floating, or a date in a timed series) are read in DISPLAY_TZ (${zones.displayZone}), shown here in ${zones.zone}.`,
+      ];
+    }
+  }
+  return [];
 }
 
 function calendarJson(c: CalendarInfo): Record<string, unknown> {
@@ -302,14 +326,14 @@ async function verifyOccurrence(
   ctx: CalendarContext,
   target: { calendar: CalendarInfo; resourceName: string; eventId: string; expected: Record<string, unknown> },
   keys: string[],
-  zone: string,
+  zones: CallZones,
 ): Promise<Verification> {
   const unverified = (why: string): Verification => ({ verified: false, after: target.expected, warnings: [why] });
   const id = parseEventId(target.eventId);
   let parsedOcc: Occurrence | undefined;
   try {
     const res = await fetchEvent(ctx, target.calendar, target.resourceName, id.baseId);
-    parsedOcc = occurrenceFor(eventParts(parseCalendar(res.ics, `event ${id.baseId}`)), id.occ, zone);
+    parsedOcc = occurrenceFor(eventParts(parseCalendar(res.ics, `event ${id.baseId}`)), id.occ, zones);
   } catch (err) {
     return unverified(
       err instanceof AppleToolError && err.code === 'NOT_FOUND'
@@ -318,7 +342,7 @@ async function verifyOccurrence(
     );
   }
   if (!parsedOcc) return unverified('iCloud accepted the write, but the changed occurrence is not visible on a re-read yet. Check again shortly.');
-  const actual = formatOccurrence(parsedOcc, { calendar: target.calendar, baseId: id.baseId, zone });
+  const actual = formatOccurrence(parsedOcc, { calendar: target.calendar, baseId: id.baseId, ...zones });
   const warnings: string[] = [];
   for (const k of keys) {
     if (!readsBack(k, actual, target.expected)) {
@@ -396,13 +420,13 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     },
     opts: { defaultDays: number; defaultLimit: number; query?: string },
   ) => {
-    const zone = resolveZone(args.timeZone);
+    const zones = resolveZones(args.timeZone);
     const view = resolveView(args.view, CALENDAR_VIEWS);
-    const win = resolveWindow(args, { zone, now: now(), defaultDays: opts.defaultDays, maxDays: MAX_RANGE_DAYS });
+    const win = resolveWindow(args, { zone: zones.zone, now: now(), defaultDays: opts.defaultDays, maxDays: MAX_RANGE_DAYS });
     const ctx = await context();
     const { calendars } = await listCalendars(ctx);
     const selected = resolveCalendars(calendars, args.calendars);
-    const collected = await collectOccurrences(ctx, selected, win);
+    const collected = await collectOccurrences(ctx, selected, win, { displayZone: zones.displayZone });
     let rows = collected.rows;
     const notes = [...collected.notes];
     if (opts.query !== undefined) {
@@ -415,11 +439,13 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     const limit = args.limit ?? opts.defaultLimit;
     assertOffset(offset, rows.length);
     const self = knownSelfAddresses(ctx);
-    const page = rows.slice(offset, offset + limit).map((r) => formatRow(r, zone, view, self));
+    const shown = rows.slice(offset, offset + limit);
+    const page = shown.map((r) => formatRow(r, zones, view, self));
     const names = selected.map((c) => `"${c.name}"`).join(', ') || '(no calendars)';
     const scope = opts.query !== undefined ? `events matching "${opts.query}" (title, location or notes)` : 'events';
     if (rows.length === 0) notes.push(`No ${scope} in ${windowLabel(win)} in ${names}.`);
     notes.push(`Only ${windowLabel(win)} was searched; nothing outside that window was examined.`);
+    notes.push(...floatingNote(zones, shown.map((r) => r.occurrence)));
     const paging = pageInfo({ offset, limit, returned: page.length, total: rows.length });
     return jsonResponse(
       pagedResponse(paging, 'events', page, {
@@ -499,10 +525,10 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     }),
     annotations: ANNOTATIONS.read,
     handler: async (args) => {
-      const zone = resolveZone(args.timeZone);
+      const zones = resolveZones(args.timeZone);
       const ctx = await context();
-      const loaded = await loadEvent(ctx, args.eventId, zone);
-      const event = formatOccurrence(loaded.target, { calendar: loaded.calendar, baseId: loaded.id.baseId, zone });
+      const loaded = await loadEvent(ctx, args.eventId, zones);
+      const event = formatOccurrence(loaded.target, { calendar: loaded.calendar, baseId: loaded.id.baseId, ...zones });
       const notes: string[] = [];
       if (loaded.recurring && loaded.id.occ === undefined) {
         notes.push(
@@ -510,6 +536,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
             'the id of one occurrence.',
         );
       }
+      notes.push(...floatingNote(zones, [loaded.target]));
       return jsonResponse({
         contentNote: CONTENT_NOTE,
         event,
@@ -553,7 +580,8 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     }),
     annotations: ANNOTATIONS.additive,
     handler: async (args, ctx: ServerContext) => {
-      const zone = resolveZone(args.timeZone);
+      const zones = resolveZones(args.timeZone);
+      const { zone } = zones;
       const invites = args.attendees ?? [];
       if (invites.length > 0 && !accessAllowed('all')) {
         throw new AppleToolError(
@@ -595,8 +623,8 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       const vcal = buildNewEvent(input, { zone, now: stamp, uid, times, notes: built, ...(who ? { organizer: who.organizer } : {}) });
       // Checked now, before the confirm gate: the text must hold exactly the attendees the gate is about to show.
       const body = serializeForWrite(vcal);
-      const draft = occurrenceFor(eventParts(vcal), undefined, zone) as Occurrence;
-      const planned = formatOccurrence(draft, { calendar, baseId: formatEventId(calendar.id, `${uid}.ics`), zone });
+      const draft = occurrenceFor(eventParts(vcal), undefined, zones) as Occurrence;
+      const planned = formatOccurrence(draft, { calendar, baseId: formatEventId(calendar.id, `${uid}.ics`), ...zones });
 
       if (invites.length > 0) {
         const gate = await confirmWrite(ctx, {
@@ -607,7 +635,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
           payload: { calendar: calendar.id, ...input },
           // Everything the invitation carries — notes and url included — so the person approving it sees what is sent.
           preview: compactObject({
-            ...invitationSummary(draft, zone),
+            ...invitationSummary(draft, zones),
             calendar: calendar.name,
             calendarShared: sharing,
             notice: 'iCloud will email each attendee an invitation — with everything above — as soon as the event is saved.',
@@ -624,7 +652,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
         dav,
         { calendar, resourceName: `${uid}.ics`, eventId: String(planned.id), expected: planned },
         ['title', 'isAllDay', 'start', 'end', 'startDate', 'endDate'],
-        zone,
+        zones,
       );
       const notes: string[] = [`Calendar: "${calendar.name}" (${reason}).`];
       if (sharing !== undefined) notes.push(sharing);
@@ -664,7 +692,8 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       timeZone: timeZoneParam.describe(
         'IANA time zone. With startDate/endDate: offset-less dates are read in it AND the event is stored in it from now on ' +
           '(a repeating event then follows its daylight-saving changes). Omit it to keep the event\'s own zone. Times are ' +
-          'returned in it. Default: DISPLAY_TZ.',
+          'returned in it. Default: DISPLAY_TZ. An event stored without a zone (floating) is read in DISPLAY_TZ: stored in ' +
+          'this zone, the occurrence named keeps its time (floating 09:00 with DISPLAY_TZ New York becomes 08:00 Chicago).',
       ),
       location: textField('New location, one line ("" clears).', 1000),
       notes: textField('New notes, may span lines ("" clears).', 20_000, MULTI_LINE),
@@ -676,12 +705,12 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     }),
     annotations: ANNOTATIONS.update,
     handler: async (args, ctx: ServerContext) => {
-      const zone = resolveZone(args.timeZone);
+      const zones = resolveZones(args.timeZone);
       const dav = await context();
-      const loaded = await loadEvent(dav, args.eventId, zone);
+      const loaded = await loadEvent(dav, args.eventId, zones);
       const who = args.attendees !== undefined ? await identity(dav) : undefined;
       const stamp = now();
-      const plan: UpdatePlan = planUpdate(loaded, { ...args, span: args.span ?? 'thisEvent' }, { zone, now: stamp, newUid, ...(who ? { who } : {}) });
+      const plan: UpdatePlan = planUpdate(loaded, { ...args, span: args.span ?? 'thisEvent' }, { ...zones, now: stamp, newUid, ...(who ? { who } : {}) });
       const keys = comparedKeys(args);
       const expectedChanges = diff(plan.before, plan.result.expected, keys);
 
@@ -700,14 +729,14 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
           payload: { ...args, confirmToken: undefined, span: plan.span },
           preview: compactObject({
             event: plan.before.title,
-            when: whenLabel(loaded.target, zone),
+            when: whenLabel(loaded.target, zones.zone),
             calendar: plan.move ? `${loaded.calendar.name} → ${plan.move.name}` : loaded.calendar.name,
             calendarShared: sharing,
             applies: plan.scope,
             changes: Object.entries(expectedChanges).map(([k, v]) => `${k}: ${JSON.stringify(v.before)} → ${JSON.stringify(v.after)}`),
             attendees: emailed.length > 0 ? emailed.join(', ') : undefined,
             // The whole event as the email carries it — unchanged notes and url included, which NEW invitees see for the first time.
-            sentToAttendees: invitationSummary(plan.result.occurrence, zone),
+            sentToAttendees: invitationSummary(plan.result.occurrence, zones),
             notice: 'iCloud will email the attendees about this change, with the event as shown in sentToAttendees.',
           }),
           args,
@@ -790,7 +819,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
         }
       }
 
-      const check = await verifyOccurrence(dav, plan.result, keys, zone);
+      const check = await verifyOccurrence(dav, plan.result, keys, zones);
       const notes = [...plan.notes, ...(sharing !== undefined ? [sharing] : [])];
       return jsonResponse({
         updated: true,
@@ -825,11 +854,11 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     }),
     annotations: ANNOTATIONS.remove,
     handler: async (args, ctx: ServerContext) => {
-      const zone = resolveZone(args.timeZone);
+      const zones = resolveZones(args.timeZone);
       const dav = await context();
-      const loaded = await loadEvent(dav, args.eventId, zone);
+      const loaded = await loadEvent(dav, args.eventId, zones);
       const span: Span = args.span ?? 'thisEvent';
-      const plan = planDelete(loaded, span, { zone, now: now() });
+      const plan = planDelete(loaded, span, { ...zones, now: now() });
       const gate = await confirmWrite(ctx, {
         tool: 'apple_calendar_delete_event',
         action: 'apple.calendar.event.delete',
@@ -852,7 +881,8 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       try {
         const res = await fetchEvent(dav, loaded.calendar, loaded.resource.name, loaded.id.baseId);
         if ('occ' in plan.verify) {
-          verified = findOccurrence(eventParts(parseCalendar(res.ics, `event ${loaded.id.baseId}`)), plan.verify.occ, zone) === undefined;
+          // Looked up in the zone that made the key: in another, a floating one names no instance, and "gone" would be vacuous.
+          verified = findOccurrence(eventParts(parseCalendar(res.ics, `event ${loaded.id.baseId}`)), plan.verify.occ, zones.displayZone) === undefined;
           if (!verified) warnings.push('iCloud accepted the change, but the occurrence still shows on a re-read (reads can lag writes). Check again shortly.');
         } else {
           warnings.push('iCloud accepted the delete, but the event still shows on a re-read (reads can lag writes). Check again shortly.');
@@ -904,7 +934,8 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     }),
     annotations: ANNOTATIONS.read,
     handler: async (args) => {
-      const zone = resolveZone(args.timeZone);
+      const zones = resolveZones(args.timeZone);
+      const { zone } = zones;
       const at = now();
       const win = resolveWindow(args, { zone, now: at, defaultDays: 7, maxDays: MAX_FREE_TIME_DAYS });
       const workdayStart = parseClock(args.workdayStart ?? '09:00');
@@ -918,23 +949,22 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       const dav = await context();
       const { calendars } = await listCalendars(dav);
       const selected = resolveCalendars(calendars, args.calendars);
-      const collected = await collectOccurrences(dav, selected, win, { strict: true });
+      const collected = await collectOccurrences(dav, selected, win, { strict: true, displayZone: zones.displayZone });
       const me = await selfAddresses(dav);
-      const busy = mergeIntervals(
-        collected.rows
-          .filter(({ occurrence: o }) => {
-            const comp = o.comp;
-            if ((textProp(comp, 'status') ?? '').toUpperCase() === 'CANCELLED') return false;
-            // includeAllDay is the caller saying all-day events count: it overrides their free/busy flag, which Apple
-            // Calendar sets to free for all-day events by default — honouring it would make includeAllDay a no-op there.
-            if (o.allDay) {
-              if (!includeAllDay) return false;
-            } else if ((textProp(comp, 'transp') ?? '').toUpperCase() === 'TRANSPARENT') return false;
-            const mine = comp.getAllProperties('attendee').find((p) => isSelf(p, me.addresses));
-            return String(mine?.getFirstParameter('partstat') ?? '').toUpperCase() !== 'DECLINED';
-          })
-          .map(({ occurrence: o }) => ({ start: o.start.getTime(), end: o.end.getTime() })),
-      );
+      const blocking = collected.rows
+        .map(({ occurrence }) => occurrence)
+        .filter((o) => {
+          const comp = o.comp;
+          if ((textProp(comp, 'status') ?? '').toUpperCase() === 'CANCELLED') return false;
+          // includeAllDay is the caller saying all-day events count: it overrides their free/busy flag, which Apple
+          // Calendar sets to free for all-day events by default — honouring it would make includeAllDay a no-op there.
+          if (o.allDay) {
+            if (!includeAllDay) return false;
+          } else if ((textProp(comp, 'transp') ?? '').toUpperCase() === 'TRANSPARENT') return false;
+          const mine = comp.getAllProperties('attendee').find((p) => isSelf(p, me.addresses));
+          return String(mine?.getFirstParameter('partstat') ?? '').toUpperCase() !== 'DECLINED';
+        });
+      const busy = mergeIntervals(blocking.map((o) => ({ start: o.start.getTime(), end: o.end.getTime() })));
       // A slot that has already begun is never bookable, whether the window starts today by default or by an
       // explicit fromDate: free time starts at the next 5-minute mark from now.
       const notBefore = new Date(Math.ceil(at.getTime() / 300_000) * 300_000);
@@ -965,6 +995,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       }
       if (free.weekendDays > 0) notes.push(`${free.weekendDays} weekend day(s) were skipped (weekdaysOnly).`);
       if (free.outsideWindow > 0) notes.push(`${free.outsideWindow} day(s) are not listed because their working hours fall outside the window or have passed.`);
+      notes.push(...floatingNote(zones, blocking));
       return jsonResponse({
         window: windowJson(win),
         workday: { start: args.workdayStart ?? '09:00', end: args.workdayEnd ?? '17:00' },

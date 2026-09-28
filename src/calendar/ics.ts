@@ -17,7 +17,10 @@ import { addDaysYmd, formatInstant, startOfDay, zonedParts, zonedToInstant } fro
  *     without a definition that `timezones-ical-library` knows gets its
  *     VTIMEZONE injected into the parsed tree.
  *  2. **Floating times are wall clock in the display zone**, never UTC, and
- *     `instantOf` is the one place that decides it.
+ *     `instantOf` is the one place that decides it. A floating value is always
+ *     read in DISPLAY_TZ, never a request's `timeZone` (which reaches it only
+ *     with values that are never floating): an occurrence key (`occKey`) must
+ *     not change with the zone a caller asks to see times in.
  *  3. **Edits are made on the parsed component and serialized**, so every
  *     property this server does not understand (Apple's X-APPLE-* props,
  *     SCHEDULE-STATUS, …) round-trips untouched.
@@ -207,6 +210,11 @@ export function zoneOfTime(t: Time, displayZone: string): WriteZone {
   return { kind: 'tz', tz: t.zone as Timezone };
 }
 
+/** Whether a value is a floating date-time: wall-clock time with no zone of its own (read in DISPLAY_TZ). */
+export function isFloating(t: Time): boolean {
+  return !t.isDate && t.zone === ICAL.Timezone.localTimezone;
+}
+
 /** The IANA-style name of a value's zone when it has a named one (not UTC, not floating). */
 export function tzidOf(t: Time): string | undefined {
   if (t.isDate || t.zone === ICAL.Timezone.utcTimezone || t.zone === ICAL.Timezone.localTimezone) return undefined;
@@ -229,7 +237,10 @@ export function ymdOf(t: Time): string {
 /**
  * The instant a value denotes. A DATE is the start of that day in `zone`; a
  * FLOATING date-time is wall-clock time in `zone`; anything else carries its
- * own zone (UTC or a VTIMEZONE).
+ * own zone (UTC or a VTIMEZONE). `zone` is the display zone: it is how
+ * floating values, and DATE values compared inside a series, are read in
+ * every call (an all-day event's day boundaries in a window are drawn in the
+ * request's zone, by `expand.ts`, not here).
  */
 export function instantOf(t: Time, zone: string): Date {
   if (t.isDate) return startOfDay(ymdOf(t), zone);
@@ -247,7 +258,9 @@ export function utcStamp(d: Date): string {
 /**
  * The occurrence key of a value: its date for a DATE, else its instant in UTC.
  * It is what `#occ=` carries, and how overrides are matched to the instances
- * they replace (by instant, whatever zone each side was written in).
+ * they replace (by instant, whatever zone each side was written in). `zone`
+ * is the display zone, which reads a floating value, so a key is the same in
+ * every call whatever `timeZone` it passes.
  */
 export function occKey(t: Time, zone: string): string {
   return t.isDate ? ymdOf(t) : utcStamp(instantOf(t, zone));
