@@ -521,7 +521,7 @@ describe('splitting', () => {
     const target = findOccurrence(l.parts, '2026-10-23T13:00:00Z', NY) as Occurrence;
     const carried = l.parts.overrides.slice(1);
     const next = continuationSeries(l.vcal, master, carried, target, 4, { uid: 'NEW', now: NOW, zone: NY });
-    const removed = truncateSeries(l.vcal, master, l.parts.overrides, '2026-10-23T13:00:00Z', NY, NOW);
+    const removed = truncateSeries(l.vcal, master, l.parts.overrides, target, NY, NOW);
     expect(removed).toHaveLength(1);
     const oldText = unfold(serialize(l.vcal));
     expect(oldText).toContain('RRULE:FREQ=DAILY;UNTIL=20261023T125959Z');
@@ -550,20 +550,20 @@ describe('splitting', () => {
     const d = load(...vevent('UID:d', 'DTSTART;VALUE=DATE:20261019', 'RRULE:FREQ=DAILY'));
     const dt = findOccurrence(d.parts, '2026-10-22', NY) as Occurrence;
     const dn = continuationSeries(d.vcal, d.parts.master as Component, [], dt, 3, { uid: 'D2', now: NOW, zone: NY });
-    truncateSeries(d.vcal, d.parts.master as Component, [], '2026-10-22', NY, NOW);
+    truncateSeries(d.vcal, d.parts.master as Component, [], dt, NY, NOW);
     expect(serialize(d.vcal)).toContain('RRULE:FREQ=DAILY;UNTIL=20261021');
     expect(serialize(dn.vcal)).toContain('DTSTART;VALUE=DATE:20261022');
     expect(serialize(dn.vcal)).toContain('DTEND;VALUE=DATE:20261023');
     expect(serialize(dn.vcal)).toContain('RRULE:FREQ=DAILY\r\n');
 
     const f = load(...vevent('UID:f', 'DTSTART:20261019T090000', 'RRULE:FREQ=DAILY'));
-    truncateSeries(f.vcal, f.parts.master as Component, [], '2026-10-22T13:00:00Z', NY, NOW);
+    truncateSeries(f.vcal, f.parts.master as Component, [], findOccurrence(f.parts, '2026-10-22T13:00:00Z', NY) as Occurrence, NY, NOW);
     expect(serialize(f.vcal)).toContain('UNTIL=20261022T085959');
 
     const r = load(...vevent('UID:r', 'DTSTART:20261019T130000Z', 'RDATE:20261022T130000Z,20261025T130000Z'));
     const rt = findOccurrence(r.parts, '2026-10-22T13:00:00Z', NY) as Occurrence;
     const rn = continuationSeries(r.vcal, r.parts.master as Component, [], rt, 0, { uid: 'R2', now: NOW, zone: NY });
-    truncateSeries(r.vcal, r.parts.master as Component, [], '2026-10-22T13:00:00Z', NY, NOW);
+    truncateSeries(r.vcal, r.parts.master as Component, [], rt, NY, NOW);
     expect(serialize(r.vcal)).not.toContain('RDATE');
     expect(serialize(rn.vcal)).toContain('RDATE:20261022T130000Z,20261025T130000Z'.split(',')[1]);
     expect(startTimeOf(rn.master).toString()).toBe('2026-10-22T13:00:00Z');

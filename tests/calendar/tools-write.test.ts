@@ -92,6 +92,47 @@ describe('apple_calendar_create_event', () => {
     expect(r.json).toMatchObject({ created: true, event: { start: '2026-10-21T22:00:00-04:00', recurrence: { rule: 'FREQ=WEEKLY;BYDAY=WE' } } });
   });
 
+  it('stores the hour asked for in the hours before a DST change (and reads it back as that hour)', async () => {
+    // 23:00 on the night before New York falls back, 22:30 the night before it springs forward.
+    const late = await h.call('apple_calendar_create_event', { title: 'Late', startDate: '2026-10-31T23:00' });
+    expect(late.json).toMatchObject({ verified: true, event: { start: '2026-10-31T23:00:00-04:00' } });
+    expect(unfold(h.dav.get('work', 'UID-1.ics')!.ics)).toContain('DTSTART;TZID=America/New_York:20261031T230000');
+    const spring = await h.call('apple_calendar_create_event', { title: 'Spring', startDate: '2027-03-13T22:30' });
+    expect(spring.json).toMatchObject({ verified: true, event: { start: '2027-03-13T22:30:00-05:00' } });
+    // Sydney: most of the Sunday morning of each change was an hour off.
+    const syd = await h.call('apple_calendar_create_event', { title: 'Brunch', startDate: '2027-04-04T10:00', timeZone: 'Australia/Sydney' });
+    expect(syd.json).toMatchObject({ verified: true, event: { start: '2027-04-04T10:00:00+10:00' } });
+    expect(unfold(h.dav.get('work', 'UID-3.ics')!.ics)).toContain('DTSTART;TZID=Australia/Sydney:20270404T100000');
+  });
+
+  it('writes an instant no wall time names (a repeated hour ical.js reads the other way) in UTC, keeping the length', async () => {
+    // 01:30 EDT on the day New York falls back: the wall time 01:30 reads as 01:30 EST.
+    const first = await h.call('apple_calendar_create_event', { title: 'Early', startDate: '2026-11-01T01:30:00-04:00' });
+    expect(first.json).toMatchObject({ verified: true, event: { start: '2026-11-01T01:30:00-04:00', end: '2026-11-01T01:30:00-05:00' } });
+    const stored = unfold(h.dav.get('work', 'UID-1.ics')!.ics);
+    expect(stored).toContain('DTSTART:20261101T053000Z');
+    expect(stored).toContain('DTEND:20261101T063000Z');
+    // Dublin's is the other way round: its SECOND pass has no wall time ical.js reads as it.
+    const dublin = await h.call('apple_calendar_create_event', { title: 'Late', startDate: '2026-10-25T01:30:00+00:00', timeZone: 'Europe/Dublin' });
+    expect(dublin.json).toMatchObject({ verified: true, event: { start: expect.stringMatching(/^2026-10-25T01:30:00(\+00:00|Z)$/) } });
+    expect(unfold(h.dav.get('work', 'UID-2.ics')!.ics)).toContain('DTSTART:20261025T013000Z');
+  });
+
+  it('refuses a series starting at a wall time the clocks skip, and says when one starts on the other pass of a repeated hour', async () => {
+    // 02:30 does not exist on 2027-03-14 in New York: a series stored at 03:30 would repeat at 03:30 every day.
+    const skipped = await h.call('apple_calendar_create_event', { title: 'Pill', startDate: '2027-03-14T02:30', recurrence: { frequency: 'daily', count: 3 } });
+    expect(skipped.isError).toBe(true);
+    expect(skipped.json.error.message).toMatch(/startDate is a time of day that does not exist that day in America\/New_York/);
+    expect(h.dav.requests.some((q) => q.method === 'PUT')).toBe(false);
+    // One event is one instant: it goes where the clocks put that time (03:30 EDT).
+    const single = await h.call('apple_calendar_create_event', { title: 'Once', startDate: '2027-03-14T02:30' });
+    expect(single.json.event.start).toBe('2027-03-14T03:30:00-04:00');
+    // 01:30 EDT on the fall-back night: a series keeps the wall time 01:30, which is read as EST — and says so.
+    const early = await h.call('apple_calendar_create_event', { title: 'Early', startDate: '2026-11-01T01:30:00-04:00', recurrence: { frequency: 'daily', count: 3 } });
+    expect(early.json.event.start).toBe('2026-11-01T01:30:00-05:00');
+    expect(early.json.notes).toContainEqual(expect.stringMatching(/^The series now starts at Sun, Nov 1, 2026, 1:30 AM EST, not Sun, Nov 1, 2026, 1:30 AM EDT: that wall-clock time comes twice/));
+  });
+
   it('with attendees: asks first (iCloud emails invitations), then writes ORGANIZER + ATTENDEEs', async () => {
     const args = { title: 'Party', startDate: '2026-10-24T18:00', location: '', attendees: [{ email: 'ann@x.com', name: 'Ann' }, { email: 'bob@x.com' }] };
     const preview = await callPreview(gated('apple_calendar_create_event'), args);
@@ -689,6 +730,19 @@ describe('apple_calendar_delete_event', () => {
     expect(h.dav.get('work', 's.ics')!.ics).toContain('EXDATE;TZID=America/New_York:20261022T090000');
     const series = json(await callConfirmed(gated('apple_calendar_delete_event'), { eventId: 'work/s.ics', span: 'allEvents' }));
     expect(series.applied).toMatch(/^the whole series \(\d+ occurrences in the next year\)$/);
+  });
+
+  it('deletes an occurrence two values name (a PERIOD on a rule instance) entirely, and verifies it', async () => {
+    h.dav.put('home', 'dup.ics', ics(...vevent('UID:dup', 'DTSTART:20261026T130000Z', 'DTEND:20261026T140000Z', 'RRULE:FREQ=WEEKLY;COUNT=3', 'RDATE;VALUE=PERIOD:20261102T130000Z/PT3H', 'SUMMARY:W')));
+    const listed = await h.call('apple_calendar_list_events', { fromDate: '2026-10-25', toDate: '2026-11-15', calendars: ['Home'] });
+    expect(listed.json.events.filter((e: { id: string }) => e.id.startsWith('home/dup.ics')).map((e: { id: string }) => e.id)).toEqual([
+      'home/dup.ics#occ=2026-10-26T13:00:00Z',
+      'home/dup.ics#occ=2026-11-02T13:00:00Z',
+      'home/dup.ics#occ=2026-11-09T13:00:00Z',
+    ]);
+    const done = json(await callConfirmed(gated('apple_calendar_delete_event'), { eventId: 'home/dup.ics#occ=2026-11-02T13:00:00Z' }));
+    expect(done).toMatchObject({ deleted: true, verified: true, applied: 'this occurrence only' });
+    expect(done.warnings).toBeUndefined();
   });
 
   it('warns when the deletion does not read back yet, or cannot be checked', async () => {

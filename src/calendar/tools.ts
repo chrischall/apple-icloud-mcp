@@ -591,7 +591,8 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       const who = invites.length > 0 ? await identity(dav) : undefined;
       const uid = newUid();
       const stamp = now();
-      const vcal = buildNewEvent(input, { zone, now: stamp, uid, times, ...(who ? { organizer: who.organizer } : {}) });
+      const built: string[] = [];
+      const vcal = buildNewEvent(input, { zone, now: stamp, uid, times, notes: built, ...(who ? { organizer: who.organizer } : {}) });
       // Checked now, before the confirm gate: the text must hold exactly the attendees the gate is about to show.
       const body = serializeForWrite(vcal);
       const draft = occurrenceFor(eventParts(vcal), undefined, zone) as Occurrence;
@@ -627,6 +628,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       );
       const notes: string[] = [`Calendar: "${calendar.name}" (${reason}).`];
       if (sharing !== undefined) notes.push(sharing);
+      notes.push(...built);
       if (args.recurrence) notes.push('This id names the whole series; list the events to get the id of one occurrence.');
       if (invites.length > 0) notes.push('iCloud sends the invitations itself; each attendee\'s reply shows up in their status on this event.');
       const warnings = [...(warning !== undefined ? [warning] : []), ...check.warnings];

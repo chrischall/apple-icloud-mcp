@@ -1,5 +1,5 @@
 import { AppleToolError, errorMessage } from '../errors.js';
-import { startOfDay } from '../time.js';
+import { daysInMonth, startOfDay } from '../time.js';
 import {
   ICAL,
   addDaysYmd,
@@ -45,7 +45,8 @@ const DAY_MS = 86_400_000;
  * for sub-monthly frequencies: a rule whose day filters can never match
  * (`FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30`) spins forever in one synchronous
  * call — the whole server stops answering — and a rule RFC 5545 forbids
- * (`FREQ=WEEKLY;BYMONTHDAY=1`), or 500 EXDATEs in a row, makes it throw. Such
+ * (`FREQ=WEEKLY;BYMONTHDAY=1`) or a malformed value makes it throw; the walk
+ * itself stops after `MAX_SKIPPED_IN_A_ROW` excluded instances in a row. Such
  * a rule usually arrives in someone else's invitation, and it must cost that
  * one event its occurrences, never the whole calendar.
  */
@@ -90,15 +91,172 @@ export function ruleProblem(recur: Recur): string | undefined {
     const months = has('BYMONTH') ? recur.getComponent('BYMONTH').map(Number) : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
     const fits = months.some((m) => monthDays.some((d) => Math.abs(d) <= (MAX_MONTH_DAYS[m - 1] as number)));
     if (!fits) return 'BYMONTH and BYMONTHDAY name a day that never occurs';
+    // ical.js compares a DAILY rule's BYMONTHDAY with the day of the month as it stands: a count from the end never
+    // matches, so those days would silently go missing (and a rule with nothing else would spin forever).
+    if (monthDays.some((d) => d < 0)) return 'a negative BYMONTHDAY with FREQ=DAILY';
   }
   return undefined;
 }
 
 function refuseUnwalkable(master: Component): void {
   for (const prop of master.getAllProperties('rrule')) {
-    const problem = ruleProblem(prop.getFirstValue() as Recur);
+    const recur = prop.getFirstValue() as Recur;
+    const problem = ruleProblem(recur) ?? sparseProblem(recur, startTimeOf(master)) ?? timeProblem(recur, startTimeOf(master));
     if (problem) throw new UnexpandableRuleError(problem);
   }
+}
+
+/** 400 Gregorian years: dates and weekdays repeat exactly after it (it is a whole number of weeks). */
+const CYCLE_DAYS = 146_097;
+/**
+ * How much walking ical.js may do between two instances of a DAILY or WEEKLY
+ * rule with day filters, in days stepped over with each step counting 30
+ * more — times the times of day it tries on each (BYHOUR × BYMINUTE ×
+ * BYSECOND): measured at about 7.5 µs a step plus 0.25 µs a day, this is a
+ * quarter of a second. (A daily Feb 29 on a Monday, up to 40 years apart, is
+ * under half of it.)
+ */
+export const MAX_GAP_COST = 1_000_000;
+const STEP_COST = 30;
+const WEEKDAY_NUMBERS: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+
+/** Month and day of every day of one cycle, from 1970-01-01. */
+let cycleTable: { month: Uint8Array; day: Uint8Array } | undefined;
+
+function calendarCycle(): NonNullable<typeof cycleTable> {
+  if (cycleTable) return cycleTable;
+  const t = { month: new Uint8Array(CYCLE_DAYS), day: new Uint8Array(CYCLE_DAYS) };
+  let [y, m, d] = [1970, 1, 1];
+  let length = daysInMonth(y, m);
+  for (let i = 0; i < CYCLE_DAYS; i++) {
+    [t.month[i], t.day[i]] = [m, d];
+    if (++d > length) {
+      [d, m, y] = m === 12 ? [1, 1, y + 1] : [1, m + 1, y];
+      length = daysInMonth(y, m);
+    }
+  }
+  return (cycleTable = t);
+}
+
+const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+const sparseCache = new Map<string, string | undefined>();
+
+/** A rule check's answer, computed once per key (listings build walkers often); the cache is bounded. */
+function cached(key: string, compute: () => string | undefined): string | undefined {
+  if (sparseCache.has(key)) return sparseCache.get(key);
+  const problem = compute();
+  if (sparseCache.size >= 1000) sparseCache.clear();
+  sparseCache.set(key, problem);
+  return problem;
+}
+
+/**
+ * Why a DAILY or WEEKLY rule with day filters cannot be walked, or undefined.
+ * ical.js gives up on a MONTHLY/YEARLY rule that stops matching, but walks
+ * the days of these one step at a time, in ONE call, until one matches: a
+ * rule that never matches again spins forever (`FREQ=DAILY;INTERVAL=7;
+ * BYDAY=TU` from a Monday lands on Mondays only; `FREQ=WEEKLY;INTERVAL=20871;
+ * BYMONTH=6` on one date every 400 years), and one whose matches are ages
+ * apart costs seconds per instance. The days such a rule steps on repeat
+ * within one 400-year cycle, so walking that cycle once (without ical.js)
+ * finds the costliest gap between its instances (`MAX_GAP_COST`). Cached per
+ * rule and start, as listings build walkers often.
+ */
+export function sparseProblem(recur: Recur, dtstart: Time): string | undefined {
+  const freq = String(recur.freq);
+  const months = recur.getComponent('BYMONTH').map(Number);
+  const monthDays = recur.getComponent('BYMONTHDAY').map(Number);
+  const days = recur.getComponent('BYDAY').map((v) => WEEKDAY_NUMBERS[String(v).toUpperCase()] as number);
+  // A WEEKLY rule's BYDAY picks days in each week; only its BYMONTH filters them (ruleProblem refuses BYMONTHDAY there).
+  const filtered = freq === 'DAILY' ? months.length + monthDays.length + days.length > 0 : freq === 'WEEKLY' && months.length > 0;
+  if (!filtered) return undefined;
+  const tooFar = `FREQ=${freq} with day filters that skip too many of the days it steps on`;
+  const step = (freq === 'WEEKLY' ? 7 : 1) * recur.interval;
+  if (step > MAX_GAP_COST) return tooFar;
+  // Weekday filters alone repeat every week: a week of steps settles them, with no calendar to build.
+  const cycle = freq === 'DAILY' && months.length + monthDays.length === 0 ? 7 : CYCLE_DAYS;
+  const origin = ((Math.floor(Date.UTC(dtstart.year, dtstart.month - 1, dtstart.day) / 86_400_000) % CYCLE_DAYS) + CYCLE_DAYS) % CYCLE_DAYS;
+  // ical.js tries every time of day the rule expands to on each day it steps on, matching or not.
+  const stepCost = STEP_COST * TIME_PARTS.reduce((n, part) => n * Math.max(1, recur.getComponent(part).length), 1);
+  // Keyed by what decides the answer (not COUNT/UNTIL): events with the same rule share it.
+  const key = [freq, recur.interval, recur.wkst, months, monthDays, days, origin % cycle, stepCost].join('|');
+  return cached(key, () => {
+    const t = cycle === 7 ? undefined : calendarCycle();
+    const weekday = (i: number) => (4 + i) % 7; // day i of the cycle; 1970-01-01 was a Thursday
+    // The candidate days of one step, as offsets from DTSTART: the BYDAY days of its week (from WKST) for WEEKLY.
+    const dow = weekday(origin);
+    const wkst = recur.wkst - 1; // ical.js numbers weekdays from 1 = Sunday
+    const inWeek = (w: number) => (w - wkst + 7) % 7;
+    const offsets = freq === 'WEEKLY' ? (days.length > 0 ? days : [dow]).map((w) => inWeek(w) - inWeek(dow)).sort((a, b) => a - b) : [0];
+    // As ical.js matches them: a DAILY rule's BYMONTHDAY against the day of the month as it stands (ruleProblem
+    // refuses a negative one, which would never match).
+    const matches = (i: number): boolean =>
+      (months.length === 0 || months.includes((t as NonNullable<typeof t>).month[i] as number)) &&
+      (freq === 'WEEKLY' ||
+        ((monthDays.length === 0 || monthDays.includes((t as NonNullable<typeof t>).day[i] as number)) && (days.length === 0 || days.includes(weekday(i)))));
+    const steps = cycle / gcd(step, cycle);
+    let first: { k: number; at: number } | undefined;
+    let last = { k: 0, at: 0 };
+    let costliest = 0;
+    const cost = (from: { k: number; at: number }, to: { k: number; at: number }) => (to.k - from.k) * stepCost + (to.at - from.at);
+    for (let k = 0; k < steps; k++) {
+      for (const off of offsets) {
+        const at = k * step + off;
+        if (!matches((((origin + at) % CYCLE_DAYS) + CYCLE_DAYS) % CYCLE_DAYS)) continue;
+        if (first === undefined) first = { k, at };
+        else costliest = Math.max(costliest, cost(last, { k, at }));
+        last = { k, at };
+      }
+    }
+    if (first === undefined) return `FREQ=${freq} whose day filters never match a day it steps on`;
+    return Math.max(costliest, cost(last, { k: first.k + steps, at: first.at + steps * step })) > MAX_GAP_COST ? tooFar : undefined;
+  });
+}
+
+const TIME_PARTS = ['BYHOUR', 'BYMINUTE', 'BYSECOND'];
+/**
+ * Steps ical.js may take, on average, per instance of a sub-daily rule its
+ * time filters thin out: at 1–2 µs a step, a walk to `MAX_EXPANSION_STEPS`
+ * instances stays under a second.
+ */
+export const MAX_STEPS_PER_INSTANCE = 10;
+
+/**
+ * Why a sub-daily rule's time filters make it too costly (or impossible) to
+ * walk, or undefined. ical.js steps such a rule by INTERVAL — or, when it
+ * lists its own unit (BYSECOND for SECONDLY, BYMINUTE for MINUTELY, BYHOUR
+ * for HOURLY), through that list and then one of the next unit — and checks
+ * each step against the coarser parts, with no bound: `FREQ=SECONDLY;
+ * BYHOUR=3;BYMINUTE=0;BYSECOND=0` tries all 1440 minutes of a day for its one
+ * instance (a listing of a series from 1990 took half a minute), and
+ * `FREQ=MINUTELY;INTERVAL=1440;BYHOUR=3` from midnight never reaches 3 AM at
+ * all. The times of day it steps on repeat within a day, so one day of them,
+ * walked here, gives both answers. Cached like `sparseProblem`.
+ */
+export function timeProblem(recur: Recur, dtstart: Time): string | undefined {
+  const freq = String(recur.freq);
+  if (!SUB_DAILY.has(freq)) return undefined;
+  const [hours, minutes, seconds] = TIME_PARTS.map((part) => recur.getComponent(part).map(Number)) as [number[], number[], number[]];
+  // The coarser parts filter; HOURLY has none (BYMINUTE/BYSECOND add instances to each hour instead).
+  const filters: Array<(tod: number) => boolean> = [];
+  if (hours.length > 0 && freq !== 'HOURLY') filters.push((tod) => hours.includes(Math.floor(tod / 3600)));
+  if (minutes.length > 0 && freq === 'SECONDLY') filters.push((tod) => minutes.includes(Math.floor(tod / 60) % 60));
+  if (filters.length === 0) return undefined;
+  const [own, unit] = freq === 'SECONDLY' ? [seconds, 1] : [minutes, 60];
+  // Seconds per step, and where in the day the walk starts.
+  const step = own.length > 0 ? unit * 60 : (unit * recur.interval) % 86_400 || 86_400;
+  const origin = dtstart.hour * 3600 + dtstart.minute * 60 + dtstart.second;
+  const key = ['time', freq, step, hours, minutes, own.length, origin].join('|');
+  return cached(key, () => {
+    const period = 86_400 / gcd(step, 86_400);
+    let matches = 0;
+    for (let k = 0; k < period; k++) {
+      const tod = (origin + k * step) % 86_400;
+      if (filters.every((f) => f(tod))) matches += 1;
+    }
+    if (matches === 0) return `FREQ=${freq} whose time filters never match a time it steps on`;
+    return period / (matches * Math.max(1, own.length)) > MAX_STEPS_PER_INSTANCE ? `FREQ=${freq} with time filters that skip too many of the times it steps on` : undefined;
+  });
 }
 
 /** Run an ical.js step, turning its errors into `UnexpandableRuleError`. */
@@ -111,38 +269,140 @@ function guarded<T>(step: () => T): T {
 }
 
 /**
- * The instances of a series (RRULE + RDATE − EXDATE, in start order) as a
- * `next()` that answers null at the end. Throws `UnexpandableRuleError`, up
- * front or mid-walk, instead of hanging or leaking an ical.js error.
+ * The instances of a series (DTSTART, RRULE and RDATE, less EXDATE; in start
+ * order, each instant once) as a `next()` that answers null at the end.
+ * `zone` resolves floating values, as occurrence keys do. Throws
+ * `UnexpandableRuleError`, up front or mid-walk, instead of hanging or
+ * leaking an ical.js error.
+ *
+ * ical.js orders the RRULE's instances and the RDATEs, but not the rest:
+ *  - an RDATE equal to an instance the rule (or DTSTART) also gives comes
+ *    out twice, so the walk skips an instant it has just given;
+ *  - its EXDATE pointer moves once per instance and never looks back, so an
+ *    EXDATE matching nothing let the NEXT excluded instance through, and a
+ *    duplicate's second copy slipped past the EXDATE the first one used. It
+ *    sees no EXDATE here: `exclusions` applies them, to every copy.
  */
-export function seriesWalker(master: Component): () => Time | null {
+export function seriesWalker(master: Component, zone: string): SeriesWalk {
   refuseUnwalkable(master);
   const dtstart = startTimeOf(master);
-  const component = master.hasProperty('rdate') ? rdateView(master, dtstart) : master;
-  const it = guarded(() => new ICAL.RecurExpansion({ component, dtstart }));
-  // ical.js answers `undefined` (not null) once the set is exhausted.
-  return () => guarded(() => (it.next() as Time | undefined) ?? null);
+  // Inside the guard: an RDATE/EXDATE value is decoded on first read, and a malformed one throws.
+  const excluded = guarded(() => exclusions(master, zone));
+  if (!master.hasProperty('rrule')) return listWalk(master, dtstart, zone, excluded);
+  const { view, odd } = guarded(() => walkView(master, dtstart));
+  const it = guarded(() => new ICAL.RecurExpansion({ component: view, dtstart }));
+  const repeated = repeats(odd, zone);
+  let skipped = 0;
+  const next = (): Time | null => {
+    for (;;) {
+      // ical.js answers `undefined` (not null) once the set is exhausted.
+      const t = guarded(() => (it.next() as Time | undefined) ?? null);
+      if (!t) return null;
+      const r = roughStartMs(t);
+      if (!repeated(t, r) && !excluded(t, r)) return t;
+      if (++skipped > MAX_SKIPPED) throw new UnexpandableRuleError(`more than ${MAX_SKIPPED} excluded occurrences`);
+    }
+  };
+  return Object.assign(next, { exact: odd.length === 0 });
 }
 
 /**
- * The master as ical.js's RecurExpansion should see its RDATEs (it reads the
- * component through `hasProperty`/`getAllProperties`, once, as it starts):
- *  - a PERIOD value comes back from ical.js as an ICAL.Period, whose
- *    `compare` means "overlaps" and which is no Time — the walk crashed on
- *    it — so each becomes its start (its end: `SeriesShape.periodEnds`);
- *  - ical.js yields DTSTART only through an RRULE's iterator, so a series of
- *    RDATEs alone never listed its first instance, which RFC 5545 §3.8.5.3
- *    makes DTSTART whatever else the set holds: without an RRULE, DTSTART
- *    joins the dates (an EXDATE still removes it).
+ * The walk of a series without an RRULE: DTSTART and its RDATEs (RFC 5545
+ * §3.8.5.3 makes DTSTART an instance whatever else the set holds; ical.js
+ * yields it only through a rule), sorted by instant here — the list is
+ * finite. Not ical.js's: it starts such a list at DTSTART's place, found by a
+ * binary search on its own sort key, where a value written another way can
+ * tie with DTSTART (floating 09:00 against 09:00Z, a DATE against midnight
+ * UTC) and the search can land past it. Each instant once; EXDATEs apply.
  */
-function rdateView(master: Component, dtstart: Time): Component {
-  const dates = rdateValues(master).map((v) => (v instanceof ICAL.Period ? v.start : v));
-  if (!master.hasProperty('rrule') && !dates.some((t) => t.compare(dtstart) === 0)) dates.push(dtstart);
+function listWalk(master: Component, dtstart: Time, zone: string, excluded: (t: Time, rough: number) => boolean): SeriesWalk {
+  const values = guarded(() => [...rdateStarts(master), dtstart]);
+  const sorted = guarded(() => values.map((t) => ({ t, at: instantOf(t, zone).getTime() }))).sort((a, b) => a.at - b.at);
+  const given = new Set<string>();
+  let i = 0;
+  const next = (): Time | null => {
+    while (i < sorted.length) {
+      const t = (sorted[i++] as { t: Time }).t;
+      const key = occKey(t, zone);
+      if (given.has(key)) continue;
+      given.add(key);
+      if (!excluded(t, roughStartMs(t))) return t;
+    }
+    return null;
+  };
+  return Object.assign(next, { exact: true });
+}
+
+/**
+ * A series' walk. `exact`: the instances come in exact start order. ical.js
+ * orders a floating or DATE value as though it were UTC, so a series that
+ * mixes those with fixed values (an RDATE written another way than DTSTART)
+ * can come out up to a zone offset (or a day) out of order.
+ */
+export interface SeriesWalk {
+  (): Time | null;
+  exact: boolean;
+}
+
+/** Instances one walk may skip (excluded or repeated) in all: its bound, like the steps its callers count. */
+export const MAX_SKIPPED = MAX_EXPANSION_STEPS;
+
+/**
+ * Whether an instance repeats one already given. Values written alike come
+ * out in exact order (ical.js sorts on what `roughStartMs` computes, exact
+ * between them), so a repeat directly follows its twin among those of its
+ * kind. A twin written another way — a fixed value for a floating one — can
+ * only involve an RDATE of another kind than DTSTART: those few are looked up
+ * by key, and only for an instance near one. (A DATE is never the same
+ * occurrence as a date-time.)
+ */
+function repeats(odd: Time[], zone: string): (t: Time, rough: number) => boolean {
+  const last = new Map<string, number>();
+  const timed = odd.filter((t) => !t.isDate);
+  const nearby = timed.map(roughStartMs).sort((a, b) => a - b);
+  const keys = new Set(timed.map((t) => occKey(t, zone)));
+  const given = new Set<string>();
+  return (t, r) => {
+    const kind = kindOf(t);
+    if (last.get(kind) === r) return true;
+    last.set(kind, r);
+    if (kind === 'date' || !near(nearby, r)) return false;
+    const key = occKey(t, zone);
+    if (!keys.has(key)) return false;
+    if (given.has(key)) return true;
+    given.add(key);
+    return false;
+  };
+}
+
+/** Whether a sorted list holds a value within ROUGH_MARGIN_MS of `r`. */
+function near(sorted: number[], r: number): boolean {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((sorted[mid] as number) < r - ROUGH_MARGIN_MS) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < sorted.length && (sorted[lo] as number) <= r + ROUGH_MARGIN_MS;
+}
+
+/**
+ * The master as ical.js's RecurExpansion should see it (it reads a component
+ * through `hasProperty`/`getAllProperties`, once, as it starts):
+ *  - no EXDATE: `exclusions` applies them;
+ *  - an RDATE PERIOD comes back from ical.js as an ICAL.Period, whose
+ *    `compare` means "overlaps" and which is no Time — the walk crashed on
+ *    it — so each becomes its start (its end: `SeriesShape.periodEnds`).
+ */
+function walkView(master: Component, dtstart: Time): { view: Component; odd: Time[] } {
+  const dates = rdateStarts(master);
+  // The RRULE's instances are written like DTSTART; these are not.
+  const odd = dates.filter((t) => kindOf(t) !== kindOf(dtstart));
   const rdate = [{ getValues: () => dates }];
-  return {
-    hasProperty: (name: string) => master.hasProperty(name),
-    getAllProperties: (name: string) => (name === 'rdate' ? rdate : master.getAllProperties(name)),
-  } as unknown as Component;
+  const props = (name: string) => (name === 'rdate' ? rdate : name === 'exdate' ? [] : master.getAllProperties(name));
+  const view = { hasProperty: (name: string) => props(name).length > 0, getAllProperties: props } as unknown as Component;
+  return { view, odd };
 }
 
 type Period = InstanceType<typeof ICAL.Period>;
@@ -151,9 +411,63 @@ function rdateValues(master: Component): Array<Time | Period> {
   return master.getAllProperties('rdate').flatMap((p) => p.getValues() as Array<Time | Period>);
 }
 
+/** The instants the RDATEs add, each as its start (an RDATE PERIOD's length: `SeriesShape.periodEnds`). */
+function rdateStarts(master: Component): Time[] {
+  return rdateValues(master).map((v) => (v instanceof ICAL.Period ? v.start : v));
+}
+
 /** Whether the master lists some instances as periods (RDATE;VALUE=PERIOD), each with a length of its own. */
 export function hasPeriodDates(master: Component): boolean {
-  return rdateValues(master).some((v) => v instanceof ICAL.Period);
+  return guarded(() => rdateValues(master)).some((v) => v instanceof ICAL.Period);
+}
+
+/** How a value is written: a DATE, a floating (zone-less) date-time, or one that fixes an instant (UTC or a TZID). */
+function kindOf(t: Time): 'date' | 'floating' | 'fixed' {
+  if (t.isDate) return 'date';
+  return t.zone === ICAL.Timezone.localTimezone ? 'floating' : 'fixed';
+}
+
+/**
+ * Whether an instance is one the master's EXDATEs remove, as ical.js decides
+ * it for a single EXDATE: a DATE removes every instance on that day (by the
+ * instance's own date), a date-time removes the instance at that instant.
+ * Values written another way than the instance — floating against fixed —
+ * compare as instants, like occurrence keys; that costs zone arithmetic, so
+ * only for an instance near such an EXDATE. A DATE instance (an all-day date
+ * in a timed series) is removed by a date-time at the midnight that starts
+ * its date, by that value's own wall clock — as this server writes one
+ * (`recurrenceValue`), and as other writers do in their own zone. Not by its
+ * instant: midnight in the display zone, or in UTC, is also the instant of
+ * a timed occurrence (8 PM in New York is midnight UTC), which one EXDATE
+ * would then remove with it.
+ */
+function exclusions(master: Component, zone: string): (t: Time, rough: number) => boolean {
+  const values = master.getAllProperties('exdate').flatMap((p) => p.getValues() as Time[]);
+  if (values.length === 0) return () => false;
+  const days = new Set<string>();
+  const midnights = new Set<string>();
+  const rough = { floating: new Set<number>(), fixed: new Set<number>() };
+  const timed = values.filter((v) => !v.isDate);
+  const sorted = (kind: 'floating' | 'fixed') => timed.filter((v) => kindOf(v) === kind).map(roughStartMs).sort((a, b) => a - b);
+  const across = { fixed: sorted('floating'), floating: sorted('fixed') };
+  let instants: Set<number> | undefined;
+  for (const v of values) {
+    const kind = kindOf(v);
+    if (kind === 'date') days.add(ymdOf(v));
+    else {
+      rough[kind].add(roughStartMs(v));
+      if (v.hour === 0 && v.minute === 0 && v.second === 0) midnights.add(ymdOf(v));
+    }
+  }
+  return (t, r) => {
+    if (days.has(ymdOf(t))) return true;
+    const kind = kindOf(t);
+    if (kind === 'date') return midnights.has(ymdOf(t));
+    if (rough[kind].has(r)) return true;
+    if (!near(across[kind], r)) return false;
+    instants ??= new Set(timed.map((v) => instantOf(v, zone).getTime()));
+    return instants.has(instantOf(t, zone).getTime());
+  };
 }
 
 /**
@@ -258,7 +572,13 @@ function seriesShape(master: Component, zone: string): SeriesShape {
   const durationMs = s.end.getTime() - s.start.getTime();
   const periodEnds = new Map<string, number>();
   let longestMs = durationMs;
-  for (const v of rdateValues(master)) {
+  let values: Array<Time | Period> = [];
+  try {
+    values = rdateValues(master);
+  } catch {
+    // A malformed RDATE value: the walk reports it (`UnexpandableRuleError`), keeping what it can list.
+  }
+  for (const v of values) {
     if (!(v instanceof ICAL.Period) || s.allDay) continue;
     const start = instantOf(v.start, zone).getTime();
     const end = Math.max(start, instantOf(v.getEnd(), zone).getTime());
@@ -347,11 +667,14 @@ export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResu
     const shape = seriesShape(master, zone);
     // An instance starting before this cannot reach the window (see roughStartMs).
     const skipBelow = from.getTime() - shape.longestMs - ROUGH_MARGIN_MS;
+    // Instances come in start order — to within ROUGH_MARGIN_MS when the walk's order can stray (see SeriesWalk).
+    let slack = 0;
     const consider = (t: Time): 'next' | 'stop' => {
       const key = occKey(t, zone);
       const natural = naturalOccurrence(master, t, key, shape, zone);
-      // Instances come in start order: past the window, only moved overrides can still matter (below).
-      if (natural.start.getTime() >= to.getTime()) return 'stop';
+      // Past the window, only moved overrides can still matter (below).
+      if (natural.start.getTime() >= to.getTime() + slack) return 'stop';
+      if (natural.start.getTime() >= to.getTime()) return 'next';
       const ovr = byKey.get(key);
       let occ = natural;
       if (ovr) {
@@ -371,9 +694,10 @@ export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResu
       truncated = 'rule';
       problem = (err as UnexpandableRuleError).reason;
     };
-    let next: (() => Time | null) | undefined;
+    let next: SeriesWalk | undefined;
     try {
-      next = seriesWalker(master);
+      next = seriesWalker(master, zone);
+      if (!next.exact) slack = ROUGH_MARGIN_MS;
     } catch (err) {
       stopOn(err);
       // DTSTART is always an instance (RFC 5545), even of a rule that cannot be walked.
@@ -388,7 +712,7 @@ export function expandSeries(parts: EventParts, opts: ExpandOptions): ExpandResu
       try {
         t = next();
       } catch (err) {
-        stopOn(err); // mid-walk (e.g. 500 EXDATEs in a row): keep what was found
+        stopOn(err); // mid-walk (e.g. an ical.js failure, or too many excluded instances): keep what was found
         break;
       }
       if (!t) break;
@@ -425,16 +749,46 @@ export function findOccurrence(parts: EventParts, occ: string, zone: string, max
   if (!master || !isRecurringMaster(master)) return undefined;
   const shape = seriesShape(master, zone);
   const target = occ.length === 10 ? startOfDay(occ, zone).getTime() : Date.parse(occ);
-  const next = seriesWalker(master);
+  const next = seriesWalker(master, zone);
+  // Past the target it is not coming — later, when the walk's order can stray (see SeriesWalk).
+  const past = target + (next.exact ? 0 : ROUGH_MARGIN_MS);
   for (let steps = 0; steps < maxSteps; steps++) {
     const t = next();
     if (!t) return undefined;
     if (roughStartMs(t) < target - ROUGH_MARGIN_MS) continue;
     const key = occKey(t, zone);
     if (key === occ) return naturalOccurrence(master, t, key, shape, zone);
-    if (instantOf(t, zone).getTime() > target) return undefined;
+    if (instantOf(t, zone).getTime() > past) return undefined;
   }
   throw tooLong(`occurrence ${occ}`, maxSteps);
+}
+
+/**
+ * The series' first instance (null when it has none): the walk's first, or —
+ * when its order can stray (see SeriesWalk) — the earliest nearby. Values
+ * written alike come out in exact order, so that is the first of one of the
+ * kinds the series holds near the start (DTSTART's, and its RDATEs'): the
+ * walk reads on only until each of those has shown one, not through every
+ * instance nearby — a dense rule has thousands.
+ */
+export function firstInstance(master: Component, zone: string, maxSteps: number = MAX_EXPANSION_STEPS): Time | null {
+  const next = seriesWalker(master, zone);
+  const first = next();
+  if (!first || next.exact) return first;
+  // An instance can come before `first` only if its rough start is within ROUGH_MARGIN_MS of it.
+  const through = roughStartMs(first) + ROUGH_MARGIN_MS;
+  const nearby = rdateStarts(master).filter((t) => roughStartMs(t) <= through);
+  const kinds = new Set([kindOf(startTimeOf(master)), ...nearby.map(kindOf)]);
+  const firsts = new Map([[kindOf(first), first]]);
+  for (let steps = 0; [...kinds].some((kind) => !firsts.has(kind)); steps++) {
+    if (steps >= maxSteps) throw tooLong("the series' first occurrence", maxSteps);
+    const t = next();
+    if (!t || roughStartMs(t) > through) break;
+    if (!firsts.has(kindOf(t))) firsts.set(kindOf(t), t);
+  }
+  let earliest = first;
+  for (const t of firsts.values()) if (instantOf(t, zone).getTime() < instantOf(earliest, zone).getTime()) earliest = t;
+  return earliest;
 }
 
 /** Where an instant falls among a series' RRULE instances (RDATE and EXDATE aside). */

@@ -5,12 +5,17 @@ import {
   buildRule,
   dateValue,
   ensureOrganizer,
+  instantOf,
   newCalendar,
   newEvent,
+  otherPassNote,
   setAlarms,
   setAttendees,
+  setEventTimes,
   setTextProp,
   setTimeProp,
+  skippedStartError,
+  startTimeOf,
   timeAt,
   zoneForWrite,
   type Component,
@@ -50,6 +55,8 @@ export interface NewEventTimes {
   /** All-day: first and last day, inclusive. */
   startYmd?: string;
   endYmd?: string;
+  /** Timed: the start was a wall-clock time the zone skips at a DST change (`start` is where it would have been). */
+  startSkipped?: boolean;
 }
 
 /** Resolve the start/end of a new event (validation only; nothing is built). */
@@ -82,7 +89,7 @@ export function resolveNewTimes(input: Pick<CreateInput, 'startDate' | 'endDate'
       `endDate (${formatInstant(endAt, zone).display}) must be after startDate (${formatInstant(startAt, zone).display}).`,
     );
   }
-  return { allDay: false, start: startAt, end: endAt };
+  return { allDay: false, start: startAt, end: endAt, ...(start.skipped ? { startSkipped: true } : {}) };
 }
 
 /** The UNTIL value for a new rule, of the type RFC 5545 requires for the series' DTSTART. */
@@ -107,6 +114,7 @@ const WEEKDAY_CODES = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
  * shown by every calendar app, and asked for by nobody.
  */
 export function checkRecurrenceStart(recurrence: CreateInput['recurrence'], times: NewEventTimes, zone: string): void {
+  if (recurrence !== undefined && times.startSkipped) throw skippedStartError(zone);
   const days = recurrence?.byWeekday;
   if (days === undefined || days.length === 0) return;
   const ymd = times.allDay ? (times.startYmd as string) : ymdInZone(times.start, zone);
@@ -124,7 +132,7 @@ export function checkRecurrenceStart(recurrence: CreateInput['recurrence'], time
 /** Build the VCALENDAR for a new event. `organizer` is required when attendees are given. */
 export function buildNewEvent(
   input: CreateInput,
-  opts: { zone: string; now: Date; uid: string; times: NewEventTimes; organizer?: string },
+  opts: { zone: string; now: Date; uid: string; times: NewEventTimes; organizer?: string; notes?: string[] },
 ): Component {
   const { zone, times } = opts;
   const vcal = newCalendar();
@@ -135,9 +143,7 @@ export function buildNewEvent(
     setTimeProp(ev, 'dtstart', dateValue(times.startYmd as string));
     setTimeProp(ev, 'dtend', dateValue(addDaysYmd(times.endYmd as string, 1)));
   } else {
-    const wz = zoneForWrite(vcal, zone);
-    setTimeProp(ev, 'dtstart', timeAt(times.start, wz));
-    setTimeProp(ev, 'dtend', timeAt(times.end, wz));
+    if (setEventTimes(ev, times.start, times.end, zoneForWrite(vcal, zone), input.recurrence !== undefined)) opts.notes?.push(otherPassNote(instantOf(startTimeOf(ev), zone), times.start, zone));
   }
   setTextProp(ev, 'location', input.location);
   setTextProp(ev, 'description', input.notes);
