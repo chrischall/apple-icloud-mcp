@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "apple-icloud-mcp",
   "display_name": "Apple iCloud",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search — through Apple's web services, so it runs anywhere. Unofficial; not affiliated with Apple.",
   "author": {
     "name": "Chris Chall",
