@@ -74,7 +74,7 @@ export interface MessageSpec {
   references?: string;
   text?: string;
   html?: string;
-  attachment?: { filename: string; type: string; content: string };
+  attachment?: { filename?: string; type: string; content: string };
   flags?: string[];
   internalDate?: Date;
   /** Raw source override. */
@@ -101,10 +101,11 @@ export function rfc822(spec: MessageSpec): string {
     if (text !== undefined) lines.push(`--${b}`, 'Content-Type: text/plain; charset=utf-8', '', text);
     if (spec.html !== undefined) lines.push(`--${b}`, 'Content-Type: text/html; charset=utf-8', '', spec.html);
     if (spec.attachment) {
+      const name = spec.attachment.filename;
       lines.push(
         `--${b}`,
-        `Content-Type: ${spec.attachment.type}; name="${spec.attachment.filename}"`,
-        `Content-Disposition: attachment; filename="${spec.attachment.filename}"`,
+        `Content-Type: ${spec.attachment.type}${name ? `; name="${name}"` : ''}`,
+        `Content-Disposition: attachment${name ? `; filename="${name}"` : ''}`,
         'Content-Transfer-Encoding: base64',
         '',
         Buffer.from(spec.attachment.content).toString('base64'),

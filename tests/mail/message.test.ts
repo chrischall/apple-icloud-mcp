@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import PostalMime from 'postal-mime';
 import {
   attachmentInfo,
+  attachmentBytes,
   buildMessage,
   extractBody,
   messageIds,
@@ -121,6 +122,12 @@ describe('reply helpers', () => {
 });
 
 describe('reading', () => {
+  it('converts all PostalMime attachment payload variants without changing bytes', () => {
+    expect(attachmentBytes('plain text')).toEqual(Buffer.from('plain text'));
+    expect(attachmentBytes(new Uint8Array([0, 127, 255]))).toEqual(Buffer.from([0, 127, 255]));
+    expect(attachmentBytes(new Uint8Array([0, 127, 255]).buffer)).toEqual(Buffer.from([0, 127, 255]));
+  });
+
   it('prefers the text part and cuts at maxChars', async () => {
     const email = await parseMessage(Buffer.from(rfc822({ text: 'Hello\r\nWorld', html: '<p>HTML</p>' })));
     expect(extractBody(email, 100)).toEqual({ format: 'text', text: 'Hello\nWorld', totalChars: 11, truncated: false });
@@ -156,7 +163,7 @@ describe('reading', () => {
     const email = await parseMessage(
       Buffer.from(rfc822({ attachment: { filename: 'report.pdf', type: 'application/pdf', content: '%PDF-1.4 fake' } })),
     );
-    expect(attachmentInfo(email)).toEqual([{ filename: 'report.pdf', mimeType: 'application/pdf', size: 13 }]);
+    expect(attachmentInfo(email)).toEqual([{ index: 1, filename: 'report.pdf', mimeType: 'application/pdf', size: 13 }]);
     expect(
       attachmentInfo({
         attachments: [
@@ -165,8 +172,8 @@ describe('reading', () => {
         ],
       }),
     ).toEqual([
-      { mimeType: 'image/png', size: 3, inline: true },
-      { filename: 'x', mimeType: 'image/gif', size: 4, inline: true },
+      { index: 1, mimeType: 'image/png', size: 3, inline: true },
+      { index: 2, filename: 'x', mimeType: 'image/gif', size: 4, inline: true },
     ]);
   });
 });

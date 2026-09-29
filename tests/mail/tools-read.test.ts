@@ -9,6 +9,7 @@ const ALL = [
   'apple_mail_list_mailboxes',
   'apple_mail_search',
   'apple_mail_get_message',
+  'apple_mail_download_attachment',
   'apple_mail_send',
   'apple_mail_update_flags',
   'apple_mail_move',
@@ -32,6 +33,9 @@ describe('registration', () => {
     expect(tools.get('apple_mail_get_message')?.cfg.annotations.readOnlyHint).toBe(true);
     expect(tools.get('apple_mail_get_message')?.cfg.description).toMatch(/Never marks the message read; to do that, use apple_mail_update_flags with seen:true/);
     expect(tools.get('apple_mail_get_message')?.cfg.description).not.toMatch(/markRead/);
+    expect(tools.get('apple_mail_download_attachment')?.cfg.annotations.readOnlyHint).toBe(true);
+    expect(tools.get('apple_mail_download_attachment')?.cfg.description).toMatch(/embedded binary resource/);
+    expect(tools.get('apple_mail_download_attachment')?.cfg.description).toMatch(/without marking it read/);
     expect(tools.get('apple_mail_send')?.cfg.description).toMatch(/Body ≤ 20,000 chars, all shown for confirmation/);
     expect(tools.get('apple_mail_send')?.cfg.description).toMatch(/inReplyTo \{mailbox, uid\} threads a reply .*Reply-To is not a recipient/);
     expect(tools.get('apple_mail_search')?.cfg.description).toMatch(/replyTo \(when it differs from from; confirm which to answer\)/);
@@ -41,9 +45,9 @@ describe('registration', () => {
 
   it('write modes none and additive register only the reads', () => {
     process.env.APPLE_WRITE_MODE = 'none';
-    expect([...captureTools().keys()]).toEqual(ALL.slice(0, 3));
+    expect([...captureTools().keys()]).toEqual(ALL.slice(0, 4));
     process.env.APPLE_WRITE_MODE = 'additive';
-    expect([...captureTools().keys()]).toEqual(ALL.slice(0, 3));
+    expect([...captureTools().keys()]).toEqual(ALL.slice(0, 4));
     process.env.APPLE_SERVICES = 'music';
     expect(captureTools().size).toBe(0);
   });
@@ -74,6 +78,15 @@ describe('input schemas', () => {
     // Marking read is apple_mail_update_flags' job: the read tool has no such argument.
     expect(ok('apple_mail_get_message', { uid: 1, markRead: true })).toBe(false);
     expect(ok('apple_mail_get_message', { uid: 1, markRead: false })).toBe(false);
+  });
+
+  it('download_attachment requires a 1-based attachment index and bounds the response', () => {
+    expect(ok('apple_mail_download_attachment', { uid: 1, attachmentIndex: 1 })).toBe(true);
+    expect(ok('apple_mail_download_attachment', { uid: 1, attachmentIndex: 0 })).toBe(false);
+    expect(ok('apple_mail_download_attachment', { uid: 1, attachmentIndex: 1, maxBytes: 0 })).toBe(false);
+    expect(ok('apple_mail_download_attachment', { uid: 1, attachmentIndex: 1, maxBytes: 20 * 1024 * 1024 + 1 })).toBe(false);
+    expect(ok('apple_mail_download_attachment', { uid: 1, attachmentIndex: 1, uidValidity: 5 })).toBe(true);
+    expect(ok('apple_mail_download_attachment', { uid: 1, attachmentIndex: 1, markRead: true })).toBe(false);
   });
 
   it('flags and move', () => {
@@ -502,7 +515,7 @@ describe('apple_mail_get_message', () => {
       bodyFormat: 'text',
       truncated: false,
       totalChars: 27,
-      attachments: [{ filename: 'q3.pdf', mimeType: 'application/pdf', size: 7 }],
+      attachments: [{ index: 1, filename: 'q3.pdf', mimeType: 'application/pdf', size: 7 }],
       text: 'Please see attached.\nThanks',
     });
     expect(json).not.toHaveProperty('markedRead');
@@ -605,5 +618,81 @@ describe('apple_mail_get_message', () => {
     h.imap.addMessage('Archive', { subject: 'Old' });
     expect((await h.call('apple_mail_get_message', { mailbox: 'archive', uid: 1 })).json).toMatchObject({ mailbox: 'Archive', subject: 'Old' });
     expect((await h.call('apple_mail_get_message', { mailbox: 'Gone', uid: 1 })).json.error.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('apple_mail_download_attachment', () => {
+  it('returns the selected attachment as an embedded binary resource without marking mail read', async () => {
+    const h = harness();
+    const message = h.imap.addMessage('INBOX', {
+      from: 'alice@example.com',
+      attachment: { filename: 'report.pdf', type: 'application/pdf', content: '%PDF-1.4 sample' },
+      flags: [],
+    });
+    const uid = message.uid;
+    const result = await h.tools.get('apple_mail_download_attachment')!.cb({ uid, attachmentIndex: 1 });
+    expect(result.isError).not.toBe(true);
+    expect(result.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('report.pdf') });
+    expect(result.content[1]).toMatchObject({
+      type: 'resource',
+      resource: {
+        uri: `icloud-mail://attachment/1001/${uid}/1/report.pdf`,
+        mimeType: 'application/octet-stream',
+        blob: Buffer.from('%PDF-1.4 sample').toString('base64'),
+      },
+    });
+    expect(h.imap.mailboxes.get('INBOX')?.messages.get(uid)?.flags.has('\\Seen')).toBe(false);
+  });
+
+  it('uses a safe fallback name when the MIME part has no filename', async () => {
+    const h = harness();
+    const uid = h.imap.addMessage('INBOX', {
+      attachment: { type: 'application/octet-stream', content: 'bytes' },
+    }).uid;
+    const result = await h.tools.get('apple_mail_download_attachment')!.cb({ uid, attachmentIndex: 1 });
+    expect(result.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('attachment-1') });
+    expect(result.content[1]).toMatchObject({ type: 'resource', resource: { uri: `icloud-mail://attachment/1001/${uid}/1/attachment-1` } });
+  });
+
+  it('refuses missing attachment indexes and attachments above the requested byte limit', async () => {
+    const h = harness();
+    const uid = h.imap.addMessage('INBOX', {
+      attachment: { filename: 'small.txt', type: 'text/plain', content: 'small' },
+    }).uid;
+    const missing = await h.call('apple_mail_download_attachment', { uid, attachmentIndex: 2 });
+    expect(missing.isError).toBe(true);
+    expect(missing.json.error.code).toBe('NOT_FOUND');
+
+    const missingMessage = await h.call('apple_mail_download_attachment', { uid: 99, attachmentIndex: 1 });
+    expect(missingMessage.isError).toBe(true);
+    expect(missingMessage.json.error.message).toMatch(/No message with uid 99/);
+
+    const tooLarge = await h.call('apple_mail_download_attachment', { uid, attachmentIndex: 1, maxBytes: 4 });
+    expect(tooLarge.isError).toBe(true);
+    expect(tooLarge.json.error.message).toMatch(/exceeds the 4-byte limit/);
+  });
+
+  it('rejects stale message ids and messages too large to parse safely', async () => {
+    const h = harness();
+    const uid = h.imap.addMessage('INBOX', {
+      attachment: { filename: 'report.pdf', type: 'application/pdf', content: 'data' },
+    }).uid;
+    const stale = await h.call('apple_mail_download_attachment', { uid, attachmentIndex: 1, uidValidity: 77 });
+    expect(stale.isError).toBe(true);
+    expect(stale.json.error.message).toMatch(/out of date/);
+
+    h.imap.override('fetchOne', () => ({ uid, size: MAX_SOURCE_BYTES + 1, source: Buffer.from('small') }));
+    const tooLarge = await h.call('apple_mail_download_attachment', { uid, attachmentIndex: 1 });
+    expect(tooLarge.isError).toBe(true);
+    expect(tooLarge.json.error.message).toMatch(/too large to inspect safely/);
+  });
+
+  it('reports a message response with no source bytes', async () => {
+    const h = harness();
+    h.imap.addMessage('INBOX');
+    h.imap.override('fetchOne', () => ({ uid: 1, size: 0 }));
+    const result = await h.call('apple_mail_download_attachment', { uid: 1, attachmentIndex: 1 });
+    expect(result.isError).toBe(true);
+    expect(result.json.error.message).toMatch(/returned no content/);
   });
 });

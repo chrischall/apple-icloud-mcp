@@ -312,6 +312,7 @@ recorded on disk, so a shared secret does not let one be replayed.
 | `apple_mail_list_mailboxes` | List the iCloud Mail mailboxes (folders): path, name, special use (inbox, sent, drafts, trash, junk, archive) and, by default, message and unread counts. | read |  |
 | `apple_mail_search` | Search emails in one iCloud Mail mailbox (default INBOX) by sender, recipient, subject, full text, received date range, unread and flagged state. | read |  |
 | `apple_mail_get_message` | Read one iCloud Mail message by uid (from apple_mail_search): headers (from, to, cc, reply-to, date, subject, message-id), the body as plain text (HTML converted to readable text when there is no text part), a truncated flag, and attachm… | read |  |
+| `apple_mail_download_attachment` | Download one attachment as an embedded binary resource using its 1-based index from `apple_mail_get_message`; defaults to 10 MiB, max 20 MiB, and never marks the message read. | read |  |
 | `apple_mail_send` | Send a plain-text email from your iCloud Mail address (to/cc/bcc, subject, body; no attachments). | all | yes |
 | `apple_mail_update_flags` | Mark iCloud Mail messages read or unread, and flag or unflag them, by uid (1–100 uids from apple_mail_search, one mailbox). | all |  |
 | `apple_mail_move` | Move iCloud Mail messages (1–100 uids from apple_mail_search, one mailbox) to another mailbox: a path from apple_mail_list_mailboxes or an alias (inbox, archive, trash, junk, sent, drafts). | all |  |
@@ -444,7 +445,7 @@ All optional; each service activates when its credentials are present. Values th
   Notes and Photos natively.
 - **Playing music.** Apple's web APIs manage your library; playback happens in an Apple Music app.
 - **Creating or deleting calendars** — iCloud's CalDAV server does not reliably support it.
-- **Mail attachments** — sending is plain text; reading lists attachments but does not download them.
+- **Mail attachment sending** — outgoing mail is plain text. Incoming attachments can be downloaded with `apple_mail_download_attachment`.
 
 ## Troubleshooting
 

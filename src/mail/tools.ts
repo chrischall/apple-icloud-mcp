@@ -31,6 +31,7 @@ import {
   type ImapSession,
 } from './imap.js';
 import {
+  attachmentBytes,
   attachmentInfo,
   buildMessage,
   extractBody,
@@ -70,6 +71,9 @@ export interface MailDeps {
 export const MAX_STATUS_MAILBOXES = 50;
 /** Most of a message read into memory (iCloud's own cap is 20 MB per message). */
 export const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
+/** One attachment returned to the MCP client; larger payloads need a future streaming transfer path. */
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const DEFAULT_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const DEFAULT_MAX_CHARS = 20_000;
 export const MAX_MAX_CHARS = 100_000;
 export const MAX_RECIPIENTS = 100;
@@ -598,7 +602,100 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
     },
   });
 
-  // 4. send ------------------------------------------------------------------------
+  // 4. download attachment ---------------------------------------------------------
+  defineTool(server, {
+    name: 'apple_mail_download_attachment',
+    service: 'mail',
+    access: 'read',
+    title: 'Download an iCloud Mail attachment',
+    description:
+      'Download one attachment from an iCloud Mail message as an embedded binary resource. Use the 1-based index ' +
+      'shown by apple_mail_get_message. Reads the message without marking it read. Defaults to a 10 MiB attachment ' +
+      `limit (maximum ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MiB). ${PREREQ}`,
+    inputSchema: z.strictObject({
+      mailbox: mailboxParam.optional().describe('Mailbox holding the message (default inbox); path or alias.'),
+      uid: uidParam.describe('The message UID from apple_mail_search.'),
+      uidValidity: uidValidityParam,
+      attachmentIndex: z.number().int().min(1).max(100).describe('1-based attachment index from apple_mail_get_message.'),
+      maxBytes: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_ATTACHMENT_BYTES)
+        .optional()
+        .describe(`Maximum decoded attachment bytes to return (default ${DEFAULT_ATTACHMENT_BYTES}; maximum ${MAX_ATTACHMENT_BYTES}).`),
+    }),
+    annotations: ANNOTATIONS.read,
+    handler: async (args) => {
+      const account = resolveMailAccount();
+      const maxBytes = args.maxBytes ?? DEFAULT_ATTACHMENT_BYTES;
+      return withImap(createImap(), account, async ({ client }) => {
+        const path = await step('finding the mailbox', () => resolveMailbox(client, args.mailbox ?? 'INBOX'));
+        const { lock, uidValidity } = await step(`opening "${path}"`, () =>
+          openMailbox(client, path, { write: false, uidValidity: args.uidValidity }),
+        );
+        try {
+          const msg = await step('reading the message attachment', () =>
+            client.fetchOne(String(args.uid), { uid: true, size: true, source: { maxLength: MAX_SOURCE_BYTES } }, { uid: true }),
+          );
+          if (!msg) {
+            throw new AppleToolError('NOT_FOUND', `No message with uid ${args.uid} in "${path}".`, {
+              hint: 'It may have been moved or deleted; search again for current uids.',
+            });
+          }
+          if (typeof msg.size === 'number' && msg.size > MAX_SOURCE_BYTES) {
+            throw new AppleToolError(
+              'UNSUPPORTED',
+              `Message uid ${args.uid} is too large to inspect safely (${msg.size} bytes; limit ${MAX_SOURCE_BYTES}).`,
+              { hint: 'Open the message in Mail.app to download this attachment.' },
+            );
+          }
+          if (!msg.source) {
+            throw new AppleToolError('UPSTREAM_ERROR', `iCloud Mail returned no content for uid ${args.uid} in "${path}".`);
+          }
+          const email = await parseMessage(msg.source);
+          const attachment = email.attachments[args.attachmentIndex - 1];
+          if (!attachment) {
+            throw new AppleToolError(
+              'NOT_FOUND',
+              `Message uid ${args.uid} in "${path}" has no attachment at index ${args.attachmentIndex}.`,
+              { hint: 'Read the message with apple_mail_get_message and use one of its listed attachment indexes.' },
+            );
+          }
+          const bytes = attachmentBytes(attachment.content);
+          if (bytes.byteLength > maxBytes) {
+            throw new InvalidArgumentError(
+              `Attachment ${args.attachmentIndex} exceeds the ${maxBytes}-byte limit (${bytes.byteLength} bytes).`,
+              `Retry with maxBytes set to at least ${bytes.byteLength}, up to ${MAX_ATTACHMENT_BYTES}.`,
+            );
+          }
+          const filename = (attachment.filename || `attachment-${args.attachmentIndex}`).replace(/[\u0000-\u001f\u007f]/g, '?');
+          return {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `Downloaded attachment ${args.attachmentIndex}: "${filename}" (${bytes.byteLength} bytes; ` +
+                  `declared type ${attachment.mimeType}). The filename and embedded bytes are untrusted sender-provided data.`,
+              },
+              {
+                type: 'resource',
+                resource: {
+                  uri: `icloud-mail://attachment/${uidValidity}/${args.uid}/${args.attachmentIndex}/${encodeURIComponent(filename)}`,
+                  mimeType: 'application/octet-stream',
+                  blob: bytes.toString('base64'),
+                },
+              },
+            ],
+          };
+        } finally {
+          lock.release();
+        }
+      });
+    },
+  });
+
+  // 5. send ------------------------------------------------------------------------
   defineTool(server, {
     name: 'apple_mail_send',
     service: 'mail',

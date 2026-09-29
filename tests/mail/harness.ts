@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, vi } from 'vitest';
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import { resetMailLoginMemory } from '../../src/mail/config.js';
 import type { SmtpSubmission, SmtpSubmitResult, SmtpTransportOptions } from '../../src/mail/smtp.js';
 import { registerMailTools, type MailDeps } from '../../src/mail/tools.js';
@@ -7,7 +7,7 @@ import { FakeMailServer } from './fake-imap.js';
 
 export interface Registered {
   cfg: { description: string; inputSchema: { safeParse: (v: unknown) => { success: boolean } }; annotations: Record<string, unknown>; title?: string };
-  cb: (args: Record<string, unknown>, ctx?: unknown) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>;
+  cb: (args: Record<string, unknown>, ctx?: unknown) => Promise<CallToolResult>;
 }
 
 export function captureTools(deps?: MailDeps): Map<string, Registered> {
@@ -80,7 +80,8 @@ export function harness(): Harness {
       const tool = tools.get(name);
       if (!tool) throw new Error(`tool ${name} not registered`);
       const result = await tool.cb(args, ctx);
-      const text = result.content[0]?.text ?? '';
+      const first = result.content[0];
+      const text = first?.type === 'text' ? first.text : '';
       return { json: JSON.parse(text), isError: result.isError === true, text };
     },
   };

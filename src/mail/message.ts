@@ -178,18 +178,28 @@ export function extractBody(email: Pick<Email, 'text' | 'html'>, maxChars: numbe
 }
 
 export interface AttachmentInfo {
+  /** 1-based position, accepted by apple_mail_download_attachment. */
+  index: number;
   filename?: string;
   mimeType: string;
   size: number;
   inline?: boolean;
 }
 
+/** Convert PostalMime's attachment payload variants to exact bytes. */
+export function attachmentBytes(content: string | Uint8Array | ArrayBuffer): Buffer {
+  if (typeof content === 'string') return Buffer.from(content);
+  if (content instanceof ArrayBuffer) return Buffer.from(new Uint8Array(content));
+  return Buffer.from(content);
+}
+
 /** Attachment metadata only — never the bytes. */
 export function attachmentInfo(email: Pick<Email, 'attachments'>): AttachmentInfo[] {
-  return email.attachments.map((a) => {
+  return email.attachments.map((a, i) => {
     const content = a.content;
     const size = typeof content === 'string' ? Buffer.byteLength(content) : content.byteLength;
     return {
+      index: i + 1,
       ...(a.filename ? { filename: a.filename } : {}),
       mimeType: a.mimeType,
       size,
