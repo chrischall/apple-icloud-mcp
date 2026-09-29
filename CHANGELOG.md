@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/chrischall/apple-icloud-mcp/compare/v0.2.1...v0.3.0) (2026-09-29)
+
+
+### Features
+
+* **mail:** download iCloud Mail attachments ([#31](https://github.com/chrischall/apple-icloud-mcp/issues/31)) ([664580e](https://github.com/chrischall/apple-icloud-mcp/commit/664580e0f952bdd954b675fbff3c72ac26466e00))
+
 ## [0.2.1](https://github.com/chrischall/apple-icloud-mcp/compare/v0.2.0...v0.2.1) (2026-09-28)
 
 
