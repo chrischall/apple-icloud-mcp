@@ -306,6 +306,10 @@
       "description": "Read one iCloud Mail message by uid (from apple_mail_search): headers (from, to, cc, reply-to, date, subject, message-id), the body as plain text (HTML converted to readable text when there is no text part), a truncated flag, and attachm…"
     },
     {
+      "name": "apple_mail_download_attachment",
+      "description": "Download one iCloud Mail attachment as an embedded binary resource by its 1-based index from apple_mail_get_message. Reads without marking it read; defaults to 10 MiB, maximum 20 MiB."
+    },
+    {
       "name": "apple_mail_send",
       "description": "Send a plain-text email from your iCloud Mail address (to/cc/bcc, subject, body; no attachments)."
     },
