@@ -123,7 +123,7 @@ probe uses `GET /v1/test` (a catalog id can be withdrawn) and checks each backen
 partition host (moved by href, not redirect). Credentials go only to `https://*.icloud.com`. 401 latches the
 credential (`icloud-auth.ts`) on EVERY request — the cached-home `probe` too, so a cold start with a disk
 discovery record doesn't re-send a revoked pair to rediscover (the probe answers only 403/404/410); a bare 403 latches only on the two discovery hosts (on partition hosts it's
-usually a read-only calendar). REPORT responses include the collection's own href — skip it (`sameResource`).
+usually a read-only calendar), and a CDN/WAF block page (mcp-utils `detectEdgeBlock`) never latches — the password was never judged. REPORT responses include the collection's own href — skip it (`sameResource`).
 A 207 on DELETE/MOVE is a partial failure, not success. The dsid in paths is scrubbed from errors. The latch is
 persisted (`icloud-rejected.json`, salted digests + time) so a hosted cold start doesn't re-send a revoked
 password; the healthcheck runs the iCloud probes one at a time until one answers, so a revoked pair is sent once.
