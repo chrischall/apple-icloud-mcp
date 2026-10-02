@@ -1,3 +1,4 @@
+import { detectEdgeBlock } from '@chrischall/mcp-utils';
 import { httpRequest, type HttpRequest, type HttpResponse } from '../http.js';
 import { AppleToolError, CredentialsRejectedError, InvalidArgumentError, UpstreamError, rememberSecret } from '../errors.js';
 import { REJECTED_HINT, assertNotLatched, latchRejection, type ICloudCredentials } from '../icloud-auth.js';
@@ -425,6 +426,17 @@ export class DavClient {
   private classify(method: string, url: URL, status: number, text: string, opts: SendOptions): Error | undefined {
     const what = `${method} ${url.pathname}`;
     if (opts.probe && PROBE_REFUSALS.has(status)) return new ProbeRefused(status);
+    // A CDN/WAF refusal page is not iCloud judging the password: answer it before
+    // the latch below, which would refuse a working pair locally for a day.
+    const edge = detectEdgeBlock({ body: text, status });
+    if (edge !== null) {
+      return new UpstreamError(
+        this.service,
+        status,
+        `${this.service}: ${what} was blocked at its CDN/WAF (${edge.vendor}) before reaching iCloud (HTTP ${status}).`,
+        { hint: 'This is a block on this host\'s IP address or request fingerprint, not a rejected password — retry later or from a different network.' },
+      );
+    }
     // 408 is left to httpRequest whatever its body says: on a write it means
     // the outcome is unknown (`UnconfirmedWriteError`), never a definitive no.
     const conditions = status >= 400 && status < 500 && status !== 408 ? davErrorConditions(text) : [];
