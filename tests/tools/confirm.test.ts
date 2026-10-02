@@ -264,6 +264,29 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
     expect(write).toHaveBeenCalledTimes(2);
   });
 
+  it("hosted on mcp-host: the runner's MCP_HOST_CONFIRM_SECRET keeps a token valid across a restart, and spent once", async () => {
+    // mcp-host gives a child with a persistent dataDir an absolute MCP_DATA_DIR
+    // (tests/_setup.ts pins one) and a stable per-child MCP_HOST_CONFIRM_SECRET;
+    // the operator sets no MCP_CONFIRM_SECRET.
+    process.env.MCP_HOST_CONFIRM_SECRET = 'derived-by-the-runner-for-this-child';
+    const { handler, write } = gatedTool({ title: 'Lunch?' }, 'apple_mail_send');
+    const args = { eventId: 'new' };
+    const { confirmToken } = await callPreview(handler, args);
+
+    resetSpentTokenMemory(); // the child idle-stopped between preview and approval
+    expect(body(await handler({ ...args, confirmToken }, NO_ELICIT_CTX))).toEqual({ deleted: true });
+    expect(write).toHaveBeenCalledTimes(1);
+
+    resetSpentTokenMemory(); // and restarted again before a replay
+    expect(body(await handler({ ...args, confirmToken }, NO_ELICIT_CTX))).toMatchObject({ error: 'TOKEN_REUSED', dispatched: false });
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // The key really is the host's: another child's secret does not verify it.
+    process.env.MCP_HOST_CONFIRM_SECRET = 'a-different-child';
+    expect(body(await handler({ ...args, confirmToken }, NO_ELICIT_CTX))).toMatchObject({ error: 'TOKEN_INVALID' });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
   it('records only a digest of the nonce and its expiry, 0600, bound to the key', () => {
     process.env.MCP_CONFIRM_SECRET = SECRET;
     const exp = Date.now() + 60_000;
@@ -351,9 +374,32 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
     expect(err).toHaveBeenCalledTimes(1);
     expect(String(err.mock.calls[0]![0])).toBe(
       '[apple-icloud-mcp] WARNING: APPLE_STATE_CACHE=false, so a used confirmToken is remembered by this process only. ' +
-        'With MCP_CONFIRM_SECRET set, a restart before it expires would accept it again.',
+        "With MCP_CONFIRM_SECRET (or mcp-host's MCP_HOST_CONFIRM_SECRET) set, a restart before it expires would accept it again.",
     );
     expect(() => statSync(spentPath())).toThrow(); // nothing written
+    vi.restoreAllMocks();
+  });
+
+  it("warns with APPLE_STATE_CACHE=false under the host's secret too, but not when MCP_DATA_DIR is relative (the key is random then)", async () => {
+    process.env.APPLE_STATE_CACHE = 'false';
+    process.env.MCP_HOST_CONFIRM_SECRET = 'derived-by-the-runner-for-this-child';
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = gatedTool({ title: 'Lunch?' }, 'apple_mail_send');
+    const args = { eventId: 'new' };
+
+    process.env.MCP_DATA_DIR = 'relative/dir';
+    let { confirmToken } = await callPreview(handler, args);
+    await handler({ ...args, confirmToken }, NO_ELICIT_CTX);
+    delete process.env.MCP_DATA_DIR;
+    ({ confirmToken } = await callPreview(handler, args));
+    await handler({ ...args, confirmToken }, NO_ELICIT_CTX);
+    expect(err).not.toHaveBeenCalled();
+
+    process.env.MCP_DATA_DIR = join(tmpdir(), 'apple-icloud-mcp-hosted');
+    ({ confirmToken } = await callPreview(handler, args));
+    await handler({ ...args, confirmToken }, NO_ELICIT_CTX);
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0]![0])).toContain('MCP_HOST_CONFIRM_SECRET');
     vi.restoreAllMocks();
   });
 
@@ -373,7 +419,7 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
       const ours = err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('confirmToken'));
       expect(ours).toEqual([
         '[apple-icloud-mcp] WARNING: could not record a used confirmToken on disk; it is remembered by this process only. ' +
-          'With MCP_CONFIRM_SECRET set, a restart before it expires would accept it again.',
+          "With MCP_CONFIRM_SECRET (or mcp-host's MCP_HOST_CONFIRM_SECRET) set, a restart before it expires would accept it again.",
       ]);
       vi.restoreAllMocks();
     } finally {

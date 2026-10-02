@@ -236,9 +236,10 @@ The package ships a [`mint.yaml`](mint.yaml) that mcp-host reads when you regist
 
 Give it your time zone (`DISPLAY_TZ`): the runner is on UTC, and times you give without an offset ("3pm") are
 read in `DISPLAY_TZ` — so are calendar events stored without a time zone of their own ("floating"), whatever
-`timeZone` a call passes. Set **`MCP_CONFIRM_SECRET`** too: without it, a confirmation token issued just before the
-child restarts (a redeploy, a machine move) stops working and you have to preview again. Spent tokens are
-recorded on disk, so a shared secret does not let one be replayed.
+`timeZone` a call passes. Confirmation tokens survive a restart on their own: mcp-host gives a child with a
+`dataDir` a stable per-child key (`MCP_HOST_CONFIRM_SECRET`), so a preview approved after the child idled out
+(or was redeployed) still works. Spent tokens are recorded on disk, so none can be replayed. An owner-set
+`MCP_CONFIRM_SECRET` takes precedence over the host's key.
 
 ## Tools
 
@@ -370,7 +371,7 @@ target changed in between.
 |---|---|
 | `MCP_CONFIRM_MODE` | `ask-user` (default — the model must get your OK before repeating the call), `auto` (the model may confirm after reviewing the preview), `refuse` (never). Unknown values mean `refuse`. |
 | `MCP_CONFIRM_TTL_SECONDS` | How long a token is valid (default 600). |
-| `MCP_CONFIRM_SECRET` | Token signing key; random per process by default. Set it so a token survives a restart; spent tokens are recorded on disk (`confirm-spent.json`), so none can be replayed (unless `APPLE_STATE_CACHE=false` or the directory is unwritable — a warning says so). |
+| `MCP_CONFIRM_SECRET` | Token signing key; random per process by default (on mcp-host, the host's per-child `MCP_HOST_CONFIRM_SECRET` beside an absolute `MCP_DATA_DIR` is used instead). Set it so a token survives a restart; spent tokens are recorded on disk (`confirm-spent.json`), so none can be replayed (unless `APPLE_STATE_CACHE=false` or the directory is unwritable — a warning says so). |
 
 ## Environment variables
 

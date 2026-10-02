@@ -50,7 +50,7 @@ src/
   contacts/         CardDAV: raw-line vCard 3.0 editor, entryIds, book cache keyed by getctag
   mail/             imapflow + nodemailer SMTPConnection, CONNECT tunnel, HTML→text, safe move
   maps/ weather/ itunes/
-tests/              mirrors src/; tests/_setup.ts blanks APPLE_*/ICLOUD_*/DISPLAY_TZ/MCP_CONFIRM_*,
+tests/              mirrors src/; tests/_setup.ts blanks APPLE_*/ICLOUD_*/DISPLAY_TZ/MCP_CONFIRM_*/MCP_HOST_CONFIRM_*,
                     pins MCP_DATA_DIR to a temp dir, stubs fetch to THROW, makes retry sleeps instant
 ```
 
@@ -263,7 +263,8 @@ always fetch the full top 100 once and slice. JSON arrives as `text/javascript`.
 ## Hosting (mcp-host)
 
 `mint.yaml` (shipped in the package; mcp-host reads it from jsDelivr) proposes: owner `env` for the developer
-key, `DISPLAY_TZ`, write mode, `MCP_CONFIRM_SECRET`; `auth.fields` (persist: user) for each person's Apple ID,
+key, `DISPLAY_TZ`, write mode, an optional `MCP_CONFIRM_SECRET` (the host already injects a stable per-child
+`MCP_HOST_CONFIRM_SECRET`, which mcp-utils' `confirmKeyFromEnv` honours beside an absolute `MCP_DATA_DIR`); `auth.fields` (persist: user) for each person's Apple ID,
 app-specific password and Music tokens — declaring auth gives each caller their own child and `$HOME`;
 `state.dataDir` for the small caches; `egress.allow` = exactly the hosts in http.ts plus the two mail hosts.
 Quote `"*.icloud.com"` in YAML (a bare `*` is an alias). Keep the allowlist and `ALLOWED_HOSTS` in step.
