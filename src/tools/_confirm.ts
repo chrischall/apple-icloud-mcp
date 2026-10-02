@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 import type { CallToolResult, InputRequiredResult, ServerContext } from '@modelcontextprotocol/server';
 import {
   confirmKeyFromEnv,
@@ -113,9 +114,10 @@ function withoutConfirmToken(args: object): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 /**
- * mcp-utils remembers a used token's nonce in process memory only, while
- * MCP_CONFIRM_SECRET (which mint.yaml proposes for hosted deployments) makes
- * the token itself valid in every process that shares the secret. So after a
+ * mcp-utils remembers a used token's nonce in process memory only (unless its
+ * own durable store is in play), while a stable key — MCP_CONFIRM_SECRET, or
+ * the MCP_HOST_CONFIRM_SECRET mcp-host derives per child beside an absolute
+ * MCP_DATA_DIR — makes the token itself valid in every process that shares it. So after a
  * restart inside the token's lifetime — a crash, a redeploy, the child dying
  * right after the SMTP hand-off — an already-used token verified again. For a
  * target with no revision to rotate (a new mail, an invitation-sending create)
@@ -157,15 +159,26 @@ const processSpent = createSpentTokenStore();
 
 const warned = new Set<'disabled' | 'write'>();
 
+/**
+ * Whether the confirm key outlives the process — the same rule as mcp-utils'
+ * `confirmKeyFromEnv`: the operator's MCP_CONFIRM_SECRET, else mcp-host's
+ * per-child MCP_HOST_CONFIRM_SECRET, which counts only beside an absolute
+ * MCP_DATA_DIR.
+ */
+function hasStableConfirmKey(env: EnvSource): boolean {
+  if (readEnvVar('MCP_CONFIRM_SECRET', { env }) !== undefined) return true;
+  return readEnvVar('MCP_HOST_CONFIRM_SECRET', { env }) !== undefined && isAbsolute(readEnvVar('MCP_DATA_DIR', { env }) ?? '');
+}
+
 function warnOnce(kind: 'disabled' | 'write', env: EnvSource): void {
-  // Without a shared secret a restart invalidates every token anyway, so the
+  // Without a stable key a restart invalidates every token anyway, so the
   // memory-only store loses nothing and there is nothing to warn about.
-  if (warned.has(kind) || readEnvVar('MCP_CONFIRM_SECRET', { env }) === undefined) return;
+  if (warned.has(kind) || !hasStableConfirmKey(env)) return;
   warned.add(kind);
   console.error(
     `[apple-icloud-mcp] WARNING: ${kind === 'disabled' ? 'APPLE_STATE_CACHE=false, so a' : 'could not record a'} used confirmToken ` +
-      `${kind === 'disabled' ? 'is' : 'on disk; it is'} remembered by this process only. With MCP_CONFIRM_SECRET set, ` +
-      'a restart before it expires would accept it again.',
+      `${kind === 'disabled' ? 'is' : 'on disk; it is'} remembered by this process only. With MCP_CONFIRM_SECRET ` +
+      "(or mcp-host's MCP_HOST_CONFIRM_SECRET) set, a restart before it expires would accept it again.",
   );
 }
 

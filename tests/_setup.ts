@@ -24,7 +24,7 @@ const homeStateExisted = existsSync(join(homedir(), '.apple-icloud-mcp'));
 
 beforeEach(() => {
   for (const key of Object.keys(process.env)) {
-    if (/^(APPLE_|ICLOUD_|MCP_CONFIRM_)/.test(key) || key === 'DISPLAY_TZ') delete process.env[key];
+    if (/^(APPLE_|ICLOUD_|MCP_CONFIRM_|MCP_HOST_CONFIRM_)/.test(key) || key === 'DISPLAY_TZ') delete process.env[key];
   }
   process.env.MCP_DATA_DIR = DATA_DIR;
   forgetSecrets();

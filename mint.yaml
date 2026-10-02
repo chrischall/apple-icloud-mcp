@@ -63,9 +63,10 @@ env:
     secret: true
     required: false
     help: >-
-      Signing key for confirmTokens. Random per process by default; set it so a
-      token issued just before a restart or redeploy still works (spent tokens
-      are recorded on disk, so none can be replayed).
+      Signing key for confirmTokens. Optional on mcp-host, which already gives
+      each child a stable key (MCP_HOST_CONFIRM_SECRET) so a token issued just
+      before a restart or redeploy still works; this overrides it. Spent tokens
+      are recorded on disk, so none can be replayed.
 auth:
   fields:
     - name: APPLE_MUSIC_USER_TOKEN
