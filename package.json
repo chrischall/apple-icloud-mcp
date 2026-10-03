@@ -66,8 +66,8 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "^2.1.0",
-    "@types/node": "^26.0.0",
+    "@modelcontextprotocol/client": "^2.2.0",
+    "@types/node": "^26.6.3",
     "@types/nodemailer": "^8.0.2",
     "@vitest/coverage-v8": "^5.0.0",
     "esbuild": "^0.28.0",
