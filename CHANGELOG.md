@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.1](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.0...v0.3.1) (2026-10-03)
+
+
+### Bug Fixes
+
+* **deps:** bump @chrischall/mcp-utils to 2.10.0 ([#35](https://github.com/chrischall/apple-icloud-mcp/issues/35)) ([36c642f](https://github.com/chrischall/apple-icloud-mcp/commit/36c642f4eef8402f5bae0252f88407b8839e2be0))
+* **deps:** bump @chrischall/mcp-utils to 2.12.0 ([#37](https://github.com/chrischall/apple-icloud-mcp/issues/37)) ([5df1aab](https://github.com/chrischall/apple-icloud-mcp/commit/5df1aab686ca98c9d03dc9e4f381c44f4017c4e0))
+* **deps:** bump @chrischall/mcp-utils to 2.13.0 ([#38](https://github.com/chrischall/apple-icloud-mcp/issues/38)) ([7bae58d](https://github.com/chrischall/apple-icloud-mcp/commit/7bae58de22cb8eb866fb9e31a76f31b187c295c1))
+* keep write approvals valid across a hosted restart (mcp-utils 2.11.0) ([#36](https://github.com/chrischall/apple-icloud-mcp/issues/36)) ([660525a](https://github.com/chrischall/apple-icloud-mcp/commit/660525ab2a93a817ba6c0fd7e987c146e5e3bb90))
+* report CDN/WAF blocks as edge_blocked, not a rejected credential (mcp-utils 2.9.0) ([#33](https://github.com/chrischall/apple-icloud-mcp/issues/33)) ([9087bfa](https://github.com/chrischall/apple-icloud-mcp/commit/9087bfa527ab6c1bce5992405f6f187e669ebb9e))
+
 ## [0.3.0](https://github.com/chrischall/apple-icloud-mcp/compare/v0.2.1...v0.3.0) (2026-09-29)
 
 
