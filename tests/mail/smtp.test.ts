@@ -71,13 +71,15 @@ class FakeConn extends EventEmitter implements SmtpConnectionLike {
   ) {
     super();
   }
-  connect(callback: () => void): void {
+  connect(callback: (err?: Error) => void): void {
+    this.connectCb = callback;
     if (this.script.connect) this.script.connect(this);
     else setImmediate(callback);
-    this.connectCb = callback;
   }
-  connectCb: (() => void) | undefined;
+  connectCb: ((err?: Error) => void) | undefined;
+  loginCalled = 0;
   login(_auth: unknown, callback: (err: Error | null) => void): void {
+    this.loginCalled++;
     if (this.script.login) this.script.login(this, callback);
     else setImmediate(() => callback(null));
   }
@@ -224,6 +226,13 @@ describe('createSmtpTransport (scripted connection)', () => {
   it('treats a close without an error event as a failure', async () => {
     const s = seams({ connect: (c) => setImmediate(() => c.emit('end')) });
     expect(await phaseOf(createSmtpTransport(OPTS, s.seams).submit(MSG))).toMatchObject({ phase: 'connect', code: 'ECONNECTION' });
+  });
+
+  it('a close before the greeting, handed to the connect callback, fails in phase connect without logging in', async () => {
+    // nodemailer ≥10.0.12 reports a silent pre-greeting close through connect(cb) instead of 'error'.
+    const s = seams({ connect: (c) => setImmediate(() => c.connectCb?.(Object.assign(new Error('Connection closed unexpectedly'), { code: 'ECONNECTION' }))) });
+    expect(await phaseOf(createSmtpTransport(OPTS, s.seams).submit(MSG))).toMatchObject({ phase: 'connect', code: 'ECONNECTION' });
+    expect(s.conns[0].loginCalled).toBe(0);
   });
 
   it('ignores callbacks that arrive after the outcome is settled', async () => {

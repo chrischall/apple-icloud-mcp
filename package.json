@@ -54,19 +54,19 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@chrischall/mcp-utils": "^2.13.0",
-    "@modelcontextprotocol/server": "^2.1.0",
+    "@chrischall/mcp-utils": "^2.13.1",
+    "@modelcontextprotocol/server": "^2.3.0",
     "@xmldom/xmldom": "^0.9.12",
-    "dotenv": "^18.0.0",
+    "dotenv": "^18.0.5",
     "ical.js": "^2.2.1",
-    "imapflow": "^2.0.7",
-    "nodemailer": "^10.0.10",
-    "postal-mime": "^4.0.0",
+    "imapflow": "^2.1.2",
+    "nodemailer": "^10.0.13",
+    "postal-mime": "^4.0.2",
     "timezones-ical-library": "^2.3.2",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "^2.2.0",
+    "@modelcontextprotocol/client": "^2.3.0",
     "@types/node": "^26.6.3",
     "@types/nodemailer": "^8.0.2",
     "@vitest/coverage-v8": "^5.0.3",

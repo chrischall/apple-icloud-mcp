@@ -97,7 +97,7 @@ export type CreateSmtpTransport = (options: SmtpTransportOptions) => SmtpTranspo
 export interface SmtpConnectionLike {
   on(event: 'error', listener: (err: Error) => void): unknown;
   on(event: 'end', listener: () => void): unknown;
-  connect(callback: () => void): void;
+  connect(callback: (err?: Error) => void): void;
   login(auth: SMTPConnectionAuth, callback: (err: Error | null) => void): void;
   send(envelope: SMTPEnvelope, message: Readable, callback: (err: Error | null, info?: SMTPConnectionSendInfo) => void): void;
   quit(): void;
@@ -244,8 +244,13 @@ export function createSmtpTransport(options: SmtpTransportOptions, seams: SmtpSe
         conn.on('error', (err) => settle(err));
         // The server can close without an error event (e.g. before its greeting).
         conn.on('end', () => settle(Object.assign(new Error('The connection closed unexpectedly.'), { code: 'ECONNECTION' })));
-        conn.connect(() => {
+        // nodemailer ≥10.0.12 hands a silent close before the greeting to this callback, not to 'error'.
+        conn.connect((connectErr) => {
           if (settled) return;
+          if (connectErr) {
+            settle(connectErr);
+            return;
+          }
           phase = 'auth';
           conn.login({ user: options.user, pass: options.pass }, (err) => {
             if (settled) return;
