@@ -22,7 +22,7 @@ MPL-2.0 is a file-level license: it covers ical.js's own files and does not exte
 
 | Package | Version | License | Source |
 |---|---|---|---|
-| @chrischall/mcp-utils | 2.13.0 | MIT | https://github.com/chrischall/mcp-utils |
+| @chrischall/mcp-utils | 2.13.1 | MIT | https://github.com/chrischall/mcp-utils |
 | @esbuild/aix-ppc64 | 0.28.2 | MIT | — |
 | @esbuild/android-arm | 0.28.2 | MIT | — |
 | @esbuild/android-arm64 | 0.28.2 | MIT | — |
@@ -49,37 +49,37 @@ MPL-2.0 is a file-level license: it covers ical.js's own files and does not exte
 | @esbuild/win32-arm64 | 0.28.2 | MIT | — |
 | @esbuild/win32-ia32 | 0.28.2 | MIT | — |
 | @esbuild/win32-x64 | 0.28.2 | MIT | — |
-| @modelcontextprotocol/core | 2.1.0 | MIT | https://github.com/modelcontextprotocol/typescript-sdk |
-| @modelcontextprotocol/server | 2.1.0 | MIT | https://github.com/modelcontextprotocol/typescript-sdk |
+| @modelcontextprotocol/core | 2.3.0 | Apache-2.0 | https://github.com/modelcontextprotocol/typescript-sdk |
+| @modelcontextprotocol/server | 2.3.0 | Apache-2.0 | https://github.com/modelcontextprotocol/typescript-sdk |
 | @pinojs/redact | 0.4.0 | MIT | https://github.com/pinojs/redact |
-| @rolldown/binding-android-arm-eabi | 1.2.9 | MIT | — |
-| @rolldown/binding-android-arm64 | 1.2.9 | MIT | — |
-| @rolldown/binding-darwin-arm64 | 1.2.9 | MIT | https://github.com/rolldown/rolldown |
-| @rolldown/binding-darwin-x64 | 1.2.9 | MIT | — |
-| @rolldown/binding-freebsd-x64 | 1.2.9 | MIT | — |
-| @rolldown/binding-linux-arm-gnueabihf | 1.2.9 | MIT | — |
-| @rolldown/binding-linux-arm64-gnu | 1.2.9 | MIT | — |
-| @rolldown/binding-linux-arm64-musl | 1.2.9 | MIT | — |
-| @rolldown/binding-linux-ppc64-gnu | 1.2.9 | MIT | — |
-| @rolldown/binding-linux-s390x-gnu | 1.2.9 | MIT | — |
-| @rolldown/binding-linux-x64-gnu | 1.2.9 | MIT | — |
-| @rolldown/binding-linux-x64-musl | 1.2.9 | MIT | — |
-| @rolldown/binding-openharmony-arm64 | 1.2.9 | MIT | — |
-| @rolldown/binding-win32-arm64-msvc | 1.2.9 | MIT | — |
-| @rolldown/binding-win32-x64-msvc | 1.2.9 | MIT | — |
+| @rolldown/binding-android-arm-eabi | 1.2.12 | MIT | — |
+| @rolldown/binding-android-arm64 | 1.2.12 | MIT | — |
+| @rolldown/binding-darwin-arm64 | 1.2.12 | MIT | https://github.com/rolldown/rolldown |
+| @rolldown/binding-darwin-x64 | 1.2.12 | MIT | — |
+| @rolldown/binding-freebsd-x64 | 1.2.12 | MIT | — |
+| @rolldown/binding-linux-arm-gnueabihf | 1.2.12 | MIT | — |
+| @rolldown/binding-linux-arm64-gnu | 1.2.12 | MIT | — |
+| @rolldown/binding-linux-arm64-musl | 1.2.12 | MIT | — |
+| @rolldown/binding-linux-ppc64-gnu | 1.2.12 | MIT | — |
+| @rolldown/binding-linux-s390x-gnu | 1.2.12 | MIT | — |
+| @rolldown/binding-linux-x64-gnu | 1.2.12 | MIT | — |
+| @rolldown/binding-linux-x64-musl | 1.2.12 | MIT | — |
+| @rolldown/binding-openharmony-arm64 | 1.2.12 | MIT | — |
+| @rolldown/binding-win32-arm64-msvc | 1.2.12 | MIT | — |
+| @rolldown/binding-win32-x64-msvc | 1.2.12 | MIT | — |
 | @xmldom/xmldom | 0.9.12 | MIT | https://github.com/xmldom/xmldom |
-| @zone-eu/mailsplit | 5.4.17 | (MIT OR EUPL-1.1+) | https://github.com/zone-eu/mailsplit |
+| @zone-eu/mailsplit | 5.4.19 | (MIT OR EUPL-1.1+) | https://github.com/zone-eu/mailsplit |
 | atomic-sleep | 1.0.0 | MIT | https://github.com/davidmarkclements/atomic-sleep |
-| dotenv | 18.0.4 | BSD-2-Clause | https://github.com/motdotla/dotenv |
+| dotenv | 18.0.5 | BSD-2-Clause | https://github.com/motdotla/dotenv |
 | encoding-japanese | 2.4.0 | MIT | https://github.com/polygonplanet/encoding.js |
 | fsevents | 2.3.3 | MIT | https://github.com/fsevents/fsevents |
 | ical.js | 2.2.1 | MPL-2.0 | https://github.com/kewisch/ical.js |
 | iconv-lite | 0.7.3 | MIT | https://github.com/pillarjs/iconv-lite |
-| imapflow | 2.0.7 | MIT | https://github.com/postalsys/imapflow |
+| imapflow | 2.1.2 | MIT | https://github.com/postalsys/imapflow |
 | ip-address | 10.7.2 | MIT | https://github.com/beaugunderson/ip-address |
-| libbase64 | 1.3.0 | MIT | https://github.com/nodemailer/libbase64 |
-| libmime | 5.4.4 | MIT | https://github.com/nodemailer/libmime |
-| libqp | 2.1.1 | MIT | https://github.com/nodemailer/libqp |
+| libbase64 | 1.3.1 | MIT | https://github.com/nodemailer/libbase64 |
+| libmime | 5.4.6 | MIT | https://github.com/nodemailer/libmime |
+| libqp | 2.1.2 | MIT | https://github.com/nodemailer/libqp |
 | lightningcss-android-arm64 | 1.33.0 | MPL-2.0 | — |
 | lightningcss-darwin-arm64 | 1.33.0 | MPL-2.0 | https://github.com/parcel-bundler/lightningcss |
 | lightningcss-darwin-x64 | 1.33.0 | MPL-2.0 | — |
@@ -91,12 +91,12 @@ MPL-2.0 is a file-level license: it covers ical.js's own files and does not exte
 | lightningcss-linux-x64-musl | 1.33.0 | MPL-2.0 | — |
 | lightningcss-win32-arm64-msvc | 1.33.0 | MPL-2.0 | — |
 | lightningcss-win32-x64-msvc | 1.33.0 | MPL-2.0 | — |
-| nodemailer | 10.0.10 | MIT-0 | https://github.com/nodemailer/nodemailer |
+| nodemailer | 10.0.13 | MIT-0 | https://github.com/nodemailer/nodemailer |
 | on-exit-leak-free | 2.1.2 | MIT | https://github.com/mcollina/on-exit-or-gc |
 | pino | 10.3.1 | MIT | https://github.com/pinojs/pino |
 | pino-abstract-transport | 3.0.0 | MIT | https://github.com/pinojs/pino-abstract-transport |
 | pino-std-serializers | 7.1.0 | MIT | https://github.com/pinojs/pino-std-serializers |
-| postal-mime | 4.0.0 | MIT-0 | https://github.com/postalsys/postal-mime |
+| postal-mime | 4.0.2 | MIT-0 | https://github.com/postalsys/postal-mime |
 | process-warning | 5.1.0 | MIT | https://github.com/fastify/process-warning |
 | quick-format-unescaped | 4.0.4 | MIT | https://github.com/davidmarkclements/quick-format |
 | real-require | 0.2.0 | MIT | https://github.com/pinojs/real-require |
@@ -113,7 +113,7 @@ MPL-2.0 is a file-level license: it covers ical.js's own files and does not exte
 
 ## License and notice texts
 
-### @chrischall/mcp-utils@2.13.0
+### @chrischall/mcp-utils@2.13.1
 
 - License: MIT
 - Source: https://github.com/chrischall/mcp-utils
@@ -301,9 +301,9 @@ _An optional dependency that was not installed where this file was generated; se
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @modelcontextprotocol/core@2.1.0
+### @modelcontextprotocol/core@2.3.0
 
-- License: MIT
+- License: Apache-2.0
 - Source: https://github.com/modelcontextprotocol/typescript-sdk
 
 `LICENSE`:
@@ -527,9 +527,9 @@ CC-BY-4.0. See https://creativecommons.org/licenses/by/4.0/legalcode for
 the full license text.
 ```
 
-### @modelcontextprotocol/server@2.1.0
+### @modelcontextprotocol/server@2.3.0
 
-- License: MIT
+- License: Apache-2.0
 - Source: https://github.com/modelcontextprotocol/typescript-sdk
 
 `LICENSE`:
@@ -784,92 +784,92 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### @rolldown/binding-android-arm-eabi@1.2.9
+### @rolldown/binding-android-arm-eabi@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-android-arm64@1.2.9
+### @rolldown/binding-android-arm64@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-darwin-arm64@1.2.9
+### @rolldown/binding-darwin-arm64@1.2.12
 
 - License: MIT
 - Source: https://github.com/rolldown/rolldown
 
 _This package ships no license file; its package.json declares MIT._
 
-### @rolldown/binding-darwin-x64@1.2.9
+### @rolldown/binding-darwin-x64@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-freebsd-x64@1.2.9
+### @rolldown/binding-freebsd-x64@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-linux-arm-gnueabihf@1.2.9
+### @rolldown/binding-linux-arm-gnueabihf@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-linux-arm64-gnu@1.2.9
+### @rolldown/binding-linux-arm64-gnu@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-linux-arm64-musl@1.2.9
+### @rolldown/binding-linux-arm64-musl@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-linux-ppc64-gnu@1.2.9
+### @rolldown/binding-linux-ppc64-gnu@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-linux-s390x-gnu@1.2.9
+### @rolldown/binding-linux-s390x-gnu@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-linux-x64-gnu@1.2.9
+### @rolldown/binding-linux-x64-gnu@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-linux-x64-musl@1.2.9
+### @rolldown/binding-linux-x64-musl@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-openharmony-arm64@1.2.9
+### @rolldown/binding-openharmony-arm64@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-win32-arm64-msvc@1.2.9
+### @rolldown/binding-win32-arm64-msvc@1.2.12
 
 - License: MIT
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### @rolldown/binding-win32-x64-msvc@1.2.9
+### @rolldown/binding-win32-x64-msvc@1.2.12
 
 - License: MIT
 
@@ -893,7 +893,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### @zone-eu/mailsplit@5.4.17
+### @zone-eu/mailsplit@5.4.19
 
 - License: (MIT OR EUPL-1.1+)
 - Source: https://github.com/zone-eu/mailsplit
@@ -1113,7 +1113,7 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
 OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### dotenv@18.0.4
+### dotenv@18.0.5
 
 - License: BSD-2-Clause
 - Source: https://github.com/motdotla/dotenv
@@ -1646,7 +1646,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### imapflow@2.0.7
+### imapflow@2.1.2
 
 - License: MIT
 - Source: https://github.com/postalsys/imapflow
@@ -1701,7 +1701,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### libbase64@1.3.0
+### libbase64@1.3.1
 
 - License: MIT
 - Source: https://github.com/nodemailer/libbase64
@@ -1730,7 +1730,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### libmime@5.4.4
+### libmime@5.4.6
 
 - License: MIT
 - Source: https://github.com/nodemailer/libmime
@@ -1759,7 +1759,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### libqp@2.1.1
+### libqp@2.1.2
 
 - License: MIT
 - Source: https://github.com/nodemailer/libqp
@@ -2231,7 +2231,7 @@ _An optional dependency that was not installed where this file was generated; se
 
 _An optional dependency that was not installed where this file was generated; see its package on npm._
 
-### nodemailer@10.0.10
+### nodemailer@10.0.13
 
 - License: MIT-0
 - Source: https://github.com/nodemailer/nodemailer
@@ -2367,7 +2367,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### postal-mime@4.0.0
+### postal-mime@4.0.2
 
 - License: MIT-0
 - Source: https://github.com/postalsys/postal-mime
