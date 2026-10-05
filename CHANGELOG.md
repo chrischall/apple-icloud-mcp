@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.1...v0.3.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **deps:** bump MCP SDK to 2.3.0 and production deps; report a pre-greeting SMTP close as a connect failure ([#41](https://github.com/chrischall/apple-icloud-mcp/issues/41)) ([fbe2c9a](https://github.com/chrischall/apple-icloud-mcp/commit/fbe2c9aab9e5a0c43cd5042088dcd2ecb7735cdc))
+
 ## [0.3.1](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.0...v0.3.1) (2026-10-03)
 
 
