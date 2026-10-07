@@ -194,6 +194,12 @@
           "format": "string"
         },
         {
+          "name": "MCP_CONFIRM_ELICITATION",
+          "description": "\"off\" never shows a confirmation prompt, so every client gets the MCP_CONFIRM_MODE flow. Set it for a client that says it can prompt but never does (the gated call hangs, e.g. opencode 2.0.x). Any other value stays \"on\" (with a stderr warning).",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
           "name": "MCP_CONFIRM_TTL_SECONDS",
           "description": "Lifetime of a confirmToken in seconds (default 600).",
           "isRequired": false,

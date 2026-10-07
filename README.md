@@ -363,13 +363,14 @@ An unrecognised value fails closed to `none`. `APPLE_SERVICES` (comma-separated:
 Irreversible actions and anything that reaches another person ask for confirmation first: **sending mail**,
 **deleting** an event, contact, playlist or library item, **removing or reordering** playlist tracks, and
 **creating or changing an event with attendees** (iCloud emails them). A client that can show a prompt
-(Claude Code) asks you directly. One that cannot (claude.ai) gets a two-step flow: the first call does nothing
+(Claude Code) asks you directly, unless `MCP_CONFIRM_ELICITATION=off`. One that cannot (claude.ai) gets a two-step flow: the first call does nothing
 and returns a preview plus a `confirmToken`; only a repeat call with that token acts, and it is refused if the
 target changed in between.
 
 | Variable | Meaning |
 |---|---|
 | `MCP_CONFIRM_MODE` | `ask-user` (default — the model must get your OK before repeating the call), `auto` (the model may confirm after reviewing the preview), `refuse` (never). Unknown values mean `refuse`. |
+| `MCP_CONFIRM_ELICITATION` | `on` (default) or `off`. `off` never shows a prompt, so every client gets the two-step flow under `MCP_CONFIRM_MODE`. Set it for a client that says it can prompt but never does (the gated call hangs — opencode 2.0.x). Any other value stays `on` (with a stderr warning). |
 | `MCP_CONFIRM_TTL_SECONDS` | How long a token is valid (default 600). |
 | `MCP_CONFIRM_SECRET` | Token signing key; random per process by default (on mcp-host, the host's per-child `MCP_HOST_CONFIRM_SECRET` beside an absolute `MCP_DATA_DIR` is used instead). Set it so a token survives a restart; spent tokens are recorded on disk (`confirm-spent.json`), so none can be replayed (unless `APPLE_STATE_CACHE=false` or the directory is unwritable — a warning says so). |
 
@@ -430,6 +431,7 @@ All optional; each service activates when its credentials are present. Values th
 | Variable | Meaning |
 |---|---|
 | `MCP_CONFIRM_MODE` | How confirm-gated writes (send mail, deletes, removing tracks, invitations) behave on a client with no prompt, like claude.ai: "ask-user" (default: preview + confirmToken, the model must get your OK), "auto", or "refuse". Unknown values mean refuse. |
+| `MCP_CONFIRM_ELICITATION` | "off" never shows a confirmation prompt, so every client gets the MCP_CONFIRM_MODE flow. Set it for a client that says it can prompt but never does (the gated call hangs, e.g. opencode 2.0.x). Any other value stays "on" (with a stderr warning). |
 | `MCP_CONFIRM_TTL_SECONDS` | Lifetime of a confirmToken in seconds (default 600). |
 | `MCP_CONFIRM_SECRET` 🔒 | Signing key for confirmTokens. Random per process by default; set it so a token issued just before a restart or redeploy still works (spent tokens are recorded on disk, so none can be replayed). |
 
