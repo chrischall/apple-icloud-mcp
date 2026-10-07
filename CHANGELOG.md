@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.3](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.2...v0.3.3) (2026-10-07)
+
+
+### Bug Fixes
+
+* **deps:** bump @chrischall/mcp-utils to 2.15.0 for MCP SDK 2.3.0 and elicitation opt-out ([#43](https://github.com/chrischall/apple-icloud-mcp/issues/43)) ([a6ca48b](https://github.com/chrischall/apple-icloud-mcp/commit/a6ca48bb054934075377acf6a45bd502fc4ed9e5))
+* **deps:** bump source-map-js ([#45](https://github.com/chrischall/apple-icloud-mcp/issues/45)) ([dd1c2c8](https://github.com/chrischall/apple-icloud-mcp/commit/dd1c2c8f0c081db0da11b3e6370f276757636355))
+
+
+### Documentation
+
+* document MCP_CONFIRM_ELICITATION ([#46](https://github.com/chrischall/apple-icloud-mcp/issues/46)) ([ff56fa6](https://github.com/chrischall/apple-icloud-mcp/commit/ff56fa6777176fca6aeb7c52b4f8bc8dbecede5c))
+
 ## [0.3.2](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.1...v0.3.2) (2026-10-05)
 
 
