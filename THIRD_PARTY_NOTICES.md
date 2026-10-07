@@ -22,7 +22,7 @@ MPL-2.0 is a file-level license: it covers ical.js's own files and does not exte
 
 | Package | Version | License | Source |
 |---|---|---|---|
-| @chrischall/mcp-utils | 2.13.1 | MIT | https://github.com/chrischall/mcp-utils |
+| @chrischall/mcp-utils | 2.15.0 | MIT | https://github.com/chrischall/mcp-utils |
 | @esbuild/aix-ppc64 | 0.28.2 | MIT | — |
 | @esbuild/android-arm | 0.28.2 | MIT | — |
 | @esbuild/android-arm64 | 0.28.2 | MIT | — |
@@ -113,7 +113,7 @@ MPL-2.0 is a file-level license: it covers ical.js's own files and does not exte
 
 ## License and notice texts
 
-### @chrischall/mcp-utils@2.13.1
+### @chrischall/mcp-utils@2.15.0
 
 - License: MIT
 - Source: https://github.com/chrischall/mcp-utils
