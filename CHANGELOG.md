@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.4](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.3...v0.3.4) (2026-10-09)
+
+
+### Bug Fixes
+
+* annotate tools truthfully and sync manifests with the served tools ([#49](https://github.com/chrischall/apple-icloud-mcp/issues/49)) ([cb365e1](https://github.com/chrischall/apple-icloud-mcp/commit/cb365e1f6deea8d135d9e30d3957842900687f2b))
+* declare the plugin MCP config under the mcpServers key Claude Code reads ([#51](https://github.com/chrischall/apple-icloud-mcp/issues/51)) ([fc77044](https://github.com/chrischall/apple-icloud-mcp/commit/fc7704432f507bd793b63e4797c777cac684fb36))
+* **deps:** update @chrischall/mcp-utils to 3.0.0 ([#47](https://github.com/chrischall/apple-icloud-mcp/issues/47)) ([fcb3ea6](https://github.com/chrischall/apple-icloud-mcp/commit/fcb3ea696053b057b338c20e83ef0fa6cfc4db7e))
+
 ## [0.3.3](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.2...v0.3.3) (2026-10-07)
 
 
