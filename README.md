@@ -270,7 +270,7 @@ read in `DISPLAY_TZ` — so are calendar events stored without a time zone of th
 | `apple_music_get_ratings` | Whether you have loved or disliked songs, albums, playlists, music videos or stations — catalog or library ids — returning love, dislike or none per id. | read |  |
 | `apple_music_create_playlist` | Create a new playlist in your Apple Music library, optionally with tracks (up to 500 catalog or library song ids; added 100 at a time), a description, a folder and public visibility (not in APPLE_WRITE_MODE=additive). | additive |  |
 | `apple_music_add_playlist_tracks` | Append songs (up to 500 catalog or library ids) to the end of one of your library playlists. | additive |  |
-| `apple_music_create_folder` | Create a playlist folder in your Apple Music library, at the top level or inside another folder. | additive |  |
+| `apple_music_create_folder` | Create a playlist folder in your Apple Music library, at the top level or inside another folder. | all |  |
 | `apple_music_add_to_library` | Add catalog songs, albums, playlists or music videos to your Apple Music library by catalog id (up to 100 per type). | additive |  |
 | `apple_music_add_favorites` | Mark catalog songs, albums, playlists, artists or music videos as favorites (the star in Apple Music; favorite songs go to your Favorite Songs playlist), by catalog id, up to 100 per type. | additive |  |
 | `apple_music_set_rating` | Set your rating on a song, album, playlist, music video or station (catalog or library id): love, dislike, or none to clear it. | all |  |
@@ -351,7 +351,7 @@ read in `DISPLAY_TZ` — so are calendar events stored without a time zone of th
 | Value | What is registered |
 |---|---|
 | `none` | Read tools only. |
-| `additive` | Reads, plus writes that only **add** to your own account: create a (private) playlist or folder, append tracks, add to library/favorites, create an event (without attendees, and not in a calendar shared with other people) or a contact. Nothing existing is modified or removed and nothing is sent to anyone. |
+| `additive` | Reads, plus writes that only **add** to your own account: create a (private) playlist, append tracks, add to library/favorites, create an event (without attendees, and not in a calendar shared with other people) or a contact. Nothing existing is modified or removed and nothing is sent to anyone. |
 | `all` (default) | Everything. |
 
 Gated tools are not registered at all below their mode, so no prompt or injected instruction can call them.

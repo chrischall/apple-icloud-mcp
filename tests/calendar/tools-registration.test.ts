@@ -25,7 +25,8 @@ describe('registration', () => {
       expect(t.cfg.annotations.openWorldHint, name).toBe(true);
       expect(t.cfg.annotations.readOnlyHint, name).toBe(READ_TOOLS.includes(name));
     }
-    expect(tools.get('apple_calendar_create_event')!.cfg.annotations).toMatchObject({ destructiveHint: false, idempotentHint: false });
+    // Default write mode (all) accepts attendees, whom iCloud emails: that cannot be recalled, so it is destructive.
+    expect(tools.get('apple_calendar_create_event')!.cfg.annotations).toMatchObject({ destructiveHint: true, idempotentHint: false });
     expect(tools.get('apple_calendar_update_event')!.cfg.annotations).toMatchObject({ destructiveHint: true, idempotentHint: true });
     expect(tools.get('apple_calendar_delete_event')!.cfg.annotations).toMatchObject({ destructiveHint: true, idempotentHint: true });
     // Delete always asks. Create and update ask only when iCloud will email attendees, and their descriptions must say

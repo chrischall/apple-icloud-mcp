@@ -20,8 +20,9 @@ const READ = [
   'apple_music_get_replay',
   'apple_music_get_ratings',
 ];
-const ADDITIVE = ['apple_music_create_playlist', 'apple_music_add_playlist_tracks', 'apple_music_create_folder', 'apple_music_add_to_library', 'apple_music_add_favorites'];
+const ADDITIVE = ['apple_music_create_playlist', 'apple_music_add_playlist_tracks', 'apple_music_add_to_library', 'apple_music_add_favorites'];
 const ALL = [
+  'apple_music_create_folder',
   'apple_music_set_rating',
   'apple_music_update_playlist',
   'apple_music_remove_playlist_tracks',
@@ -112,6 +113,9 @@ describe('registration', () => {
     for (const n of ADDITIVE) expect(ann(n)).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
     for (const n of ['apple_music_set_rating', 'apple_music_move_playlist', 'apple_music_remove_favorites']) expect(ann(n)).toMatchObject({ destructiveHint: false, idempotentHint: true });
     for (const n of ['apple_music_update_playlist', 'apple_music_reorder_playlist', ...GATED]) expect(ann(n).destructiveHint, n).toBe(true);
+    // No tool here removes a playlist folder (delete_playlist deletes playlists only), so a created folder cannot be
+    // undone through this server: destructive by the inverse test, and so gated to APPLE_WRITE_MODE=all.
+    expect(ann('apple_music_create_folder')).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
     // Positional removal and move/reverse change a different track, or undo themselves, when repeated: a client
     // that retries or auto-approves "idempotent" tools must not be told they are safe to repeat.
     for (const n of ['apple_music_remove_playlist_tracks', 'apple_music_reorder_playlist']) {

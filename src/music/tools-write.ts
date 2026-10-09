@@ -333,7 +333,10 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
   defineTool(server, {
     name: 'apple_music_create_folder',
     service: 'music',
-    access: 'additive',
+    // No tool in this server removes a playlist folder (delete_playlist deletes playlists only), so a created
+    // folder cannot be undone here: destructive by the inverse test, and so outside APPLE_WRITE_MODE=additive,
+    // whose promise is that every write it registers is non-destructive.
+    access: 'all',
     title: 'Create an Apple Music playlist folder',
     description:
       'Create a playlist folder in your Apple Music library, at the top level or inside another folder. Returns the new ' +
@@ -342,7 +345,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
       name: z.string().trim().min(1).max(200).describe('Folder name.'),
       parentFolderId: z.string().min(1).max(140).optional().describe('Create it inside this folder (p.…; default "root", the top level).'),
     }),
-    annotations: ANNOTATIONS.additive,
+    annotations: { ...ANNOTATIONS.additive, destructiveHint: true },
     handler: async (args) => {
       const parent = folderIdArg(args.parentFolderId ?? 'root');
       assertLibraryPlaylistId(parent, 'parentFolderId', 'folder');

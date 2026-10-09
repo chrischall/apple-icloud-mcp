@@ -67,6 +67,23 @@ describe('manifest.json tool roster', () => {
     }
   });
 
+  it('never lets a read claim to destroy, and declares openWorldHint on every tool', () => {
+    for (const t of registered()) {
+      if (t.annotations.readOnlyHint === true) expect(t.annotations.destructiveHint, t.name).not.toBe(true);
+      expect(typeof t.annotations.openWorldHint, t.name).toBe('boolean');
+    }
+  });
+
+  it('marks apple_calendar_create_event destructive when it can email invitations, additive when it cannot', () => {
+    // APPLE_WRITE_MODE=all accepts attendees, and iCloud emails each one an
+    // invitation: that reaches another person, and apple_calendar_delete_event
+    // cannot un-send it. APPLE_WRITE_MODE=additive refuses attendees (and
+    // shared calendars), so there the create is a plain, deletable addition.
+    const find = (env: Record<string, string>) => registered(env).find((t) => t.name === 'apple_calendar_create_event');
+    expect(find({})?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
+    expect(find({ APPLE_WRITE_MODE: 'additive' })?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+  });
+
   it('registers only read tools in APPLE_WRITE_MODE=none', () => {
     const tools = registered({ APPLE_WRITE_MODE: 'none' });
     expect(tools.length).toBeGreaterThan(0);
