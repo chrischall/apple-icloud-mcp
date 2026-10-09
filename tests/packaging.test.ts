@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const read = (p: string) => JSON.parse(readFileSync(fileURLToPath(new URL(`../${p}`, import.meta.url)), 'utf8'));
@@ -39,6 +39,13 @@ describe('packaging', () => {
     expect(market.metadata.version).toBe(v);
     for (const p of market.plugins) expect(p.version).toBe(v);
     expect(read('.release-please-manifest.json')['.']).toBe(v);
+  });
+
+  it('declares the plugin MCP config under mcpServers (Claude Code ignores an `mcp` key) and the file exists', () => {
+    const plugin = read('.claude-plugin/plugin.json');
+    expect(plugin).not.toHaveProperty('mcp');
+    expect(plugin.mcpServers).toBe('./.mcp.json');
+    expect(existsSync(fileURLToPath(new URL(`../${plugin.mcpServers}`, import.meta.url)))).toBe(true);
   });
 
   it('never uses the AWS_ environment prefix (that namespace belongs to the Amazon SDK)', () => {
