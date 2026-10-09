@@ -87,6 +87,9 @@ export function confirmWrite(
       details: opts.preview,
       unsupportedNote: 'Make this change in the Apple app (Music, Calendar, Contacts or Mail) instead.',
       tool: opts.tool,
+      // Single-account server: every write acts as the one set of credentials in the env
+      // (ICLOUD_USERNAME / the Apple Music user token), so there is no principal to choose between.
+      account: undefined,
       confirmToken: opts.confirmToken,
       args: opts.args,
       // Built per call: the data dir, APPLE_STATE_CACHE and the key are read now.
