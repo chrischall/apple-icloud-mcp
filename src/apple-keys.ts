@@ -29,10 +29,14 @@ import { ConfigError, rememberSecret } from './errors.js';
 
 export type KeyedService = 'music' | 'maps' | 'weather';
 
-const PREFIX: Record<KeyedService, string> = {
-  music: 'APPLE_MUSIC',
-  maps: 'APPLE_MAPS',
-  weather: 'APPLE_WEATHERKIT',
+/**
+ * Each service's own key pair, spelled out in full (not built from a name
+ * stem) so every variable the server reads appears literally in the code.
+ */
+const OWN_VARS: Record<KeyedService, { keyId: string; privateKey: string }> = {
+  music: { keyId: 'APPLE_MUSIC_KEY_ID', privateKey: 'APPLE_MUSIC_PRIVATE_KEY' },
+  maps: { keyId: 'APPLE_MAPS_KEY_ID', privateKey: 'APPLE_MAPS_PRIVATE_KEY' },
+  weather: { keyId: 'APPLE_WEATHERKIT_KEY_ID', privateKey: 'APPLE_WEATHERKIT_PRIVATE_KEY' },
 };
 
 export interface DeveloperKey {
@@ -108,17 +112,17 @@ function readKeyFile(path: string, varName: string, service: ServiceName): strin
  */
 export function resolveDeveloperKey(service: KeyedService, env: EnvSource = process.env): DeveloperKey {
   const svcName: ServiceName = service;
-  const prefix = PREFIX[service];
+  const own = OWN_VARS[service];
   const teamId = readEnvVar('APPLE_TEAM_ID', { env });
-  const ownKeyId = readEnvVar(`${prefix}_KEY_ID`, { env });
-  const ownKey = readEnvVar(`${prefix}_PRIVATE_KEY`, { env });
+  const ownKeyId = readEnvVar(own.keyId, { env });
+  const ownKey = readEnvVar(own.privateKey, { env });
   const keyId = ownKeyId ?? readEnvVar('APPLE_KEY_ID', { env });
 
   let rawKey: string | undefined;
   let keyVar: string;
   if (ownKey !== undefined) {
     rawKey = ownKey;
-    keyVar = `${prefix}_PRIVATE_KEY`;
+    keyVar = own.privateKey;
   } else if (readEnvVar('APPLE_PRIVATE_KEY', { env }) !== undefined) {
     rawKey = readEnvVar('APPLE_PRIVATE_KEY', { env });
     keyVar = 'APPLE_PRIVATE_KEY';
@@ -130,8 +134,8 @@ export function resolveDeveloperKey(service: KeyedService, env: EnvSource = proc
 
   const missing: string[] = [];
   if (!teamId) missing.push('APPLE_TEAM_ID');
-  if (!keyId) missing.push(`APPLE_KEY_ID (or ${prefix}_KEY_ID)`);
-  if (rawKey === undefined) missing.push(`APPLE_PRIVATE_KEY (or ${prefix}_PRIVATE_KEY / APPLE_PRIVATE_KEY_PATH)`);
+  if (!keyId) missing.push(`APPLE_KEY_ID (or ${own.keyId})`);
+  if (rawKey === undefined) missing.push(`APPLE_PRIVATE_KEY (or ${own.privateKey} / APPLE_PRIVATE_KEY_PATH)`);
   if (missing.length === 0) assertPairMatches(service, env);
   if (missing.length > 0) {
     throw new ConfigError(
@@ -156,7 +160,7 @@ export function resolveDeveloperKey(service: KeyedService, env: EnvSource = proc
     teamId: teamId as string,
     keyId: keyId as string,
     privateKeyPem: pem,
-    source: `${ownKeyId ? `${prefix}_KEY_ID` : 'APPLE_KEY_ID'} + ${keyVar}`,
+    source: `${ownKeyId ? own.keyId : 'APPLE_KEY_ID'} + ${keyVar}`,
   };
 }
 
@@ -171,9 +175,9 @@ export function resolveDeveloperKey(service: KeyedService, env: EnvSource = proc
  * APPLE_PRIVATE_KEY for one Music key) and is allowed.
  */
 function assertPairMatches(service: KeyedService, env: EnvSource): void {
-  const prefix = PREFIX[service];
-  const ownKeyId = readEnvVar(`${prefix}_KEY_ID`, { env });
-  const ownKey = readEnvVar(`${prefix}_PRIVATE_KEY`, { env });
+  const own = OWN_VARS[service];
+  const ownKeyId = readEnvVar(own.keyId, { env });
+  const ownKey = readEnvVar(own.privateKey, { env });
   const sharedKeyId = readEnvVar('APPLE_KEY_ID', { env });
   const sharedKeyVar =
     readEnvVar('APPLE_PRIVATE_KEY', { env }) !== undefined
@@ -185,19 +189,19 @@ function assertPairMatches(service: KeyedService, env: EnvSource): void {
   if (ownKey !== undefined && ownKeyId === undefined) {
     throw new ConfigError(
       service,
-      `${prefix}_PRIVATE_KEY is set but ${prefix}_KEY_ID is not, and APPLE_KEY_ID belongs to the shared key in ${sharedKeyVar} — ` +
+      `${own.privateKey} is set but ${own.keyId} is not, and APPLE_KEY_ID belongs to the shared key in ${sharedKeyVar} — ` +
         'a key id must name the key that signs the token.',
-      [`${prefix}_KEY_ID`],
-      `Set ${prefix}_KEY_ID to the Key ID of the key in ${prefix}_PRIVATE_KEY (Apple Developer portal → Keys), or unset ${prefix}_PRIVATE_KEY to use the shared key.`,
+      [own.keyId],
+      `Set ${own.keyId} to the Key ID of the key in ${own.privateKey} (Apple Developer portal → Keys), or unset ${own.privateKey} to use the shared key.`,
     );
   }
   if (ownKeyId !== undefined && ownKey === undefined && ownKeyId !== sharedKeyId) {
     throw new ConfigError(
       service,
-      `${prefix}_KEY_ID is set but ${prefix}_PRIVATE_KEY is not, and the shared key in ${sharedKeyVar} belongs to APPLE_KEY_ID — ` +
+      `${own.keyId} is set but ${own.privateKey} is not, and the shared key in ${sharedKeyVar} belongs to APPLE_KEY_ID — ` +
         'a key id must name the key that signs the token.',
-      [`${prefix}_PRIVATE_KEY`],
-      `Set ${prefix}_PRIVATE_KEY to the .p8 contents of key ${prefix}_KEY_ID, or unset ${prefix}_KEY_ID to use the shared key.`,
+      [own.privateKey],
+      `Set ${own.privateKey} to the .p8 contents of key ${own.keyId}, or unset ${own.keyId} to use the shared key.`,
     );
   }
 }

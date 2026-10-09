@@ -578,7 +578,11 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       attendees: attendeesParam.optional().describe('People to invite. iCloud emails each one an invitation.'),
       confirmToken: confirmTokenParam,
     }),
-    annotations: ANNOTATIONS.additive,
+    // With APPLE_WRITE_MODE=all it accepts attendees, and iCloud emails each an
+    // invitation: that reaches another person, and apple_calendar_delete_event
+    // cannot un-send it, so it is destructive there. APPLE_WRITE_MODE=additive
+    // refuses attendees and shared calendars, leaving a plain, deletable addition.
+    annotations: accessAllowed('all') ? ANNOTATIONS.send : ANNOTATIONS.additive,
     handler: async (args, ctx: ServerContext) => {
       const zones = resolveZones(args.timeZone);
       const { zone } = zones;
