@@ -1,7 +1,7 @@
 {
   "name": "apple-icloud",
   "displayName": "Apple iCloud",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Apple Music playlists and library, iCloud Calendar, Contacts and Mail, Apple Maps, WeatherKit and iTunes search for Claude via MCP — runs anywhere, no Mac required. Unofficial; not affiliated with Apple.",
   "author": {
     "name": "Chris Chall"
