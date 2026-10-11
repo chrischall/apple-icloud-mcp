@@ -108,7 +108,8 @@ describe('rejection latch', () => {
     const raw = readFileSync(latchPath(), 'utf8');
     expect(raw).not.toContain(creds.password);
     expect(raw.toLowerCase()).not.toContain(creds.username.toLowerCase());
-    expect(raw).not.toContain('abcd');
+    // The salt and digest are random hex, which can spell 'abcd' by chance.
+    expect(raw.replace(/[0-9a-f]{32,}/g, '')).not.toContain('abcd');
 
     restart();
     const err = refusal(creds, 'calendar');
