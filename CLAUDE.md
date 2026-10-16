@@ -2,7 +2,7 @@
 
 Node/TypeScript stdio MCP server that reaches Apple's web services from any OS: Apple Music (official API +
 opt-in web-player API), iCloud Calendar (CalDAV), Contacts (CardDAV) and Mail (IMAP/SMTP), Apple Maps Server
-API, WeatherKit REST, and iTunes Search/charts. 58 tools, all prefixed `apple_`. Built to be hosted on
+API, WeatherKit REST, and iTunes Search/charts. 59 tools, all prefixed `apple_`. Built to be hosted on
 mcp-host (Linux, gVisor, egress through an HTTPS proxy, scale-to-zero) as well as run locally. Published as
 `apple-icloud-mcp` (unscoped; bin of the same name). Unofficial — not affiliated with Apple, and every description
 says so. Before its first release it was `aws-mcp` ("Apple Web Services"), renamed because that reads as Amazon Web
@@ -42,8 +42,9 @@ src/
   health.ts         HealthProbe contract + makeProbe; tools/healthcheck.ts runs them all (apple_healthcheck)
   tools/_shared.ts  defineTool (service switch + write-mode gate + structured scrubbed errors), ANNOTATIONS,
                     pageInfo/pagedResponse (paging facts FIRST), jsonResponse (minified)
-  tools/_confirm.ts confirmWrite (mcp-utils elicitation / two-phase confirmToken) with a disk-backed spent-token
-                    store (confirm-spent.json) so a token can't be replayed after a restart; stateRevision
+  tools/_confirm.ts thin wrapper over mcp-utils confirmWrite; spent tokens in mcp-utils' file store
+                    ($MCP_DATA_DIR/.mcp-confirm/spent, or ~/.apple-icloud-mcp/confirm-spent locally;
+                    APPLE_STATE_CACHE=false → memory only); stateRevision
   music/            Apple Music: credentials (official|web), client, web-token scraper, 25 tools, auth-cli
   dav/              WebDAV client, multistatus XML (xmldom), iCloud discovery (shared by calendar + contacts)
   calendar/         CalDAV events: ical.js parse/expand/build, ids with #occ=, series edits, free time
