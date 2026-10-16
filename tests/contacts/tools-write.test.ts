@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { UpstreamError } from '../../src/errors.js';
 import { captureTools, harness, useContactsEnv, vcard, BOOK, DSID } from './fake-icloud.js';
-import { CAN_ASK_CTX, NO_ELICIT_CTX, callConfirmed, callPreview } from '../tools/_confirm-helpers.js';
+import { CAN_ASK_CTX, NO_ELICIT_CTX, callConfirmed, callPreview, humanPreview } from '../tools/_confirm-helpers.js';
 
 useContactsEnv();
 
@@ -370,7 +370,7 @@ describe('apple_contacts_delete', () => {
     const h = harness(CARDS);
     const tool = h.tools.get('apple_contacts_delete')!;
     const p = await callPreview(tool.cb as never, { contactId: 'JOHN-UID' });
-    expect(p.preview).toEqual({
+    expect(humanPreview(p.preview)).toEqual({
       Contact: 'John Appleseed',
       Organization: 'Apple Inc.',
       'Job title': 'Engineer',
@@ -413,7 +413,7 @@ describe('apple_contacts_delete', () => {
     h.fake.keepAfterDelete = true;
     const tool = h.tools.get('apple_contacts_delete')!;
     const p = await callPreview(tool.cb as never, { contactId: 'BARE' });
-    expect(p.preview).toEqual({ Contact: 'Bare', 'Contact id': 'BARE' });
+    expect(humanPreview(p.preview)).toEqual({ Contact: 'Bare', 'Contact id': 'BARE' });
     const res = await callConfirmed(tool.cb as never, { contactId: 'BARE' });
     const out = JSON.parse(res.content[0]!.text);
     expect(out).toMatchObject({ deleted: true, verified: false, warnings: [expect.stringContaining('still returns the contact')] });

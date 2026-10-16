@@ -1,20 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerContext } from '@modelcontextprotocol/server';
-import { createSpentTokenStore } from '@chrischall/mcp-utils';
 import {
   CONFIRM_NOTE,
-  MAX_SPENT_TOKENS,
-  SPENT_TOKENS_FILE,
+  SPENT_TOKENS_DIR,
   confirmTokenParam,
   confirmWrite,
-  createFileSpentTokenStore,
   resetSpentTokenMemory,
+  spentTokenStore,
   stateRevision,
 } from '../../src/tools/_confirm.js';
-import { STATE_SUBDIR, stateCache } from '../../src/state.js';
+import { STATE_SUBDIR } from '../../src/state.js';
 import { jsonResponse } from '../../src/tools/_shared.js';
 import { CAN_ASK_CTX, NO_ELICIT_CTX, callConfirmed, callPreview, type ToolResultLike } from './_confirm-helpers.js';
 
@@ -92,7 +90,12 @@ describe('confirmWrite — two-phase token flow (client without elicitation)', (
     const p1 = await callPreview(handler, { eventId: 'home/abc.ics' });
     expect(p1.status).toBe('confirmation-required');
     expect(p1.action).toBe('apple.calendar.event.delete');
-    expect(p1.preview).toEqual({ title: 'Standup', scope: 'this occurrence only' });
+    // mcp-utils' confirmWrite adds what will be sent as `willSend` beside the human preview.
+    expect(p1.preview).toEqual({
+      willSend: { eventId: 'home/abc.ics', span: 'thisEvent' },
+      title: 'Standup',
+      scope: 'this occurrence only',
+    });
     expect(typeof p1.confirmToken).toBe('string');
     expect(p1.instruction).toContain('Show this preview to the user');
     expect(write).not.toHaveBeenCalled();
@@ -233,13 +236,18 @@ describe('confirmWrite — real prompt (client with form elicitation)', () => {
 
 describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared across processes)', () => {
   const SECRET = 'a-shared-secret-of-at-least-some-length';
-  const spentPath = () => join(process.env.MCP_DATA_DIR!, STATE_SUBDIR, SPENT_TOKENS_FILE);
-  /** A new process's view: nothing in memory, the same data dir. */
-  const freshStore = () => createFileSpentTokenStore({ memory: createSpentTokenStore() });
+  /** mcp-utils' durable store: one file per spent nonce. */
+  const sharedDir = () => join(process.env.MCP_DATA_DIR!, '.mcp-confirm', 'spent');
+  const spentFiles = (dir = sharedDir()): string[] => (existsSync(dir) ? readdirSync(dir) : []);
+  /** A new process's view of the disk: wipe what this test wrote. */
+  const wipeDisk = () => {
+    rmSync(join(process.env.MCP_DATA_DIR!, '.mcp-confirm'), { recursive: true, force: true });
+    rmSync(join(process.env.MCP_DATA_DIR!, STATE_SUBDIR, SPENT_TOKENS_DIR), { recursive: true, force: true });
+  };
 
   beforeEach(() => {
     resetSpentTokenMemory();
-    freshStore().clear();
+    wipeDisk();
   });
 
   it('a used send token is refused after a restart instead of sending again', async () => {
@@ -256,10 +264,10 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
     expect(body(replay)).toMatchObject({ status: 'confirmation-rejected', error: 'TOKEN_REUSED', dispatched: false });
     expect(write).toHaveBeenCalledTimes(1);
 
-    // Control: the file is the ONLY thing that remembered it. Without it the
+    // Control: the disk is the ONLY thing that remembered it. Without it the
     // restarted process would have accepted the replay — the bug this closes.
     resetSpentTokenMemory();
-    freshStore().clear();
+    wipeDisk();
     expect(body(await handler({ ...args, confirmToken }, NO_ELICIT_CTX))).toEqual({ deleted: true });
     expect(write).toHaveBeenCalledTimes(2);
   });
@@ -287,71 +295,44 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
     expect(write).toHaveBeenCalledTimes(1);
   });
 
-  it('records only a digest of the nonce and its expiry, 0600, bound to the key', () => {
+  it("uses mcp-utils' shared durable store: one 0600 file per spent token holding only its expiry", async () => {
     process.env.MCP_CONFIRM_SECRET = SECRET;
-    const exp = Date.now() + 60_000;
-    freshStore().add('nonce-one', exp);
-    const raw = readFileSync(spentPath(), 'utf8');
-    expect(raw).not.toContain('nonce-one');
+    const { handler } = gatedTool({ title: 'Lunch?' }, 'apple_mail_send');
+    await callConfirmed(handler, { eventId: 'new' });
+    const files = spentFiles();
+    expect(files).toHaveLength(1);
+    const file = join(sharedDir(), files[0]!);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(statSync(sharedDir()).mode & 0o777).toBe(0o700);
+    const raw = readFileSync(file, 'utf8');
+    expect(raw).toMatch(/^\d+$/);
     expect(raw).not.toContain(SECRET);
-    expect(statSync(spentPath()).mode & 0o777).toBe(0o600);
-    expect(Object.values((JSON.parse(raw) as { state: { spent: Record<string, number> } }).state.spent)).toEqual([exp]);
-
-    const restarted = freshStore();
-    expect(restarted.has('nonce-one')).toBe(true);
-    expect(restarted.has('nonce-two')).toBe(false);
-    expect(restarted.size).toBe(1);
-    // A rotated secret invalidates every token anyway, and discards the record.
-    process.env.MCP_CONFIRM_SECRET = `${SECRET}-rotated`;
-    expect(freshStore().has('nonce-one')).toBe(false);
+    expect(spentTokenStore()).toBe(spentTokenStore()); // one store per directory
   });
 
-  it('keeps an in-memory mirror, prunes expired entries on write, and caps the file', () => {
+  it('a local install with MCP_CONFIRM_SECRET but no absolute MCP_DATA_DIR keeps spends beside its state caches', async () => {
     process.env.MCP_CONFIRM_SECRET = SECRET;
-    vi.useFakeTimers({ now: Date.parse('2026-09-27T12:00:00Z') });
-    const now = Date.now();
-    const memory = createSpentTokenStore();
-    const store = createFileSpentTokenStore({ memory });
-    store.add('old', now + 1000);
-    store.add('old', now + 2000); // the same token twice is one entry
-    expect(store.size).toBe(1);
-    store.prune(now + 5000);
-    expect(memory.size).toBe(0); // prune is memory-only…
-    expect(store.has('old')).toBe(true); // …the file still has it until the next write
-    vi.setSystemTime(now + 5000);
-    store.add('new', now + 600_000);
-    expect(freshStore().has('old')).toBe(false); // expired: dropped on that write
-    expect(freshStore().has('new')).toBe(true);
-    expect(store.size).toBe(1);
-
-    for (let i = 0; i < MAX_SPENT_TOKENS + 3; i++) store.add(`n${i}`, now + 700_000 + i);
-    const entries = (JSON.parse(readFileSync(spentPath(), 'utf8')) as { state: { spent: Record<string, number> } }).state.spent;
-    expect(Object.keys(entries)).toHaveLength(MAX_SPENT_TOKENS);
-    const restarted = freshStore();
-    expect(restarted.has('new')).toBe(false); // the soonest to expire went first
-    expect(restarted.has('n0')).toBe(false);
-    expect(restarted.has('n3')).toBe(true);
-    expect(restarted.has(`n${MAX_SPENT_TOKENS + 2}`)).toBe(true);
-    expect(store.size).toBe(MAX_SPENT_TOKENS + 4); // memory still refuses every one of them
-
-    store.clear();
-    expect(store.size).toBe(0);
-    expect(freshStore().has('n3')).toBe(false);
+    const home = mkdtempSync(join(tmpdir(), 'apple-icloud-mcp-home-'));
+    const env = { MCP_CONFIRM_SECRET: SECRET, HOME: home };
+    try {
+      const store = spentTokenStore(env);
+      store.add('nonceLocal1', Date.now() + 60_000);
+      expect(spentFiles(join(home, STATE_SUBDIR, SPENT_TOKENS_DIR))).toEqual(['nonceLocal1']);
+      expect(store.has('nonceLocal1')).toBe(true);
+      expect(spentTokenStore(env)).toBe(store); // one store per directory
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
-  it('ignores a corrupt or tampered record', () => {
-    process.env.MCP_CONFIRM_SECRET = SECRET;
-    freshStore().add('x', Date.now() + 60_000); // establishes the key binding's file
-    const binding = (JSON.parse(readFileSync(spentPath(), 'utf8')) as { boundTo: unknown }).boundTo;
-    const put = (state: unknown) => writeFileSync(spentPath(), JSON.stringify({ v: 1, boundTo: binding, state }));
-    put(null);
-    expect(freshStore().size).toBe(0);
-    put({ spent: [] });
-    expect(freshStore().size).toBe(0);
-    put({ spent: 'nope' });
-    expect(freshStore().size).toBe(0);
-    put({ spent: { a: 'soon', b: 5 } });
-    expect(freshStore().size).toBe(1);
+  it('without a stable key the in-memory store is enough (a restart changes the key)', async () => {
+    const { handler, write } = gatedTool({ title: 'Lunch?' }, 'apple_mail_send');
+    const args = { eventId: 'new' };
+    const { confirmToken } = await callPreview(handler, args);
+    expect(body(await handler({ ...args, confirmToken }, NO_ELICIT_CTX))).toEqual({ deleted: true });
+    expect(body(await handler({ ...args, confirmToken }, NO_ELICIT_CTX))).toMatchObject({ error: 'TOKEN_REUSED' });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(spentFiles()).toEqual([]);
   });
 
   it('with APPLE_STATE_CACHE=false it is single-use per process only, and warns once when a shared secret makes that matter', async () => {
@@ -376,7 +357,7 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
       '[apple-icloud-mcp] WARNING: APPLE_STATE_CACHE=false, so a used confirmToken is remembered by this process only. ' +
         "With MCP_CONFIRM_SECRET (or mcp-host's MCP_HOST_CONFIRM_SECRET) set, a restart before it expires would accept it again.",
     );
-    expect(() => statSync(spentPath())).toThrow(); // nothing written
+    expect(spentFiles()).toEqual([]); // nothing written
     vi.restoreAllMocks();
   });
 
@@ -403,35 +384,28 @@ describe('spent confirm tokens survive a restart (MCP_CONFIRM_SECRET shared acro
     vi.restoreAllMocks();
   });
 
-  it('falls back to the in-memory mirror when the file cannot be written, with a warning', () => {
+  it('fails closed when the spent-token store cannot be written: the write does not run', async () => {
     process.env.MCP_CONFIRM_SECRET = SECRET;
     const dir = mkdtempSync(join(tmpdir(), 'apple-icloud-mcp-spent-'));
     try {
       const notADir = join(dir, 'file');
       writeFileSync(notADir, 'x');
       process.env.MCP_DATA_DIR = notADir;
-      const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      const store = createFileSpentTokenStore();
-      store.add('n1', Date.now() + 60_000);
-      store.add('n2', Date.now() + 60_000);
-      expect(store.has('n1')).toBe(true);
-      expect(store.has('n2')).toBe(true);
-      const ours = err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('confirmToken'));
-      expect(ours).toEqual([
-        '[apple-icloud-mcp] WARNING: could not record a used confirmToken on disk; it is remembered by this process only. ' +
-          "With MCP_CONFIRM_SECRET (or mcp-host's MCP_HOST_CONFIRM_SECRET) set, a restart before it expires would accept it again.",
-      ]);
-      vi.restoreAllMocks();
+      const { handler, write } = gatedTool({ title: 'Lunch?' }, 'apple_mail_send');
+      const args = { eventId: 'new' };
+      const { confirmToken } = await callPreview(handler, args);
+      await expect(handler({ ...args, confirmToken }, NO_ELICIT_CTX)).rejects.toThrow(/spent-token store/);
+      expect(write).not.toHaveBeenCalled();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it('never touches the data dir for a phase-1 call or a prompted client', async () => {
+    process.env.MCP_CONFIRM_SECRET = SECRET;
     const { handler } = gatedTool({ title: 'Standup' });
     await callPreview(handler, { eventId: 'x' });
     await handler({ eventId: 'x' }, CAN_ASK_CTX);
-    expect(() => statSync(spentPath())).toThrow();
-    expect(stateCache(SPENT_TOKENS_FILE, 'any', (x) => x).load()).toBeNull();
+    expect(existsSync(join(process.env.MCP_DATA_DIR!, '.mcp-confirm'))).toBe(false);
   });
 });
