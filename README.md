@@ -244,7 +244,7 @@ read in `DISPLAY_TZ` — so are calendar events stored without a time zone of th
 ## Tools
 
 <!-- TOOLS:START -->
-58 tools. **Mode** is the lowest [`APPLE_WRITE_MODE`](#write-protection-apple_write_mode) that registers the tool; **Confirm** marks tools that ask first ([details](#confirmation-mcp_confirm_mode)); 🌐 marks Apple Music tools that need [web-player mode](#apple-music--web-player-mode-opt-in-unofficial).
+59 tools. **Mode** is the lowest [`APPLE_WRITE_MODE`](#write-protection-apple_write_mode) that registers the tool; **Confirm** marks tools that ask first ([details](#confirmation-mcp_confirm_mode)); 🌐 marks Apple Music tools that need [web-player mode](#apple-music--web-player-mode-opt-in-unofficial).
 
 ### Health
 
@@ -372,7 +372,7 @@ target changed in between.
 | `MCP_CONFIRM_MODE` | `ask-user` (default — the model must get your OK before repeating the call), `auto` (the model may confirm after reviewing the preview), `refuse` (never). Unknown values mean `refuse`. |
 | `MCP_CONFIRM_ELICITATION` | `on` (default) or `off`. `off` never shows a prompt, so every client gets the two-step flow under `MCP_CONFIRM_MODE`. Set it for a client that says it can prompt but never does (the gated call hangs — opencode 2.0.x). Any other value stays `on` (with a stderr warning). |
 | `MCP_CONFIRM_TTL_SECONDS` | How long a token is valid (default 600). |
-| `MCP_CONFIRM_SECRET` | Token signing key; random per process by default (on mcp-host, the host's per-child `MCP_HOST_CONFIRM_SECRET` beside an absolute `MCP_DATA_DIR` is used instead). Set it so a token survives a restart; spent tokens are recorded on disk (`confirm-spent.json`), so none can be replayed (unless `APPLE_STATE_CACHE=false` or the directory is unwritable — a warning says so). |
+| `MCP_CONFIRM_SECRET` | Token signing key; random per process by default (on mcp-host, the host's per-child `MCP_HOST_CONFIRM_SECRET` beside an absolute `MCP_DATA_DIR` is used instead). Set it so a token survives a restart; spent tokens are recorded on disk (mcp-utils' shared store, `$MCP_DATA_DIR/.mcp-confirm/spent/`, or `~/.apple-icloud-mcp/confirm-spent/` without an absolute `MCP_DATA_DIR`), so none can be replayed. With `APPLE_STATE_CACHE=false` they are remembered by the process only (a warning says so); if the directory cannot be written, confirmed writes are refused rather than risk a replay. |
 
 ## Environment variables
 
@@ -498,7 +498,9 @@ source checkout, `node dist/index.js doctor` also reads the repo's `.env`.
   - `mail-login.json` — which IMAP login form iCloud accepted;
   - `icloud-rejected.json` — salted digests of rejected Apple ID/password pairs and when, so a revoked
     password is not re-sent for 24 hours even after a restart;
-  - `confirm-spent.json` — digests of used confirmation tokens, so none can be replayed after a restart.
+  - `confirm-spent/` — one file per used confirmation token (its random id and expiry), so none can be replayed
+    after a restart. Hosted with an absolute `MCP_DATA_DIR`, this lives in mcp-utils' shared
+    `$MCP_DATA_DIR/.mcp-confirm/spent/` instead.
 
   Delete the directory to remove them, or set `APPLE_STATE_CACHE=false` to never write them (the latch and the
   spent-token record then last only as long as the process, and a warning says so).

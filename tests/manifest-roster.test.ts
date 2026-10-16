@@ -105,3 +105,13 @@ describe('manifest.json tool roster', () => {
     expect(HEALTH_PROBES.map((p) => p.service).sort()).toEqual([...SERVICES].sort());
   });
 });
+
+describe('the docs quote the roster size', () => {
+  const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
+
+  it('CLAUDE.md and README.md state the same tool count as manifest.json', () => {
+    const count = manifest.tools.length;
+    expect(read('../CLAUDE.md')).toContain(`${count} tools, all prefixed \`apple_\``);
+    expect(read('../README.md')).toMatch(new RegExp(`^${count} tools\\. `, 'm'));
+  });
+});

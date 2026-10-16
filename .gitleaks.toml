@@ -1,0 +1,15 @@
+# gitleaks config: the default rules, minus synthetic test fixtures.
+# These files generate throwaway keys at test time (generateKeyPairSync) or
+# carry truncated PEM fragments, ReDoS inputs and fake Music User Tokens to
+# exercise the redaction code. None is real key material
+# (chrischall/fleet-audit#1367).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "synthetic key fixtures in tests"
+paths = [
+  '''^tests/apple-keys\.test\.ts$''',
+  '''^tests/errors\.test\.ts$''',
+  '''^tests/music/auth-cli\.test\.ts$''',
+]

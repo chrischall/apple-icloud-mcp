@@ -75,3 +75,13 @@ export async function callConfirmed(
   if (opts.clearMocks ?? true) vi.clearAllMocks();
   return handler({ ...args, confirmToken }, NO_ELICIT_CTX);
 }
+
+/**
+ * The human half of a phase-1 preview: mcp-utils' confirmWrite also shows the
+ * bound payload as `willSend`, which tests of what the user reads can ignore.
+ */
+export function humanPreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const { willSend, ...rest } = preview;
+  void willSend;
+  return rest;
+}

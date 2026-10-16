@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { NO_ELICIT_CTX, callConfirmed, callPreview, type GatedHandler } from '../tools/_confirm-helpers.js';
+import { NO_ELICIT_CTX, callConfirmed, callPreview, type GatedHandler, humanPreview } from '../tools/_confirm-helpers.js';
 import { eventParts, parseCalendar, textProp } from '../../src/calendar/ics.js';
 import { DSID, HOME, NY_TZ, harness, ics, vevent, type Harness } from './fake-caldav.js';
 
@@ -141,7 +141,7 @@ describe('apple_calendar_create_event', () => {
   it('with attendees: asks first (iCloud emails invitations), then writes ORGANIZER + ATTENDEEs', async () => {
     const args = { title: 'Party', startDate: '2026-10-24T18:00', location: '', attendees: [{ email: 'ann@x.com', name: 'Ann' }, { email: 'bob@x.com' }] };
     const preview = await callPreview(gated('apple_calendar_create_event'), args);
-    expect(preview.preview).toEqual({
+    expect(humanPreview(preview.preview)).toEqual({
       event: 'Party',
       when: 'Sat, Oct 24, 2026, 6:00 PM EDT – Sat, Oct 24, 2026, 7:00 PM EDT',
       timeZone: 'America/New_York',
@@ -356,7 +356,7 @@ describe('apple_calendar_update_event', () => {
 
   it('asks first when the event has attendees, listing them and the whole event as they will receive it', async () => {
     const preview = await callPreview(gated('apple_calendar_update_event'), { eventId: 'home/meet.ics', title: 'Review v2' });
-    expect(preview.preview).toEqual({
+    expect(humanPreview(preview.preview)).toEqual({
       event: 'Review',
       when: 'Fri, Oct 23, 2026, 10:00 AM EDT – Fri, Oct 23, 2026, 11:00 AM EDT',
       calendar: 'Home',
@@ -703,7 +703,7 @@ describe('apple_calendar_delete_event', () => {
 
   it('always asks, then deletes with If-Match and verifies it is gone', async () => {
     const preview = await callPreview(gated('apple_calendar_delete_event'), { eventId: 'home/one.ics' });
-    expect(preview.preview).toEqual({ event: 'One', when: 'Wed, Oct 21, 2026, 9:00 AM EDT – Wed, Oct 21, 2026, 10:00 AM EDT', calendar: 'Home', deletes: 'this event' });
+    expect(humanPreview(preview.preview)).toEqual({ event: 'One', when: 'Wed, Oct 21, 2026, 9:00 AM EDT – Wed, Oct 21, 2026, 10:00 AM EDT', calendar: 'Home', deletes: 'this event' });
     expect(h.dav.writes()).toEqual([]);
     const done = json(await callConfirmed(gated('apple_calendar_delete_event'), { eventId: 'home/one.ics' }));
     expect(done).toEqual({ deleted: true, verified: true, eventId: 'home/one.ics', applied: 'this event', title: 'One', when: expect.any(String), calendar: 'Home' });

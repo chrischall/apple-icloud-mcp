@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { CAN_ASK_CTX, callConfirmed, callPreview, NO_ELICIT_CTX, type GatedHandler } from '../tools/_confirm-helpers.js';
+import { CAN_ASK_CTX, callConfirmed, callPreview, NO_ELICIT_CTX, type GatedHandler, humanPreview } from '../tools/_confirm-helpers.js';
 import { MusicClient } from '../../src/music/client.js';
 import { PREVIEW_LIST_CAP, dedupeTracks, moveTracks, replaceTracks, sortTracks } from '../../src/music/tools-extended.js';
 import { PLAYLIST_WRITE_TTL_MS } from '../../src/music/write-log.js';
@@ -987,7 +987,7 @@ describe('apple_music_delete_playlist (confirm-gated)', () => {
   it('previews name, track count and date added; deletes and verifies it is gone', async () => {
     const { l, h } = setup();
     const p1 = await callPreview(h('apple_music_delete_playlist'), { playlistId: 'p.A' });
-    expect(p1.preview).toEqual({
+    expect(humanPreview(p1.preview)).toEqual({
       playlist: 'Road Trip',
       playlistId: 'p.A',
       tracks: 5,
@@ -1046,7 +1046,7 @@ describe('apple_music_remove_from_library (confirm-gated)', () => {
     const { l, h, calls } = libSetup();
     const args = { type: 'songs', ids: ['i.1', 'i.2', 'i.9'] };
     const p1 = await callPreview(h('apple_music_remove_from_library'), args);
-    expect(p1.preview).toEqual({
+    expect(humanPreview(p1.preview)).toEqual({
       type: 'songs',
       count: 2,
       removing: [

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import PostalMime from 'postal-mime';
 import { SmtpPhaseError } from '../../src/mail/smtp.js';
 import { latchRejection } from '../../src/icloud-auth.js';
-import { NO_ELICIT_CTX, callConfirmed, callPreview, type GatedHandler } from '../tools/_confirm-helpers.js';
+import { NO_ELICIT_CTX, callConfirmed, callPreview, type GatedHandler, humanPreview } from '../tools/_confirm-helpers.js';
 import { MAX_BODY_CHARS } from '../../src/mail/tools.js';
 import { harness, useMailEnv } from './harness.js';
 import { PASS, droppedMidCommand, imapError } from './fake-imap.js';
@@ -26,7 +26,7 @@ describe('apple_mail_send — new message', () => {
       body: 'See you at 6.',
     });
     expect(p.action).toBe('apple.mail.message.send');
-    expect(p.preview).toEqual({
+    expect(humanPreview(p.preview)).toEqual({
       from: 'me@icloud.com',
       to: ['Bob <bob@example.com>'],
       cc: ['carol@example.com'],

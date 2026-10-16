@@ -1,18 +1,18 @@
 import { createHash } from 'node:crypto';
-import { isAbsolute } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { CallToolResult, InputRequiredResult, ServerContext } from '@modelcontextprotocol/server';
 import {
-  confirmKeyFromEnv,
-  confirmTtlFromEnv,
-  confirmationFromEnv,
   confirmTokenParam,
+  confirmWrite as sharedConfirmWrite,
+  createFileSpentTokenStore,
   createSpentTokenStore,
   readEnvVar,
-  requireConfirmationWithFallback,
+  spentTokenStoreFromEnv,
   type EnvSource,
   type SpentTokenStore,
 } from '@chrischall/mcp-utils';
-import { isStateCacheEnabled, stateCache } from '../state.js';
+import { resolveStateFile } from '@chrischall/mcp-utils/session';
+import { STATE_SUBDIR, isStateCacheEnabled } from '../state.js';
 
 export { confirmTokenParam };
 
@@ -60,12 +60,13 @@ export interface ConfirmWriteOptions {
  * before the write, with the freshly built payload and a freshly read
  * revision — the re-read is what makes a stale token fail.
  *
- * Both paths commit to the same thing: the arguments AND the state the user was
- * shown (target, revision, payload, preview). A prompt's acceptance is bound
- * explicitly for that reason — mcp-utils' default binding covers the arguments
- * only, so an acceptance given while "position 1" was one song would have
- * removed whatever song sat there when the retry re-read the playlist. Now a
- * retry whose fresh read differs asks again, with the new preview.
+ * A thin wrapper over mcp-utils' `confirmWrite` (chrischall/fleet-audit#1217),
+ * which binds the arguments AND the state the user was shown (target,
+ * revision, payload, preview) on both rails — so an acceptance given while
+ * "position 1" was one song cannot remove whatever sits there when the retry
+ * re-reads the playlist. The preview gains the shared `willSend` field (the
+ * payload). What this wrapper adds: the single-account `account: undefined`,
+ * the Apple-app refusal hint, and the spent-token store choice below.
  *
  * Returns `undefined` to proceed, otherwise the result to return unchanged.
  */
@@ -73,43 +74,23 @@ export function confirmWrite(
   ctx: ServerContext,
   opts: ConfirmWriteOptions,
 ): Promise<InputRequiredResult | CallToolResult | undefined> {
-  const subject = {
+  return sharedConfirmWrite(ctx, {
+    tool: opts.tool,
+    action: opts.action,
+    message: opts.message,
+    // Single-account server: every write acts as the one set of credentials in the env
+    // (ICLOUD_USERNAME / the Apple Music user token), so there is no principal to choose between.
+    account: undefined,
     target: opts.target,
     ...(opts.revision !== undefined ? { revision: opts.revision } : {}),
     payload: opts.payload,
     preview: opts.preview,
-  };
-  return requireConfirmationWithFallback(
-    ctx,
-    confirmationFromEnv({
-      action: opts.action,
-      message: opts.message,
-      details: opts.preview,
-      unsupportedNote: 'Make this change in the Apple app (Music, Calendar, Contacts or Mail) instead.',
-      tool: opts.tool,
-      // Single-account server: every write acts as the one set of credentials in the env
-      // (ICLOUD_USERNAME / the Apple Music user token), so there is no principal to choose between.
-      account: undefined,
-      confirmToken: opts.confirmToken,
-      args: opts.args,
-      // Built per call: the data dir, APPLE_STATE_CACHE and the key are read now.
-      spent: createFileSpentTokenStore(),
-      subject: () => subject,
-      // A caller-supplied binding replaces the args-only default (and is used as given: strip the token here).
-      binding: {
-        key: confirmKeyFromEnv(),
-        args: { args: withoutConfirmToken(opts.args), ...subject },
-        ttlSeconds: confirmTtlFromEnv(),
-      },
-    }),
-  );
-}
-
-/** The arguments as bound: the token differs between the phases, so it is never part of the commitment. */
-function withoutConfirmToken(args: object): Record<string, unknown> {
-  const { confirmToken, ...rest } = args as Record<string, unknown>;
-  void confirmToken;
-  return rest;
+    args: opts.args,
+    confirmToken: opts.confirmToken,
+    unsupportedNote: 'Make this change in the Apple app (Music, Calendar, Contacts or Mail) instead.',
+    // Chosen per call: the data dir, APPLE_STATE_CACHE and the key are read now.
+    spent: spentTokenStore(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -117,50 +98,35 @@ function withoutConfirmToken(args: object): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 /**
- * mcp-utils remembers a used token's nonce in process memory only (unless its
- * own durable store is in play), while a stable key — MCP_CONFIRM_SECRET, or
- * the MCP_HOST_CONFIRM_SECRET mcp-host derives per child beside an absolute
- * MCP_DATA_DIR — makes the token itself valid in every process that shares it. So after a
- * restart inside the token's lifetime — a crash, a redeploy, the child dying
- * right after the SMTP hand-off — an already-used token verified again. For a
- * target with no revision to rotate (a new mail, an invitation-sending create)
- * that replayed the whole write: a second email nobody approved.
+ * A stable key — MCP_CONFIRM_SECRET, or the MCP_HOST_CONFIRM_SECRET mcp-host
+ * derives per child beside an absolute MCP_DATA_DIR — makes a token valid in
+ * every process that shares it, so a used one must be remembered on disk or a
+ * restart inside its lifetime (a crash, a redeploy, the child dying right
+ * after the SMTP hand-off) would accept it again: for a target with no
+ * revision to rotate (a new mail) that is a second email nobody approved.
  *
- * The store below records each spent token on disk as well
- * (`$MCP_DATA_DIR/.apple-icloud-mcp/confirm-spent.json`, 0600): a SHA-256 of its nonce
- * and the time it would have expired anyway — nothing that could be replayed.
- * The file is bound to (a digest of) the HMAC key, so rotating the secret
- * discards it, and so does a restart without a secret — every earlier token is
- * TOKEN_INVALID under the new random key then anyway. Expired entries are
- * pruned on every write and the file is capped at {@link MAX_SPENT_TOKENS}.
+ * mcp-utils' durable store does this (`$MCP_DATA_DIR/.mcp-confirm/spent`, one
+ * O_EXCL-claimed 0600 file per spent nonce, failing closed when it cannot
+ * look). On top of it this server keeps two things of its own:
  *
- * An in-memory mirror is ALWAYS kept as well, so single use within the process
- * never depends on the disk. With APPLE_STATE_CACHE=false, or when the file
- * cannot be written, only the mirror remains — reported once on stderr when a
- * shared secret makes that matter.
+ * - `APPLE_STATE_CACHE=false` opts out of every on-disk file, this one too:
+ *   spends are then remembered by this process only — reported once on stderr
+ *   when a stable key makes that matter.
+ * - A local install with MCP_CONFIRM_SECRET but no absolute MCP_DATA_DIR keeps
+ *   its spends beside the other state caches
+ *   (`$HOME/.apple-icloud-mcp/confirm-spent/`), in the same shared format.
+ *
+ * Without a stable key a restart invalidates every token anyway, so the
+ * process-wide in-memory store is enough.
  */
-export const SPENT_TOKENS_FILE = 'confirm-spent.json';
+export const SPENT_TOKENS_DIR = 'confirm-spent';
 
-/** Most spent tokens kept on disk; the ones expiring soonest go first. */
-export const MAX_SPENT_TOKENS = 500;
-
-interface SpentRecord {
-  /** sha256(nonce), base64url → epoch ms at which the token expires. */
-  spent: Record<string, number>;
-}
-
-function validateSpent(raw: unknown): SpentRecord | null {
-  const spent = (raw as { spent?: unknown } | null)?.spent;
-  if (typeof spent !== 'object' || spent === null || Array.isArray(spent)) return null;
-  return { spent: Object.fromEntries(Object.entries(spent).filter(([, exp]) => Number.isFinite(exp))) };
-}
-
-const nonceDigest = (nonce: string): string => createHash('sha256').update(nonce).digest('base64url');
-
-/** The process-wide mirror, keyed by nonce digest like the file — and all there is when nothing persists. */
+/** The process-wide in-memory store, when nothing persists. */
 const processSpent = createSpentTokenStore();
 
-const warned = new Set<'disabled' | 'write'>();
+const localStores = new Map<string, SpentTokenStore>();
+
+let warnedDisabled = false;
 
 /**
  * Whether the confirm key outlives the process — the same rule as mcp-utils'
@@ -173,70 +139,34 @@ function hasStableConfirmKey(env: EnvSource): boolean {
   return readEnvVar('MCP_HOST_CONFIRM_SECRET', { env }) !== undefined && isAbsolute(readEnvVar('MCP_DATA_DIR', { env }) ?? '');
 }
 
-function warnOnce(kind: 'disabled' | 'write', env: EnvSource): void {
-  // Without a stable key a restart invalidates every token anyway, so the
-  // memory-only store loses nothing and there is nothing to warn about.
-  if (warned.has(kind) || !hasStableConfirmKey(env)) return;
-  warned.add(kind);
-  console.error(
-    `[apple-icloud-mcp] WARNING: ${kind === 'disabled' ? 'APPLE_STATE_CACHE=false, so a' : 'could not record a'} used confirmToken ` +
-      `${kind === 'disabled' ? 'is' : 'on disk; it is'} remembered by this process only. With MCP_CONFIRM_SECRET ` +
-      "(or mcp-host's MCP_HOST_CONFIRM_SECRET) set, a restart before it expires would accept it again.",
-  );
+/** The spent-token store for a gated call, per the rules above. */
+export function spentTokenStore(env: EnvSource = process.env): SpentTokenStore {
+  if (!isStateCacheEnabled(env)) {
+    if (!warnedDisabled && hasStableConfirmKey(env)) {
+      warnedDisabled = true;
+      console.error(
+        '[apple-icloud-mcp] WARNING: APPLE_STATE_CACHE=false, so a used confirmToken is remembered by this process only. '
+          + "With MCP_CONFIRM_SECRET (or mcp-host's MCP_HOST_CONFIRM_SECRET) set, a restart before it expires would accept it again.",
+      );
+    }
+    return processSpent;
+  }
+  const shared = spentTokenStoreFromEnv(env);
+  if (shared) return shared;
+  if (!hasStableConfirmKey(env)) return processSpent;
+  const dir = join(dirname(resolveStateFile({ env, subdir: STATE_SUBDIR, fileName: SPENT_TOKENS_DIR })), SPENT_TOKENS_DIR);
+  let store = localStores.get(dir);
+  if (!store) {
+    store = createFileSpentTokenStore(dir);
+    localStores.set(dir, store);
+  }
+  return store;
 }
 
-export interface FileSpentTokenStoreOptions {
-  env?: EnvSource;
-  /** The in-memory mirror; defaults to the process-wide one. Tests pass a fresh one to simulate a restart. */
-  memory?: SpentTokenStore;
-}
-
-/**
- * A {@link SpentTokenStore} backed by `confirm-spent.json` plus an in-memory
- * mirror. `has` consults both (the file is re-read, so a token spent by an
- * earlier process — or a sibling sharing the data dir — counts); `add` writes
- * both. Only phase-2 calls touch it, so the extra reads cost nothing. With
- * APPLE_STATE_CACHE=false the file side is a no-op and this is the mirror alone.
- */
-export function createFileSpentTokenStore(options: FileSpentTokenStoreOptions = {}): SpentTokenStore {
-  const env = options.env ?? process.env;
-  const memory = options.memory ?? processSpent;
-  const key = createHash('sha256').update(confirmKeyFromEnv(env)).digest('hex');
-  const file = stateCache<SpentRecord>(SPENT_TOKENS_FILE, `confirm-spent-v1:${key}`, validateSpent, env);
-  const onDisk = (): Record<string, number> => file.load()?.spent ?? {};
-  return {
-    has: (nonce) => {
-      const d = nonceDigest(nonce);
-      return memory.has(d) || Object.hasOwn(onDisk(), d);
-    },
-    add: (nonce, expiresAtMs) => {
-      const d = nonceDigest(nonce);
-      memory.add(d, expiresAtMs);
-      const now = Date.now();
-      const kept = Object.entries(onDisk())
-        .filter(([other, exp]) => other !== d && exp >= now)
-        .sort(([, a], [, b]) => b - a)
-        .slice(0, MAX_SPENT_TOKENS - 1);
-      if (!file.save({ spent: Object.fromEntries([[d, expiresAtMs], ...kept]) })) {
-        warnOnce(isStateCacheEnabled(env) ? 'write' : 'disabled', env);
-      }
-    },
-    prune: (now) => memory.prune(now), // the file is pruned on every write
-    clear: () => {
-      memory.clear();
-      file.clear();
-    },
-    /** Distinct spent tokens known to either copy. */
-    get size() {
-      return memory.size + Object.keys(onDisk()).filter((d) => !memory.has(d)).length;
-    },
-  };
-}
-
-/** Test seam: forget the in-memory spent tokens (what a restart does) and the warnings. */
+/** Test seam: forget the in-memory spent tokens (what a restart does) and the warning. */
 export function resetSpentTokenMemory(): void {
   processSpent.clear();
-  warned.clear();
+  warnedDisabled = false;
 }
 
 /**
