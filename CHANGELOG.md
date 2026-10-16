@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.6](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.5...v0.3.6) (2026-10-16)
+
+
+### Bug Fixes
+
+* **confirm:** gate writes through mcp-utils confirmWrite and its durable spent-token store ([#56](https://github.com/chrischall/apple-icloud-mcp/issues/56)) ([b675117](https://github.com/chrischall/apple-icloud-mcp/commit/b67511722b62fdde2a4ec9d6f92a85b614733bb7))
+
 ## [0.3.5](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.4...v0.3.5) (2026-10-10)
 
 
