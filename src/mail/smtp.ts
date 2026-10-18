@@ -134,9 +134,9 @@ export function openHttpTunnel(proxy: string, port: number, host: string, timeou
       signal?.removeEventListener('abort', onAbort);
       reject(err);
     };
-    // nodemailer's proxy client never calls back when the proxy closes the connection
-    // without answering the CONNECT (its only timer dies with the socket), so the whole
-    // tunnel attempt has its own deadline — and a cancelled call stops waiting too.
+    // nodemailer's proxy client reports a proxy that hangs up (EPROXY), but not one that
+    // holds the connection open without answering the CONNECT, so the whole tunnel
+    // attempt has its own deadline — and a cancelled call stops waiting too.
     const timer = setTimeout(
       () => fail(Object.assign(new Error(`The proxy did not open a tunnel to ${host}:${port} within ${timeoutMs} ms`), { code: 'ETIMEDOUT' })),
       timeoutMs,

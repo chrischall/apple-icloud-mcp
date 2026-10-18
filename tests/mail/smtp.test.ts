@@ -478,8 +478,22 @@ describe('openHttpTunnel deadline', () => {
     return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, sockets };
   }
 
-  it('fails a proxy that hangs up without answering, instead of waiting forever', async () => {
+  it('fails a proxy that hangs up without answering at once, as a connect failure', async () => {
     const p = await rawProxy((socket) => socket.end());
+    const started = Date.now();
+    await expect(openHttpTunnel(p.url, 587, 'smtp.mail.me.com', 30_000)).rejects.toMatchObject({
+      code: 'EPROXY',
+      message: 'Proxy closed the connection before the tunnel was established',
+    });
+    expect(Date.now() - started).toBeLessThan(5000);
+    // Through the transport it is a connect-phase failure: nothing was sent.
+    const e = await phaseOf(createSmtpTransport({ ...OPTS, proxy: p.url, timeoutMs: 30_000 }).submit(MSG));
+    expect(e).toMatchObject({ phase: 'connect', code: 'EPROXY' });
+    expect(classifySmtpError(e, resolveMailAccount())).toMatchObject({ code: 'NETWORK_ERROR' });
+  });
+
+  it('fails a proxy that never answers, instead of waiting forever', async () => {
+    const p = await rawProxy(() => undefined); // holds the connection open, silent
     const started = Date.now();
     await expect(openHttpTunnel(p.url, 587, 'smtp.mail.me.com', 300)).rejects.toMatchObject({
       code: 'ETIMEDOUT',
@@ -490,6 +504,7 @@ describe('openHttpTunnel deadline', () => {
     const e = await phaseOf(createSmtpTransport({ ...OPTS, proxy: p.url, timeoutMs: 300 }).submit(MSG));
     expect(e).toMatchObject({ phase: 'connect', code: 'ETIMEDOUT' });
     expect(classifySmtpError(e, resolveMailAccount())).toMatchObject({ code: 'TIMEOUT' });
+    for (const socket of p.sockets) socket.destroy();
   });
 
   it('stops waiting when the tool call is cancelled', async () => {
