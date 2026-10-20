@@ -675,6 +675,17 @@ describe('describeErrorBody — size', () => {
     }
     expect(describeErrorBody(JSON.stringify({ message: 'x'.repeat(500) })).message).toBe('x'.repeat(500));
   });
+
+  it('scrubs a remembered secret BEFORE the cut, so none of it survives the truncation boundary', () => {
+    const secret = 'app-specific-pw-abcd-efgh';
+    rememberSecret(secret);
+    for (const body of [JSON.stringify({ message: `${'x'.repeat(480)}${secret}${'y'.repeat(100)}` }), `${'x'.repeat(280)}${secret}${'y'.repeat(50)}`]) {
+      const { message } = describeErrorBody(body);
+      expect(message).not.toContain(secret.slice(0, 5));
+      expect(message).toContain('[REDACTED]');
+      expect(message.endsWith('… [truncated]')).toBe(true);
+    }
+  });
 });
 
 /** A streamed response whose chunks are served one per read; `failAfter` errors the stream after that many chunks. */

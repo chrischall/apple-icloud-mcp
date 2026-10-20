@@ -1,4 +1,4 @@
-import { McpToolError, redactSecrets } from '@chrischall/mcp-utils';
+import { ERROR_REDACTION_INPUT_MAX, McpToolError, redactSecrets, redactValues, truncateErrorMessage } from '@chrischall/mcp-utils';
 import type { ServiceName } from './config.js';
 
 /**
@@ -174,19 +174,39 @@ export function rememberSecret(value: string | undefined): void {
 const PEM_PRIVATE_KEY_RE =
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?:(?:(?!-----(?:BEGIN|END) )[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY-----|(?:[A-Za-z0-9+/=\s]|\\[rn])*)/g;
 
-/** Shape-based redaction plus removal of every remembered literal secret. */
+/**
+ * Every remembered secret plus its base64 spelling — a secret that travels
+ * base64-encoded on its own. (A Basic header encodes `user:password` as ONE
+ * unit, which this does not match — the DAV client remembers that whole token
+ * itself, and `redactSecrets` catches the `Authorization: Basic …` header
+ * shape.)
+ */
+function secretNeedles(): string[] {
+  const needles: string[] = [];
+  for (const secret of secretLiterals) needles.push(secret, Buffer.from(secret).toString('base64'));
+  return needles;
+}
+
+/**
+ * Shape-based redaction plus removal of every remembered literal secret.
+ * The literals go through mcp-utils `redactValues`, which also catches each
+ * one's JSON-escaped spelling and replaces the longest first, so a secret that
+ * contains another leaves no fragment behind.
+ */
 export function scrub(text: string): string {
-  let out = text.replace(PEM_PRIVATE_KEY_RE, '[REDACTED PRIVATE KEY]');
-  for (const secret of secretLiterals) {
-    if (out.includes(secret)) out = out.split(secret).join('[REDACTED]');
-    // A secret that travels base64-encoded on its own. (A Basic header encodes
-    // `user:password` as ONE unit, which this does not match — the DAV client
-    // remembers that whole token itself, and `redactSecrets` catches the
-    // `Authorization: Basic …` header shape.)
-    const b64 = Buffer.from(secret).toString('base64');
-    if (out.includes(b64)) out = out.split(b64).join('[REDACTED]');
-  }
-  return redactSecrets(out);
+  return redactSecrets(redactValues(text.replace(PEM_PRIVATE_KEY_RE, '[REDACTED PRIVATE KEY]'), secretNeedles()));
+}
+
+/**
+ * `scrub`, then cap at `max` characters with a `… [truncated]` marker
+ * (mcp-utils `truncateErrorMessage`). Scrubbing runs BEFORE the cut, so a
+ * secret straddling the boundary cannot survive as a half that no longer
+ * matches. The PEM pass gets the same 64 KB input cap the library's
+ * redactor does: only the first `max` characters can surface anyway.
+ */
+export function scrubAndTruncate(text: string, max: number): string {
+  const capped = text.slice(0, Math.max(ERROR_REDACTION_INPUT_MAX, max));
+  return truncateErrorMessage(capped.replace(PEM_PRIVATE_KEY_RE, '[REDACTED PRIVATE KEY]'), max, { values: secretNeedles() });
 }
 
 /** Test seam. */
