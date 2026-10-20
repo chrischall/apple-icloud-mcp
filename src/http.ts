@@ -8,6 +8,7 @@ import {
   UnconfirmedWriteError,
   UpstreamError,
   scrub,
+  scrubAndTruncate,
 } from './errors.js';
 
 /**
@@ -201,7 +202,7 @@ export function describeErrorBody(text: string): { message: string; code?: strin
   }
   // Strip tags from an HTML/XML error page so the snippet is readable.
   const flat = trimmed.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  return { message: flat.length > 300 ? `${flat.slice(0, 300)}… [truncated]` : flat };
+  return { message: scrubAndTruncate(flat, 300) };
 }
 
 /**
@@ -212,7 +213,7 @@ export function describeErrorBody(text: string): { message: string; code?: strin
 const MAX_ERROR_MESSAGE_CHARS = 500;
 
 function clip(message: string): string {
-  return message.length > MAX_ERROR_MESSAGE_CHARS ? `${message.slice(0, MAX_ERROR_MESSAGE_CHARS)}… [truncated]` : message;
+  return scrubAndTruncate(message, MAX_ERROR_MESSAGE_CHARS);
 }
 
 function defaultError(req: HttpRequest, url: URL, status: number, bodyText: string): Error {

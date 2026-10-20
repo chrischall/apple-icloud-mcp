@@ -150,6 +150,17 @@ describe('scrub / rememberSecret', () => {
     expect(scrub('{"k":"-----BEGIN EC PRIVATE KEY-----\\nMHcCAQEEI\\nAAAA"}')).toBe('{"k":"[REDACTED PRIVATE KEY]"}');
   });
 
+  it('also removes the JSON-escaped spelling of a remembered secret (as it sits inside a stringified body)', () => {
+    rememberSecret('pa"ss\\word-9999');
+    expect(scrub(JSON.stringify({ echoed: 'pa"ss\\word-9999' }))).toBe('{"echoed":"[REDACTED]"}');
+  });
+
+  it('replaces the longest remembered secret first, so one that contains another leaves no fragment', () => {
+    rememberSecret('abcdefgh');
+    rememberSecret('abcdefgh-ijklmnop');
+    expect(scrub('t=abcdefgh-ijklmnop')).toBe('t=[REDACTED]');
+  });
+
   it('errorMessage scrubs Errors and non-Errors alike', () => {
     rememberSecret('app-specific-pw-1234');
     expect(errorMessage(new Error('login app-specific-pw-1234 failed'))).toBe('login [REDACTED] failed');
