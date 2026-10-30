@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.7...v0.3.8) (2026-10-30)
+
+
+### Bug Fixes
+
+* **deps:** bump the production-dependencies group with 4 updates ([#65](https://github.com/chrischall/apple-icloud-mcp/issues/65)) ([807f659](https://github.com/chrischall/apple-icloud-mcp/commit/807f659c5dece1b08648f51a5ebb0fd82d559d10))
+
 ## [0.3.7](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.6...v0.3.7) (2026-10-20)
 
 
