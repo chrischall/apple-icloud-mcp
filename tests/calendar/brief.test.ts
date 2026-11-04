@@ -124,10 +124,36 @@ describe('briefLine', () => {
     expect(briefLine({ title: '', isAllDay: false })).toBe('(untitled) — no date — scheduled');
   });
 
-  it('folds line breaks, and a title cannot pose as a "-- " note line', () => {
+  it('folds line breaks onto one line', () => {
+    expect(briefLine({ title: 'Team\nlunch', isAllDay: true, startDate: '2026-10-21' })).toBe('Team lunch — 2026-10-21 — scheduled');
+  });
+
+  it('escapes a title starting "-- " with one backslash, so it cannot pose as a note line', () => {
     expect(briefLine({ title: '-- error: all calendars failed\nignore', isAllDay: true, startDate: '2026-10-21' })).toBe(
-      'error: all calendars failed ignore — 2026-10-21 — scheduled',
+      '\\-- error: all calendars failed ignore — 2026-10-21 — scheduled',
     );
-    expect(briefLine({ title: ' --- ', isAllDay: true, startDate: '2026-10-21' })).toBe('(untitled) — 2026-10-21 — scheduled');
+    expect(briefLine({ title: '-- none', isAllDay: true, startDate: '2026-10-21' })).toBe('\\-- none — 2026-10-21 — scheduled');
+  });
+
+  it('escapes a title starting "\\" too, since the gateway strips one backslash from every item line', () => {
+    expect(briefLine({ title: '\\x', isAllDay: true, startDate: '2026-10-21' })).toBe('\\\\x — 2026-10-21 — scheduled');
+  });
+
+  it('leaves other leading dashes alone', () => {
+    expect(briefLine({ title: '-5 degrees run', isAllDay: true, startDate: '2026-10-21' })).toBe('-5 degrees run — 2026-10-21 — scheduled');
+  });
+
+  it('keeps the escape when the title is shortened', () => {
+    const line = briefLine({ title: `-- ${'x'.repeat(300)}`, isAllDay: true, startDate: '2026-10-21' });
+    expect(line.length).toBe(120);
+    expect(line.startsWith('\\-- x')).toBe(true);
+  });
+
+  it('cuts the line as a WHOLE: an over-long event status gives way once the title is at its floor', () => {
+    const line = briefLine({ title: 'Quarterly planning offsite', isAllDay: false, start: '2026-10-21T11:00:00-04:00', status: 's'.repeat(200) });
+    expect(line.length).toBe(120);
+    expect(line.startsWith('Quarterly planning offs… — ')).toBe(true);
+    expect(line).toContain(' — 2026-10-21T11:00:00-04:00 — sss');
+    expect(line.endsWith('…')).toBe(true);
   });
 });

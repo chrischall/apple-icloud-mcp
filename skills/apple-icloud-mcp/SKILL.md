@@ -75,7 +75,8 @@ On an mcp-host that groups connectors by context, this server is in the **family
 - **The one canonical read is `apple_calendar_list_events`, for "what's on"** — with its range in
   `fromDate`/`toDate` and `view: "brief"`: one line per event, `title — <ISO start> — <your reply or the event
   status>`, inside the untrusted-data envelope (titles come from whoever sent the invitation). Lines starting
-  `-- ` are notes: `-- none`, `-- N of M shown`, `-- error: …` for a calendar that could not be searched.
+  `-- ` are notes: `-- none`, `-- N of M shown`, `-- error: …` for a calendar that could not be searched. An
+  event whose title itself starts `-- ` or `\` is shown with one leading `\`, so it never reads as a note.
 - **No subject.** Calendars are folders of one person's schedule, not people or places a group answers per
   subject, so the read takes none and covers every event calendar.
 - **No "what's new" or "what's due".** Mail search is a search, not a feed of what is new, and this server has
