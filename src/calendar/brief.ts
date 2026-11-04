@@ -31,21 +31,33 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' && v !== '' ? v : undefined;
 }
 
+/** The shortest a title is cut to before the status gives way too. */
+const TITLE_FLOOR = 24;
+
+const cut = (s: string, n: number): string => (s.length > n ? `${s.slice(0, Math.max(n - 1, 0))}…` : s);
+
 /**
  * One occurrence as one line. The date is the all-day start date or the timed
  * start's ISO instant in the call's zone; the status is the account's own
  * reply when it is known, else the event's STATUS, else "scheduled". The
- * title is folded onto one line and stripped of leading dashes, so a title a
- * stranger wrote cannot pose as a `-- ` note.
+ * title is folded onto one line; one that starts with `-- ` or `\` is escaped
+ * with a single leading `\`, which the gateway strips from every item line
+ * after its note check, so a title a stranger wrote cannot pose as a note.
+ * The line is cut to ≤ 120 characters as a WHOLE, title first: the title
+ * shortens until the line fits, and if the status (the invitation's STATUS
+ * is third-party too) would still overflow once the title is at its floor,
+ * the status is cut as well.
  */
 export function briefLine(row: BriefRow): string {
-  const title = (str(row.title) ?? '').replace(/\s+/g, ' ').replace(/^[\s-]+/, '').trim() || '(untitled)';
+  const raw = (str(row.title) ?? '').replace(/\s+/g, ' ').trim() || '(untitled)';
+  const title = raw.startsWith('-- ') || raw.startsWith('\\') ? `\\${raw}` : raw;
   const date = (row.isAllDay === true ? str(row.startDate) : str(row.start)) ?? 'no date';
   const status = str(row.myStatus) ?? str(row.status) ?? 'scheduled';
-  const tail = ` — ${date} — ${status}`;
-  const room = BRIEF_MAX - tail.length;
-  const shown = title.length > room ? `${title.slice(0, room - 1)}…` : title;
-  return `${shown}${tail}`;
+  const sep = ` — ${date} — `;
+  const room = BRIEF_MAX - sep.length;
+  if (title.length + status.length <= room) return `${title}${sep}${status}`;
+  const shown = cut(title, Math.max(room - status.length, Math.min(title.length, TITLE_FLOOR)));
+  return `${shown}${sep}${cut(status, room - shown.length)}`;
 }
 
 /** The brief answer: item lines, then note lines, in the untrusted-data envelope, minified. */
