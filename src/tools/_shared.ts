@@ -9,6 +9,7 @@ import type {
 import { z } from 'zod';
 import { accessAllowed, isServiceEnabled, type ServiceName, type ToolAccess } from '../config.js';
 import { AppleToolError, ConfigError, CredentialsRejectedError, UpstreamError, errorMessage, scrub } from '../errors.js';
+import type { MintHint } from './hints.js';
 
 /**
  * The seam every tool in this server is registered through.
@@ -36,6 +37,11 @@ export interface ToolDefinition<S extends z.ZodType<Record<string, unknown>>> {
   /** Always a `z.strictObject(...)`: an unknown argument is an error, never silently dropped. */
   inputSchema: S;
   annotations: ToolAnnotations;
+  /**
+   * The context-group hint published as `_meta.mint` (./hints.ts). Required so
+   * every new tool decides; `null` only for apple_healthcheck, which joins no group.
+   */
+  mint: MintHint | null;
   handler: (args: z.infer<S>, ctx: ServerContext) => Promise<ToolResult>;
 }
 
@@ -50,6 +56,7 @@ export function defineTool<S extends z.ZodType<Record<string, unknown>>>(server:
       description: def.description,
       inputSchema: def.inputSchema,
       annotations: def.annotations,
+      ...(def.mint !== null ? { _meta: { mint: def.mint } } : {}),
     },
     (async (args: z.infer<S>, ctx: ServerContext) => {
       try {

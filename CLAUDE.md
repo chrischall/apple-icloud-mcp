@@ -42,6 +42,7 @@ src/
   health.ts         HealthProbe contract + makeProbe; tools/healthcheck.ts runs them all (apple_healthcheck)
   tools/_shared.ts  defineTool (service switch + write-mode gate + structured scrubbed errors), ANNOTATIONS,
                     pageInfo/pagedResponse (paging facts FIRST), jsonResponse (minified)
+  tools/hints.ts    context-group `_meta.mint` hints (group "family"); `defineTool` requires `mint` on every tool
   tools/_confirm.ts thin wrapper over mcp-utils confirmWrite; spent tokens in mcp-utils' file store
                     ($MCP_DATA_DIR/.mcp-confirm/spent, or ~/.apple-icloud-mcp/confirm-spent locally;
                     APPLE_STATE_CACHE=false → memory only); stateRevision
@@ -58,7 +59,10 @@ tests/              mirrors src/; tests/_setup.ts blanks APPLE_*/ICLOUD_*/DISPLA
 A module exports `register<X>Tools(server, deps?)` from `src/<x>/tools.ts` and `<x>Health` from
 `src/<x>/health.ts`; `registry.ts` wraps each registrar so it receives the server ONLY (runMcp passes its own
 `deps` as the 2nd argument). Add a tool → register it through `defineTool` → add it to `manifest.json`
-(`tests/manifest-roster.test.ts` fails otherwise) and to the README table.
+(`tests/manifest-roster.test.ts` fails otherwise) and to the README table, and give it a `mint` hint with its
+intent in `tests/mint-hints.test.ts` (`null` only for apple_healthcheck). The one canonical read is
+`apple_calendar_list_events` (whats-on, `view: "brief"`, src/calendar/brief.ts); a new canonical read must
+answer whats-new/due/on and be a read.
 
 ## Rules every tool follows (tested — don't weaken)
 

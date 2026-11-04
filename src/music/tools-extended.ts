@@ -4,6 +4,7 @@ import { getDisplayTimeZone } from '../config.js';
 import { AppleToolError, InvalidArgumentError, UnconfirmedWriteError, UpstreamError, errorMessage } from '../errors.js';
 import { CONFIRM_NOTE, confirmTokenParam, confirmWrite, stateRevision } from '../tools/_confirm.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonErrorResponse, jsonResponse } from '../tools/_shared.js';
+import { MUSIC_ALIASES, familyHint } from '../tools/hints.js';
 import { requireData, type AppleDoc, type MusicClient, type MusicSession } from './client.js';
 import { head, notesField, uniq } from './common.js';
 import { ROOT_FOLDER_ID, assertLibraryId, assertLibraryPlaylistId, LIBRARY_TYPES } from './ids.js';
@@ -166,6 +167,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
     name: 'apple_music_update_playlist',
     service: 'music',
     access: 'all',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Rename an Apple Music playlist or change its description',
     description:
       'Rename one of your Apple Music library playlists, change its description, or make it public/private. Returns the ' +
@@ -271,6 +273,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
     name: 'apple_music_remove_playlist_tracks',
     service: 'music',
     access: 'all',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Remove tracks from an Apple Music playlist',
     description:
       'Remove tracks from one of your library playlists by library track id and/or 1-based position (from ' +
@@ -389,6 +392,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
     name: 'apple_music_reorder_playlist',
     service: 'music',
     access: 'all',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Reorder, sort, dedupe or rewrite an Apple Music playlist',
     description:
       'Reorder one of your library playlists: move tracks, sort (name, artist, album, release date, duration, date ' +
@@ -548,6 +552,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
     name: 'apple_music_move_playlist',
     service: 'music',
     access: 'all',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Move an Apple Music playlist into a folder',
     description:
       'Move one of your library playlists into a playlist folder, or back to the top level ("root"). Checks the folder ' +
@@ -606,6 +611,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
     name: 'apple_music_delete_playlist',
     service: 'music',
     access: 'all',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Delete an Apple Music playlist',
     description:
       'Delete one of your library playlists (songs stay in your library). For an Apple playlist saved to your library, this ' +
@@ -669,6 +675,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
     name: 'apple_music_remove_from_library',
     service: 'music',
     access: 'all',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Remove songs, albums or playlists from your Apple Music library',
     description:
       'Remove songs, albums, music videos or playlists from your Apple Music library by LIBRARY id (i.…, l.…, p.… from ' +
@@ -758,6 +765,7 @@ export function registerExtendedTools(server: McpServer, client: () => MusicClie
     name: 'apple_music_remove_favorites',
     service: 'music',
     access: 'all',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Unfavorite songs, albums, playlists or artists in Apple Music',
     description:
       'Remove the favorite (star) from catalog songs, albums, playlists, artists or music videos, by catalog id, up to 100 ' +

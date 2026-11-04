@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { createTestHarness } from '@chrischall/mcp-utils/test';
 import { z } from 'zod';
+import { familyHint } from '../../src/tools/hints.js';
 import {
   ANNOTATIONS,
   compactObject,
@@ -54,6 +55,7 @@ describe('defineTool', () => {
       description: 'Does a thing.',
       inputSchema: schema,
       annotations: ANNOTATIONS.read,
+      mint: null,
       handler,
     });
     expect(ok).toBe(true);
@@ -64,16 +66,25 @@ describe('defineTool', () => {
     expect(handler).toHaveBeenCalledWith({ id: 'x' }, 'ctx');
   });
 
+  it('publishes a context-group hint as _meta.mint, and no _meta at all for a null hint', () => {
+    const { server, tools } = fakeServer();
+    const mint = familyHint('lookup', { aliases: ['weather'] });
+    defineTool(server, { name: 'h', service: 'weather', access: 'read', description: 'd', inputSchema: schema, annotations: ANNOTATIONS.read, mint, handler: async () => jsonResponse({}) });
+    expect(tools.get('h')!.cfg._meta).toEqual({ mint: { domain: 'family', intent: 'lookup', aliases: ['weather'] } });
+    defineTool(server, { name: 'n', service: 'weather', access: 'read', description: 'd', inputSchema: schema, annotations: ANNOTATIONS.read, mint: null, handler: async () => jsonResponse({}) });
+    expect('_meta' in tools.get('n')!.cfg).toBe(false);
+  });
+
   it('omits the title when none is given', () => {
     const { server, tools } = fakeServer();
-    defineTool(server, { name: 't', service: 'maps', access: 'read', description: 'd', inputSchema: schema, annotations: ANNOTATIONS.read, handler: async () => jsonResponse({}) });
+    defineTool(server, { name: 't', service: 'maps', access: 'read', description: 'd', inputSchema: schema, annotations: ANNOTATIONS.read, mint: null, handler: async () => jsonResponse({}) });
     expect('title' in tools.get('t')!.cfg).toBe(false);
   });
 
   it('does not register a tool whose service is disabled by APPLE_SERVICES — but always registers core tools', () => {
     process.env.APPLE_SERVICES = 'maps';
     const { server, tools } = fakeServer();
-    const base = { description: 'd', inputSchema: schema, annotations: ANNOTATIONS.read, handler: async () => jsonResponse({}) };
+    const base = { description: 'd', inputSchema: schema, annotations: ANNOTATIONS.read, mint: null, handler: async () => jsonResponse({}) };
     expect(defineTool(server, { ...base, name: 'music_tool', service: 'music', access: 'read' })).toBe(false);
     expect(defineTool(server, { ...base, name: 'maps_tool', service: 'maps', access: 'read' })).toBe(true);
     expect(defineTool(server, { ...base, name: 'core_tool', service: 'core', access: 'read' })).toBe(true);
@@ -81,7 +92,7 @@ describe('defineTool', () => {
   });
 
   it('does not register a write the write mode forbids (structural gate)', () => {
-    const base = { description: 'd', inputSchema: schema, handler: async () => jsonResponse({}) };
+    const base = { description: 'd', inputSchema: schema, mint: null, handler: async () => jsonResponse({}) };
     for (const [mode, expected] of [
       ['none', ['r']],
       ['additive', ['r', 'a']],
@@ -106,6 +117,7 @@ describe('defineTool', () => {
       description: 'd',
       inputSchema: schema,
       annotations: ANNOTATIONS.read,
+      mint: null,
       handler: async () => {
         throw new UpstreamError('calendar', 500, 'broke with app-pw-abcd-efgh');
       },
@@ -124,6 +136,7 @@ describe('defineTool', () => {
         description: 'Echo.',
         inputSchema: schema,
         annotations: ANNOTATIONS.read,
+        mint: null,
         handler: async (args) => jsonResponse({ id: args.id }),
       });
     });

@@ -7,6 +7,7 @@ import { assertNotLatched } from '../icloud-auth.js';
 import { formatInstant, parseDateInput, putInstant } from '../time.js';
 import { CONFIRM_NOTE, confirmTokenParam, confirmWrite, stateRevision } from '../tools/_confirm.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonResponse, limitParam, offsetParam, pageInfo, pagedResponse } from '../tools/_shared.js';
+import { MAIL_ALIASES, familyHint } from '../tools/hints.js';
 import {
   SMTP_HOST,
   SMTP_PORT,
@@ -289,6 +290,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
     name: 'apple_mail_list_mailboxes',
     service: 'mail',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MAIL_ALIASES }),
     title: 'List iCloud Mail mailboxes',
     description:
       'List the iCloud Mail mailboxes (folders): path, name, special use (inbox, sent, drafts, trash, junk, archive) and, ' +
@@ -366,6 +368,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
     name: 'apple_mail_search',
     service: 'mail',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MAIL_ALIASES }),
     title: 'Search iCloud Mail',
     description:
       'Search emails in one iCloud Mail mailbox (default INBOX) by sender, recipient, subject, full text, received date range, ' +
@@ -507,6 +510,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
     name: 'apple_mail_get_message',
     service: 'mail',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MAIL_ALIASES }),
     title: 'Read an iCloud Mail message',
     description:
       'Read one iCloud Mail message by uid (from apple_mail_search): headers (from, to, cc, reply-to, date, subject, ' +
@@ -607,6 +611,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
     name: 'apple_mail_download_attachment',
     service: 'mail',
     access: 'read',
+    mint: familyHint('other', { aliases: MAIL_ALIASES }),
     title: 'Download an iCloud Mail attachment',
     description:
       'Download one attachment from an iCloud Mail message as an embedded binary resource. Use the 1-based index ' +
@@ -700,6 +705,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
     name: 'apple_mail_send',
     service: 'mail',
     access: 'all',
+    mint: familyHint('send', { aliases: MAIL_ALIASES }),
     title: 'Send an email from iCloud Mail',
     description:
       'Send a plain-text email from your iCloud Mail address (to/cc/bcc, subject, body; no attachments). ' +
@@ -924,6 +930,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
     name: 'apple_mail_update_flags',
     service: 'mail',
     access: 'all',
+    mint: familyHint('change', { aliases: MAIL_ALIASES }),
     title: 'Mark iCloud Mail read/unread or flagged',
     description:
       'Mark iCloud Mail messages read or unread, and flag or unflag them, by uid (1–100 uids from apple_mail_search, one ' +
@@ -1034,6 +1041,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
     name: 'apple_mail_move',
     service: 'mail',
     access: 'all',
+    mint: familyHint('change', { aliases: MAIL_ALIASES }),
     title: 'Move iCloud Mail messages',
     description:
       'Move iCloud Mail messages (1–100 uids from apple_mail_search, one mailbox) to another mailbox: a path from ' +

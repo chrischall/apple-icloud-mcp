@@ -6,6 +6,7 @@ import { InvalidArgumentError, UpstreamError } from '../errors.js';
 import type { QueryValue } from '../http.js';
 import { parseDateInput, putInstant } from '../time.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonResponse } from '../tools/_shared.js';
+import { MAPS_ALIASES, familyHint } from '../tools/hints.js';
 import { MapsClient } from './client.js';
 import { assertCoordinateInRange, formatCoordinate, parseLocation, type Coordinate } from './location.js';
 import {
@@ -354,6 +355,7 @@ export function registerMapsTools(server: McpServer, deps: MapsDeps = {}): void 
     name: 'apple_maps_geocode',
     service: 'maps',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MAPS_ALIASES }),
     title: 'Geocode an address (Apple Maps)',
     description:
       'Turn an address or place name into coordinates with Apple Maps (geocoding). Returns matching places with ' +
@@ -394,6 +396,7 @@ export function registerMapsTools(server: McpServer, deps: MapsDeps = {}): void 
     name: 'apple_maps_reverse_geocode',
     service: 'maps',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MAPS_ALIASES }),
     title: 'Find the address at coordinates (Apple Maps)',
     description:
       'Find the street address at a latitude/longitude with Apple Maps (reverse geocoding) — e.g. "where is ' +
@@ -427,6 +430,7 @@ export function registerMapsTools(server: McpServer, deps: MapsDeps = {}): void 
     name: 'apple_maps_search',
     service: 'maps',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MAPS_ALIASES }),
     title: 'Search for places (Apple Maps)',
     description:
       'Search Apple Maps for places: businesses, points of interest, addresses, landmarks (e.g. "coffee", "EV ' +
@@ -534,6 +538,7 @@ export function registerMapsTools(server: McpServer, deps: MapsDeps = {}): void 
     name: 'apple_maps_directions',
     service: 'maps',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MAPS_ALIASES }),
     title: 'Get directions (Apple Maps)',
     description:
       'Driving, walking or cycling directions between two places with Apple Maps (addresses or "lat,lng"). ' +
@@ -616,6 +621,7 @@ export function registerMapsTools(server: McpServer, deps: MapsDeps = {}): void 
     name: 'apple_maps_etas',
     service: 'maps',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MAPS_ALIASES }),
     title: 'Travel times to several destinations (Apple Maps)',
     description:
       'Travel time and distance from one point to up to 10 destinations at once with Apple Maps — driving with live ' +
@@ -701,6 +707,7 @@ export function registerMapsTools(server: McpServer, deps: MapsDeps = {}): void 
     name: 'apple_maps_lookup_place',
     service: 'maps',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MAPS_ALIASES }),
     title: 'Look up places by id (Apple Maps)',
     description:
       'Look up Apple Maps places by place id — the id field from apple_maps_search, apple_maps_geocode or ' +
@@ -768,6 +775,7 @@ export function registerMapsTools(server: McpServer, deps: MapsDeps = {}): void 
     name: 'apple_maps_snapshot_url',
     service: 'maps',
     access: 'read',
+    mint: familyHint('other', { aliases: MAPS_ALIASES }),
     title: 'Make a static map image link (Apple Maps)',
     description:
       'Make a signed link to a static Apple Maps image (PNG): centred on an address or "lat,lng", and/or with pins ' +

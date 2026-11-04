@@ -38,6 +38,7 @@ export function registerHealthcheckTool(server: McpServer, probes: readonly Heal
     name: 'apple_healthcheck',
     service: 'core',
     access: 'read',
+    mint: null,
     title: 'Check Apple service credentials and connectivity',
     description:
       'Check which Apple services (Apple Music, iCloud Calendar, Contacts, Mail, Apple Maps, WeatherKit, iTunes) are ' +
