@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getDisplayTimeZone } from '../config.js';
 import { InvalidArgumentError, UpstreamError } from '../errors.js';
 import { ANNOTATIONS, defineTool, jsonResponse, limitParam, offsetParam, pageInfo, pagedResponse } from '../tools/_shared.js';
+import { MUSIC_ALIASES, familyHint } from '../tools/hints.js';
 import { nextOf, requireData, type AppleDoc, type MusicClient, type MusicSession } from './client.js';
 import { head, musicViewParam, notesField, storefrontParam, uniq, viewOf, withPositions } from './common.js';
 import {
@@ -87,6 +88,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     name: 'apple_music_list_playlists',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'List your Apple Music playlists',
     description:
       'List the playlists in your Apple Music library (alphabetical), or the contents of one playlist folder (folders and ' +
@@ -139,6 +141,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     name: 'apple_music_get_playlist',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'Read an Apple Music playlist and its tracks',
     description:
       'Read one playlist — a library playlist (p.…) or a catalog playlist (pl.…) — with its tracks in order. Each track has ' +
@@ -228,6 +231,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     name: 'apple_music_list_folders',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'List your Apple Music playlist folders',
     description:
       'List the playlist folders in your Apple Music library: the top level, or the sub-folders of one folder. Each has its ' +
@@ -272,6 +276,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     name: 'apple_music_search_library',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'Search your Apple Music library',
     description:
       'Search YOUR Apple Music library (not the whole catalog) by text for songs, albums, artists, playlists or music ' +
@@ -321,6 +326,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     name: 'apple_music_list_library',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'List your Apple Music library',
     description:
       'List what is in your Apple Music library: all songs, albums, artists or music videos (alphabetical, paged), or ' +
@@ -357,6 +363,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     name: 'apple_music_get_history',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'Get your Apple Music listening history',
     description:
       'Your recent Apple Music listening: recently-played (albums, playlists, stations), recently-played-tracks (songs), ' +
@@ -395,6 +402,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     name: 'apple_music_get_recommendations',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'Get your Apple Music recommendations',
     description:
       'Your personal Apple Music recommendations ("Made for You", "Recently Played" and similar groups), each with its title ' +
@@ -447,6 +455,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     name: 'apple_music_get_replay',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'Get your Apple Music Replay',
     description:
       'Apple Music Replay: your top songs, albums and artists for the latest Replay year, or for a given year (with play ' +
@@ -526,6 +535,7 @@ export function registerLibraryReadTools(server: McpServer, client: () => MusicC
     name: 'apple_music_get_ratings',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'Get your Apple Music ratings (love / dislike)',
     description:
       'Whether you have loved or disliked songs, albums, playlists, music videos or stations — catalog or library ids — ' +

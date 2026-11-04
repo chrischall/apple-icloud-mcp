@@ -5,6 +5,7 @@ import { canonicalTimeZone, getDisplayTimeZone } from '../config.js';
 import { InvalidArgumentError, UpstreamError, errorMessage } from '../errors.js';
 import { addDaysYmd, startOfDay, ymdInZone, zoneOffsetMs } from '../time.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonResponse } from '../tools/_shared.js';
+import { WEATHER_ALIASES, familyHint } from '../tools/hints.js';
 import { defaultWeatherClient, type WeatherClient, type WeatherQuery } from './client.js';
 import {
   APPLE_SET_NAME,
@@ -130,6 +131,7 @@ export function registerWeatherTools(server: McpServer, deps: WeatherDeps = {}):
     name: 'apple_weather_get',
     service: 'weather',
     access: 'read',
+    mint: familyHint('lookup', { aliases: WEATHER_ALIASES }),
     title: 'Get the weather forecast (Apple Weather)',
     description:
       'Weather forecast for a place from Apple Weather (WeatherKit): current conditions, hourly (up to 240 h), daily ' +
@@ -356,6 +358,7 @@ export function registerWeatherTools(server: McpServer, deps: WeatherDeps = {}):
     name: 'apple_weather_get_alert',
     service: 'weather',
     access: 'read',
+    mint: familyHint('lookup', { aliases: WEATHER_ALIASES }),
     title: 'Get a severe-weather alert (Apple Weather)',
     description:
       "Get one severe-weather alert's full official text from Apple Weather (WeatherKit), unmodified, by its id (the " +

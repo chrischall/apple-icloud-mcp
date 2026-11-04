@@ -67,6 +67,23 @@ Each service turns on when its credentials are set — see the README's "Setting
 - **Paging:** lists put `returned`/`total`/`nextOffset`/`hasMore` before the data; pass `nextOffset` as
   `offset` for more. Never report "none" from a page that says `hasMore: true`.
 
+## In context groups
+
+On an mcp-host that groups connectors by context, this server is in the **family** group: every tool but
+`apple_healthcheck` carries a `_meta.mint` hint (domain `family`, plus what kind of ask it answers).
+
+- **The one canonical read is `apple_calendar_list_events`, for "what's on"** — with its range in
+  `fromDate`/`toDate` and `view: "brief"`: one line per event, `title — <ISO start> — <your reply or the event
+  status>`, inside the untrusted-data envelope (titles come from whoever sent the invitation). Lines starting
+  `-- ` are notes: `-- none`, `-- N of M shown`, `-- error: …` for a calendar that could not be searched.
+- **No subject.** Calendars are folders of one person's schedule, not people or places a group answers per
+  subject, so the read takes none and covers every event calendar.
+- **No "what's new" or "what's due".** Mail search is a search, not a feed of what is new, and this server has
+  no reminders or due dates; every other read is a lookup, every write a change, and `apple_mail_send` a send.
+- A compound ask reaches it like this: "what's on this weekend, and anything due at school?" — the group asks
+  this read for Saturday–Sunday beside the school group's due-work read, and merges the answers.
+- It reaches Apple directly over the network: no browser needs to be open.
+
 ## Tools
 
 ### Health

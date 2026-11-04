@@ -15,6 +15,7 @@ import {
   pagedResponse,
   type PageInfo,
 } from '../tools/_shared.js';
+import { ITUNES_ALIASES, familyHint } from '../tools/hints.js';
 import { getDefaultItunesClient, type Fetched, type ItunesClient } from './client.js';
 import {
   CHART_NAMES,
@@ -107,6 +108,7 @@ export function registerItunesTools(server: McpServer, deps: ItunesDeps = {}): v
     name: 'apple_itunes_search',
     service: 'itunes',
     access: 'read',
+    mint: familyHint('lookup', { aliases: ITUNES_ALIASES }),
     title: 'Search the iTunes Store catalog',
     description:
       "Search Apple's iTunes Store catalog — songs, albums, artists, podcasts and podcast episodes, audiobooks, apps and " +
@@ -214,6 +216,7 @@ export function registerItunesTools(server: McpServer, deps: ItunesDeps = {}): v
     name: 'apple_itunes_lookup',
     service: 'itunes',
     access: 'read',
+    mint: familyHint('lookup', { aliases: ITUNES_ALIASES }),
     title: 'Look up iTunes Store items by id, UPC, ISBN or bundle id',
     description:
       'Look up iTunes Store items (no Apple account or key) by ids — 1–200 trackId/collectionId/artistId values, e.g. from ' +
@@ -397,6 +400,7 @@ export function registerItunesTools(server: McpServer, deps: ItunesDeps = {}): v
     name: 'apple_charts_get',
     service: 'itunes',
     access: 'read',
+    mint: familyHint('lookup', { aliases: ITUNES_ALIASES }),
     title: 'Get Apple top charts',
     description:
       "Apple's current top charts (no Apple account or key): most-played songs, albums, music videos and playlists on Apple " +

@@ -8,6 +8,7 @@ import { ICALENDAR_CONTENT_TYPE, childUrl } from '../dav/client.js';
 import { formatInstant } from '../time.js';
 import { CONFIRM_NOTE, confirmTokenParam, confirmWrite, stateRevision } from '../tools/_confirm.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonResponse, limitParam, offsetParam, pageInfo, pagedResponse } from '../tools/_shared.js';
+import { CALENDAR_ALIASES, familyHint } from '../tools/hints.js';
 import {
   chooseTargetCalendar,
   assertWritable,
@@ -22,6 +23,7 @@ import {
   type CalendarInfo,
   type ContextFactory,
 } from './caldav.js';
+import { briefResponse } from './brief.js';
 import { buildNewEvent, checkRecurrenceStart, resolveNewTimes, type CreateInput } from './create.js';
 import { occurrenceFor, planDelete, planUpdate, rollbackBody, type PutOp, type Span, type UpdatePlan } from './edit.js';
 import { assertOffset, collectOccurrences, loadEvent, type Row } from './events.js';
@@ -176,6 +178,27 @@ const eventsViewParam = viewParam(CALENDAR_VIEWS, {
     'compact drops the attendee list (keeps attendeeCount, and myStatus when your own reply is recognised), organizer, ' +
     'alerts, url, lastModified and the raw repeat rule (keeps its plain-English summary), and cuts notes to 200 characters; ' +
     'full adds them back (notes cut to 500). apple_calendar_get_event returns one event whole.',
+});
+
+/**
+ * apple_calendar_list_events alone also answers `brief` — the context-groups
+ * canonical "what's on" read (./brief.ts). viewParam's vocabulary is the
+ * fleet's compact/full/raw, so the enum is spelled here with the same default.
+ */
+const listEventsViewParam = z
+  .enum(['compact', 'full', 'brief'])
+  .optional()
+  .describe(
+    // viewParam always describes the rungs it built; brief is appended to that sentence.
+    `${eventsViewParam.description} brief returns one line per event, "title — <ISO start> — <your reply ` +
+      'or the event status>", with "-- " lines for notes (none, N of M shown, errors).',
+  );
+
+/** The context-group hint on the canonical "what's on" read. */
+const LIST_EVENTS_HINT = familyHint('whats-on', {
+  canonical: true,
+  when: { start: 'fromDate', end: 'toDate' },
+  aliases: ['calendar', 'schedule', 'appointments', 'events', 'plans', 'busy'],
 });
 
 /**
@@ -373,6 +396,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     title: 'List your iCloud calendars',
     service: 'calendar',
     access: 'read',
+    mint: familyHint('lookup', { aliases: CALENDAR_ALIASES }),
     description:
       'List your iCloud calendars (event calendars only): id, name, color, whether you can add events to it, whether it is ' +
       'shared (shared: with you by someone else; sharedByYou: by you with others), and which one new events go into by ' +
@@ -418,10 +442,10 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       timeZone?: string;
       view?: string;
     },
-    opts: { defaultDays: number; defaultLimit: number; query?: string },
+    opts: { defaultDays: number; defaultLimit: number; query?: string; brief?: boolean },
   ) => {
     const zones = resolveZones(args.timeZone);
-    const view = resolveView(args.view, CALENDAR_VIEWS);
+    const view = resolveView(opts.brief ? 'compact' : args.view, CALENDAR_VIEWS);
     const win = resolveWindow(args, { zone: zones.zone, now: now(), defaultDays: opts.defaultDays, maxDays: MAX_RANGE_DAYS });
     const ctx = await context();
     const { calendars } = await listCalendars(ctx);
@@ -441,6 +465,16 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     const self = knownSelfAddresses(ctx);
     const shown = rows.slice(offset, offset + limit);
     const page = shown.map((r) => formatRow(r, zones, view, self));
+    if (opts.brief) {
+      return briefResponse({
+        rows: page,
+        offset,
+        total: rows.length,
+        // collectOccurrences puts one note per failed calendar FIRST; the rest are its other gaps (a capped series, a cut-short report).
+        errors: collected.notes.slice(0, collected.failed.length),
+        notes: collected.notes.slice(collected.failed.length),
+      });
+    }
     const names = selected.map((c) => `"${c.name}"`).join(', ') || '(no calendars)';
     const scope = opts.query !== undefined ? `events matching "${opts.query}" (title, location or notes)` : 'events';
     if (rows.length === 0) notes.push(`No ${scope} in ${windowLabel(win)} in ${names}.`);
@@ -466,6 +500,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     title: 'List iCloud Calendar events in a date range',
     service: 'calendar',
     access: 'read',
+    mint: LIST_EVENTS_HINT,
     description:
       'List iCloud Calendar events (appointments, meetings) in a date window, recurring events expanded into occurrences, ' +
       'sorted by start. Window: fromDate (default today) + toDate (exclusive) or daysAhead (default 7), max 366 days; the ' +
@@ -478,10 +513,10 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
       limit: limitParam(100, 500),
       offset: offsetParam,
       timeZone: timeZoneParam,
-      view: eventsViewParam,
+      view: listEventsViewParam,
     }),
     annotations: ANNOTATIONS.read,
-    handler: (args) => listOrSearch(args, { defaultDays: 7, defaultLimit: 100 }),
+    handler: (args) => listOrSearch(args, { defaultDays: 7, defaultLimit: 100, brief: args.view === 'brief' }),
   });
 
   defineTool(server, {
@@ -489,6 +524,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     title: 'Search iCloud Calendar events',
     service: 'calendar',
     access: 'read',
+    mint: familyHint('lookup', { aliases: CALENDAR_ALIASES }),
     description:
       'Search iCloud Calendar events by text (case-insensitive match in title, location or notes) within a date window: ' +
       'fromDate (default today; may be in the past) + toDate or daysAhead (default 30), max 366 days. Only that window is ' +
@@ -514,6 +550,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     title: 'Get an iCloud Calendar event',
     service: 'calendar',
     access: 'read',
+    mint: familyHint('lookup', { aliases: CALENDAR_ALIASES }),
     description:
       'Get one iCloud Calendar event in full (notes untruncated, attendees, alerts, recurrence rule in plain English) by the ' +
       'id list/search returned. An id ending in "#occ=…" is that one occurrence; a bare recurring id describes the series. ' +
@@ -553,6 +590,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     title: 'Create an iCloud Calendar event',
     service: 'calendar',
     access: 'additive',
+    mint: familyHint('change', { aliases: CALENDAR_ALIASES }),
     description:
       'Create an iCloud Calendar event: title, startDate/endDate (timed default 1 hour; all-day endDate = last day), ' +
       'location, notes, url, alarms, recurrence, attendees. Goes into calendar, else ICLOUD_DEFAULT_CALENDAR, else the first ' +
@@ -681,6 +719,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     title: 'Change an iCloud Calendar event',
     service: 'calendar',
     access: 'all',
+    mint: familyHint('change', { aliases: CALENDAR_ALIASES }),
     description:
       'Change an iCloud Calendar event: title, startDate/endDate, isAllDay, location, notes, url ("" clears), alarms, ' +
       'attendees (full new list), calendar (moves it). Recurring: span thisEvent (default, "#occ=" id), futureEvents (splits ' +
@@ -845,6 +884,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     title: 'Delete an iCloud Calendar event',
     service: 'calendar',
     access: 'all',
+    mint: familyHint('change', { aliases: CALENDAR_ALIASES }),
     description:
       'Delete an iCloud Calendar event. Recurring: span thisEvent (default; the one occurrence an "#occ=" id names), ' +
       'futureEvents (it and all later ones) or allEvents (the whole series). Calendar has no trash. If the event has ' +
@@ -915,6 +955,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps = {}
     title: 'Find free time in your iCloud Calendar',
     service: 'calendar',
     access: 'read',
+    mint: familyHint('lookup', { aliases: CALENDAR_ALIASES }),
     description:
       'Find free time in your iCloud calendars: open slots per day within working hours (workdayStart/workdayEnd, default ' +
       '09:00–17:00, weekdays only by default) at least minDurationMinutes long (default 30). Busy = events not marked free, ' +

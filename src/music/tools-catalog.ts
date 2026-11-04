@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getDisplayTimeZone } from '../config.js';
 import { InvalidArgumentError, UpstreamError } from '../errors.js';
 import { ANNOTATIONS, defineTool, jsonResponse, limitParam, offsetParam, pageInfo, pagedResponse } from '../tools/_shared.js';
+import { MUSIC_ALIASES, familyHint } from '../tools/hints.js';
 import { nextOf, requireData, type AppleDoc, type MusicClient } from './client.js';
 import { head, musicViewParam, notesField, storefrontParam, uniq, viewOf, withPositions } from './common.js';
 import { CATALOG_TYPES, assertCatalogId, type CatalogType } from './ids.js';
@@ -58,6 +59,7 @@ export function registerCatalogTools(server: McpServer, client: () => MusicClien
     name: 'apple_music_search_catalog',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'Search the Apple Music catalog',
     description:
       "Search Apple Music's catalog by text for songs, albums, artists, playlists, music videos or stations. Results are " +
@@ -117,6 +119,7 @@ export function registerCatalogTools(server: McpServer, client: () => MusicClien
     name: 'apple_music_get_catalog_items',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'Look up Apple Music catalog items',
     description:
       'Look up Apple Music catalog songs, albums, artists, playlists, music videos or stations by id — or songs/music videos ' +
@@ -240,6 +243,7 @@ export function registerCatalogTools(server: McpServer, client: () => MusicClien
     name: 'apple_music_get_charts',
     service: 'music',
     access: 'read',
+    mint: familyHint('lookup', { aliases: MUSIC_ALIASES }),
     title: 'Get Apple Music charts',
     description:
       "Get Apple Music's top charts (most played songs, albums, playlists, music videos) for a storefront, optionally for one " +

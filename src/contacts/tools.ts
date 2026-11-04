@@ -8,6 +8,7 @@ import { MAX_RESPONSE_BYTES } from '../http.js';
 import { formatDateOnly, parseDateInput, putInstant } from '../time.js';
 import { CONFIRM_NOTE, confirmTokenParam, confirmWrite, stateRevision } from '../tools/_confirm.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonResponse, limitParam, offsetParam, pageInfo, pagedResponse } from '../tools/_shared.js';
+import { CONTACTS_ALIASES, familyHint } from '../tools/hints.js';
 import {
   contactNotFound,
   fetchCard,
@@ -458,6 +459,7 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
     name: 'apple_contacts_search',
     service: 'contacts',
     access: 'read',
+    mint: familyHint('lookup', { aliases: CONTACTS_ALIASES }),
     title: 'Search iCloud Contacts',
     description:
       'Search the user\'s iCloud Contacts (address book) by name, nickname, company, job title, email, or phone number ' +
@@ -538,6 +540,7 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
     name: 'apple_contacts_get',
     service: 'contacts',
     access: 'read',
+    mint: familyHint('lookup', { aliases: CONTACTS_ALIASES }),
     title: 'Get an iCloud contact',
     description:
       'Get one iCloud contact in full by id (from apple_contacts_search): names, organization, job title, emails, phones, ' +
@@ -563,6 +566,7 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
     name: 'apple_contacts_list_groups',
     service: 'contacts',
     access: 'read',
+    mint: familyHint('lookup', { aliases: CONTACTS_ALIASES }),
     title: 'List iCloud contact groups',
     description:
       'List the contact groups in iCloud Contacts (e.g. Family, Work): each group\'s id, name and member count. Pass a ' +
@@ -591,6 +595,7 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
     name: 'apple_contacts_create',
     service: 'contacts',
     access: 'additive',
+    mint: familyHint('change', { aliases: CONTACTS_ALIASES }),
     title: 'Create an iCloud contact',
     description:
       'Create a new contact in iCloud Contacts. Needs a givenName, familyName or organization; optional middleName, ' +
@@ -656,6 +661,7 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
     name: 'apple_contacts_update',
     service: 'contacts',
     access: 'all',
+    mint: familyHint('change', { aliases: CONTACTS_ALIASES }),
     title: 'Edit an iCloud contact',
     description:
       'Edit an existing iCloud contact in place. Scalar fields (givenName, familyName, middleName, nickname, organization, ' +
@@ -764,6 +770,7 @@ export function registerContactsTools(server: McpServer, deps: ContactsDeps = {}
     name: 'apple_contacts_delete',
     service: 'contacts',
     access: 'all',
+    mint: familyHint('change', { aliases: CONTACTS_ALIASES }),
     title: 'Delete an iCloud contact',
     description:
       'Permanently delete one contact from iCloud Contacts (on every device) by id. The preview shows its name, ' +

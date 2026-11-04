@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { accessAllowed, getDisplayTimeZone } from '../config.js';
 import { AppleToolError, InvalidArgumentError, UnconfirmedWriteError, errorMessage } from '../errors.js';
 import { ANNOTATIONS, compactObject, defineTool, jsonResponse } from '../tools/_shared.js';
+import { MUSIC_ALIASES, familyHint } from '../tools/hints.js';
 import { requireData, type AppleDoc, type MusicClient, type MusicSession } from './client.js';
 import { head, notesField, uniq } from './common.js';
 import {
@@ -114,6 +115,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     name: 'apple_music_create_playlist',
     service: 'music',
     access: 'additive',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Create an Apple Music playlist',
     description:
       'Create a new playlist in your Apple Music library, optionally with tracks (up to 500 catalog or library song ids; ' +
@@ -219,6 +221,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     name: 'apple_music_add_playlist_tracks',
     service: 'music',
     access: 'additive',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Add tracks to an Apple Music playlist',
     description:
       'Append songs (up to 500 catalog or library ids) to the end of one of your library playlists. By default skips songs ' +
@@ -337,6 +340,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     // folder cannot be undone here: destructive by the inverse test, and so outside APPLE_WRITE_MODE=additive,
     // whose promise is that every write it registers is non-destructive.
     access: 'all',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Create an Apple Music playlist folder',
     description:
       'Create a playlist folder in your Apple Music library, at the top level or inside another folder. Returns the new ' +
@@ -388,6 +392,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     name: 'apple_music_add_to_library',
     service: 'music',
     access: 'additive',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Add songs, albums or playlists to your Apple Music library',
     description:
       'Add catalog songs, albums, playlists or music videos to your Apple Music library by catalog id (up to 100 per type). ' +
@@ -418,6 +423,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     name: 'apple_music_add_favorites',
     service: 'music',
     access: 'additive',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Favorite songs, albums, playlists or artists in Apple Music',
     description:
       'Mark catalog songs, albums, playlists, artists or music videos as favorites (the star in Apple Music; favorite songs ' +
@@ -445,6 +451,7 @@ export function registerLibraryWriteTools(server: McpServer, client: () => Music
     name: 'apple_music_set_rating',
     service: 'music',
     access: 'all',
+    mint: familyHint('change', { aliases: MUSIC_ALIASES }),
     title: 'Love or dislike an Apple Music item',
     description:
       'Set your rating on a song, album, playlist, music video or station (catalog or library id): love, dislike, or none ' +
