@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.7...v0.4.0) (2026-11-04)
+
+
+### Features
+
+* context-group hints ([#70](https://github.com/chrischall/apple-icloud-mcp/issues/70)) ([8f9932c](https://github.com/chrischall/apple-icloud-mcp/commit/8f9932cfcb4543c4be0999187c515b6d76b6fe0b))
+
+
+### Bug Fixes
+
+* **brief:** align the brief view with the fleet contract ([#71](https://github.com/chrischall/apple-icloud-mcp/issues/71)) ([a2b35dd](https://github.com/chrischall/apple-icloud-mcp/commit/a2b35ddbfabe1bc66e866c3d0050bb7ca3c35f85))
+* **deps:** bump the production-dependencies group with 4 updates ([#65](https://github.com/chrischall/apple-icloud-mcp/issues/65)) ([807f659](https://github.com/chrischall/apple-icloud-mcp/commit/807f659c5dece1b08648f51a5ebb0fd82d559d10))
+* **deps:** bump the production-dependencies group with 7 updates ([#69](https://github.com/chrischall/apple-icloud-mcp/issues/69)) ([6e618d7](https://github.com/chrischall/apple-icloud-mcp/commit/6e618d7269f44dc8e0eb0720fdddeb42d937f221))
+
 ## [0.3.7](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.6...v0.3.7) (2026-10-20)
 
 
