@@ -360,7 +360,7 @@
     },
     {
       "name": "apple_mail_send",
-      "description": "Send a plain-text email from your iCloud Mail address (to/cc/bcc, subject, body; no attachments)."
+      "description": "Send an email from your iCloud address (to/cc/bcc, subject, text or Markdown body; no attachments)."
     },
     {
       "name": "apple_mail_update_flags",

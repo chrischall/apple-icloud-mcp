@@ -144,7 +144,7 @@ On an mcp-host that groups connectors by context, this server is in the **family
 - `apple_mail_list_mailboxes(counts)` — List the iCloud Mail mailboxes (folders): path, name, special use (inbox, sent, drafts, trash, junk, archive) and, by default, message and unread counts.
 - `apple_mail_search(mailbox, from, to, subject, text, since, before, unread, flagged, limit, offset, timeZone)` — Search emails in one iCloud Mail mailbox (default INBOX) by sender, recipient, subject, full text, received date range, unread and flagged state.
 - `apple_mail_get_message(mailbox, uid, uidValidity, maxChars, timeZone)` — Read one iCloud Mail message by uid (from apple_mail_search): headers (from, to, cc, reply-to, date, subject, message-id), the body as plain text (HTML converted to readable text when there is no text part), a truncated flag, and attachm…
-- `apple_mail_send(to, cc, bcc, subject, body, inReplyTo, quoteOriginal, timeZone)` — Send a plain-text email from your iCloud Mail address (to/cc/bcc, subject, body; no attachments). — asks for confirmation
+- `apple_mail_send(to, cc, bcc, subject, body, format, inReplyTo, quoteOriginal, timeZone)` — Send an email from your iCloud address (to/cc/bcc, subject, text or Markdown body; no attachments). — asks for confirmation
 - `apple_mail_update_flags(mailbox, uids, uidValidity, seen, flagged)` — Mark iCloud Mail messages read or unread, and flag or unflag them, by uid (1–100 uids from apple_mail_search, one mailbox).
 - `apple_mail_move(mailbox, uids, uidValidity, destination)` — Move iCloud Mail messages (1–100 uids from apple_mail_search, one mailbox) to another mailbox: a path from apple_mail_list_mailboxes or an alias (inbox, archive, trash, junk, sent, drafts).
 

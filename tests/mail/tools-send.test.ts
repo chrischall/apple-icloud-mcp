@@ -82,6 +82,33 @@ describe('apple_mail_send — new message', () => {
     const parsed = await PostalMime.parse(sub?.raw as Buffer);
     expect(parsed.messageId).toBe(out.messageId);
     expect(parsed.text?.trim()).toBe('See you at 6.');
+    // Plain text by default: no HTML part.
+    expect(parsed.html).toBeUndefined();
+  });
+
+  it('format "markdown" sends formatted HTML beside the Markdown as text, and says so in the preview', async () => {
+    const h = harness();
+    const args = { to: ['a@b.com'], subject: 's', body: '**Agenda**\n\n- one\n- [doc](https://e.com/d)\n\n<script>x</script>', format: 'markdown' };
+    const p = await callPreview(gated(h), args);
+    expect(p.preview).toMatchObject({ format: 'markdown', body: args.body, bodyChars: args.body.length });
+    await callConfirmed(gated(h), args);
+    const parsed = await PostalMime.parse(h.submitted[0]?.raw as Buffer);
+    expect(parsed.text?.trimEnd()).toBe(args.body);
+    expect(parsed.html).toBe(
+      '<p><strong>Agenda</strong></p><ul><li>one</li><li><a href="https://e.com/d">doc</a></li></ul><p>&lt;script&gt;x&lt;/script&gt;</p>',
+    );
+    // The Sent copy is the same message.
+    expect((await PostalMime.parse(h.imap.mailboxes.get('Sent Messages')?.messages.get(1)?.source as Buffer)).html).toBe(parsed.html);
+  });
+
+  it('format "text" is the default, and the preview does not mention it', async () => {
+    const h = harness();
+    const p = await callPreview(gated(h), { to: ['a@b.com'], subject: 's', body: '**b**', format: 'text' });
+    expect(p.preview).not.toHaveProperty('format');
+    await callConfirmed(gated(h), { to: ['a@b.com'], subject: 's', body: '**b**', format: 'text' });
+    const parsed = await PostalMime.parse(h.submitted[0]?.raw as Buffer);
+    expect(parsed.html).toBeUndefined();
+    expect(parsed.text?.trim()).toBe('**b**');
   });
 
   it('refuses bad input before anything is sent', async () => {
@@ -224,6 +251,20 @@ describe('apple_mail_send — replies', () => {
     await callConfirmed(gated(h), args);
     const parsed = await PostalMime.parse(h.submitted[0]?.raw as Buffer);
     expect(parsed.text).toContain('> Are you free Friday?');
+  });
+
+  it('a Markdown reply quotes the original in the HTML as the sender wrote it', async () => {
+    const h = seeded();
+    const args = { to: ['bob@example.com'], body: '_Yes!_', inReplyTo: { uid: 1 }, quoteOriginal: true, format: 'markdown' };
+    const p = await callPreview(gated(h), args);
+    expect(p.preview.body).toBe('_Yes!_\n\nOn Mon, Sep 21, 2026, 10:30 AM EDT, Bob <bob@example.com> wrote:\n> Are you free Friday?\n> Bob\n');
+    await callConfirmed(gated(h), args);
+    const parsed = await PostalMime.parse(h.submitted[0]?.raw as Buffer);
+    expect(parsed.text?.replace(/\r\n/g, '\n')).toBe(p.preview.body);
+    expect(parsed.html).toBe(
+      '<p><em>Yes!</em></p><p>On Mon, Sep 21, 2026, 10:30 AM EDT, Bob &lt;bob@example.com&gt; wrote:</p>' +
+        '<blockquote type="cite">Are you free Friday?<br>Bob</blockquote>',
+    );
   });
 
   it('warns about a very long quoted original, and previews all of what is sent', async () => {

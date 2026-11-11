@@ -9,6 +9,7 @@ import {
   parseMessage,
   parseRecipient,
   parseRecipients,
+  markdownMailHtml,
   quoteOriginal,
   recipientLabel,
   replyReferences,
@@ -83,6 +84,16 @@ describe('buildMessage', () => {
     expect(parsed.date).toBe('2026-09-26T12:00:00.000Z');
   });
 
+  it('adds an HTML alternative when given one, keeping the text part', async () => {
+    const built = await buildMessage({
+      from: 'me@icloud.com', to: [{ address: 'b@x.com' }], cc: [], bcc: [], subject: 'S', text: '**Hi**', html: '<p><strong>Hi</strong></p>',
+    });
+    expect(built.raw.toString()).toMatch(/^Content-Type: multipart\/alternative/m);
+    const parsed = await PostalMime.parse(built.raw);
+    expect(parsed.text?.trim()).toBe('**Hi**');
+    expect(parsed.html).toBe('<p><strong>Hi</strong></p>');
+  });
+
   it('omits empty cc/bcc and threading headers', async () => {
     const built = await buildMessage({ from: 'me@icloud.com', to: [{ address: 'b@x.com' }], cc: [], bcc: [], subject: 'S', text: 'T' });
     const raw = built.raw.toString();
@@ -118,6 +129,19 @@ describe('reply helpers', () => {
     const big = quoteOriginal('x'.repeat(MAX_QUOTED_CHARS + 5), 'On:');
     expect(big.truncated).toBe(true);
     expect(big.quoted.endsWith('\n> […]')).toBe(true);
+  });
+
+  it('renders a Markdown body as safe HTML, quoting the original as escaped text', () => {
+    expect(markdownMailHtml('**Hi** <b>x</b> [doc](https://e.com) [bad](javascript:x)\n\n> quoted\n\n# Head')).toBe(
+      '<p><strong>Hi</strong> &lt;b&gt;x&lt;/b&gt; <a href="https://e.com">doc</a> [bad](javascript:x)</p>' +
+        '<blockquote><p>quoted</p></blockquote><h1>Head</h1>',
+    );
+    // The original is what someone else wrote: shown exactly, never read as Markdown or markup.
+    expect(markdownMailHtml('Yes!', { attribution: 'On Mon, Bob <b@x.com> wrote:', text: 'a **b** <i>c</i>\r\n\r\nd\n' })).toBe(
+      '<p>Yes!</p><p>On Mon, Bob &lt;b@x.com&gt; wrote:</p><blockquote type="cite">a **b** &lt;i&gt;c&lt;/i&gt;<br><br>d</blockquote>',
+    );
+    const big = markdownMailHtml('x', { attribution: 'On:', text: 'y'.repeat(MAX_QUOTED_CHARS + 5) });
+    expect(big.endsWith(`${'y'.repeat(MAX_QUOTED_CHARS)}<br>[…]</blockquote>`)).toBe(true);
   });
 });
 
