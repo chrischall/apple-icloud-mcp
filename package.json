@@ -54,7 +54,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@chrischall/mcp-utils": "^3.4.1",
+    "@chrischall/mcp-utils": "^3.8.0",
     "@modelcontextprotocol/server": "^2.4.0",
     "@xmldom/xmldom": "^0.9.12",
     "dotenv": "^18.0.9",

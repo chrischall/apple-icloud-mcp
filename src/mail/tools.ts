@@ -35,6 +35,7 @@ import {
   attachmentBytes,
   attachmentInfo,
   buildMessage,
+  markdownMailHtml,
   extractBody,
   parseMessage,
   parseRecipients,
@@ -708,7 +709,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
     mint: familyHint('send', { aliases: MAIL_ALIASES }),
     title: 'Send an email from iCloud Mail',
     description:
-      'Send a plain-text email from your iCloud Mail address (to/cc/bcc, subject, body; no attachments). ' +
+      'Send an email from your iCloud address (to/cc/bcc, subject, text or Markdown body; no attachments). ' +
       `Body ≤ ${MAX_BODY_CHARS.toLocaleString('en-US')} chars, all shown for confirmation. ` +
       'inReplyTo {mailbox, uid} threads a reply ("Re:" subject; quoteOriginal quotes it), warning if the original\'s ' +
       'Reply-To is not a recipient. Saved to Sent. Needs ICLOUD_USERNAME + ICLOUD_APP_PASSWORD. ' +
@@ -727,7 +728,14 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
         .string()
         .min(1)
         .max(MAX_BODY_CHARS)
-        .describe(`The message text (plain text, up to ${MAX_BODY_CHARS} characters; a longer one is refused, not cut).`),
+        .describe(`The message text (up to ${MAX_BODY_CHARS} characters; a longer one is refused, not cut).`),
+      format: z
+        .enum(['text', 'markdown'])
+        .optional()
+        .describe(
+          'How body is written: "text" (default, sent as typed) or "markdown" (**bold**, _italic_, lists, [links](https://…), ' +
+            '`code`, # headings, > quotes — sent as formatted HTML, with the Markdown itself as the plain-text part).',
+        ),
       inReplyTo: z
         .strictObject({
           mailbox: mailboxParam.optional().describe('Mailbox of the message being answered (default inbox).'),
@@ -779,10 +787,13 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
         }
       }
       const subject = args.subject ?? replySubject(original?.subject);
+      const markdown = args.format === 'markdown';
       let text = args.body;
+      let quote: { attribution: string; text: string } | undefined;
       if (original && args.quoteOriginal) {
         // readOriginal fetched the body because quoteOriginal is set, so `text` is present (possibly empty).
-        const q = quoteOriginal(original.text as string, `On ${original.dateDisplay ?? 'an earlier date'}, ${original.from ?? 'the sender'} wrote:`);
+        quote = { attribution: `On ${original.dateDisplay ?? 'an earlier date'}, ${original.from ?? 'the sender'} wrote:`, text: original.text as string };
+        const q = quoteOriginal(quote.text, quote.attribution);
         text = `${text.replace(/\s+$/, '')}\n\n${q.quoted}\n`;
         if (q.truncated) warnings.push('The quoted original was cut to its first 20,000 characters.');
       }
@@ -794,6 +805,8 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
         bcc,
         subject,
         text,
+        // The Markdown source is the text part (it reads as written); the rendered HTML rides beside it.
+        ...(markdown ? { html: markdownMailHtml(args.body, quote) } : {}),
         ...(original?.messageId ? { inReplyTo: original.messageId } : {}),
         ...(references.length ? { references } : {}),
       };
@@ -807,6 +820,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps = {}): void 
         // The WHOLE text, quoted original included: the token binds all of it, so the user must see all of it.
         body: text,
         bodyChars: text.length,
+        format: markdown ? 'markdown' : undefined,
         inReplyTo: original
           ? compactObject({
               mailbox: original.mailbox,

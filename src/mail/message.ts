@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import MailComposer from 'nodemailer/lib/mail-composer';
 import addressparser from 'nodemailer/lib/addressparser';
 import PostalMime, { type Email } from 'postal-mime';
+import { escapeHtml, renderMarkdown } from '@chrischall/mcp-utils/rich';
 import { AppleToolError, InvalidArgumentError, errorMessage } from '../errors.js';
 import { EMAIL_RE } from './config.js';
 import { formatAddress } from './format.js';
@@ -60,6 +61,8 @@ export interface OutgoingMessage {
   bcc: Recipient[];
   subject: string;
   text: string;
+  /** An HTML alternative to `text` (a Markdown body, rendered): sent as multipart/alternative. */
+  html?: string;
   inReplyTo?: string;
   references?: string[];
 }
@@ -85,6 +88,7 @@ export async function buildMessage(msg: OutgoingMessage, now: Date = new Date())
     ...(msg.bcc.length ? { bcc: msg.bcc } : {}),
     subject: msg.subject,
     text: msg.text,
+    ...(msg.html !== undefined ? { html: msg.html } : {}),
     messageId,
     date: now,
     ...(msg.inReplyTo ? { inReplyTo: msg.inReplyTo } : {}),
@@ -126,12 +130,29 @@ export function replyReferences(originalReferences: string | undefined, original
 /** The largest amount of the original a reply quotes; the rest is cut with a marker. */
 export const MAX_QUOTED_CHARS = 20_000;
 
-/** An attribution line plus the original text, each line prefixed `> `. */
-export function quoteOriginal(text: string, attribution: string): { quoted: string; truncated: boolean } {
+/** The part of an original a reply quotes: line endings normalised, cut at {@link MAX_QUOTED_CHARS} with a marker. */
+function quotedText(text: string): { body: string; truncated: boolean } {
   const normalized = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
   const truncated = normalized.length > MAX_QUOTED_CHARS;
-  const body = truncated ? `${normalized.slice(0, MAX_QUOTED_CHARS)}\n[…]` : normalized;
+  return { body: truncated ? `${normalized.slice(0, MAX_QUOTED_CHARS)}\n[…]` : normalized, truncated };
+}
+
+/** An attribution line plus the original text, each line prefixed `> `. */
+export function quoteOriginal(text: string, attribution: string): { quoted: string; truncated: boolean } {
+  const { body, truncated } = quotedText(text);
   return { quoted: `${attribution}\n${body.split('\n').map((l) => (l ? `> ${l}` : '>')).join('\n')}`, truncated };
+}
+
+/**
+ * A Markdown body as the HTML part of a message: safe HTML (raw HTML escaped, links
+ * http(s)/mailto only), headings and `>` quotes rendered. A quoted original is someone
+ * else's text, so it is shown exactly as written: escaped, never read as Markdown.
+ */
+export function markdownMailHtml(markdown: string, quote?: { attribution: string; text: string }): string {
+  const html = renderMarkdown(markdown, { headings: true, quotes: true });
+  if (!quote) return html;
+  const original = escapeHtml(quotedText(quote.text).body).replace(/\n/g, '<br>');
+  return `${html}<p>${escapeHtml(quote.attribution)}</p><blockquote type="cite">${original}</blockquote>`;
 }
 
 // ---------------------------------------------------------------------------
