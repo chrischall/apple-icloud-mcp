@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/chrischall/apple-icloud-mcp/compare/v0.4.0...v0.5.0) (2026-11-11)
+
+
+### Features
+
+* **mail:** send Markdown bodies as formatted HTML ([#75](https://github.com/chrischall/apple-icloud-mcp/issues/75)) ([0664a17](https://github.com/chrischall/apple-icloud-mcp/commit/0664a175348ba008f53763b538381b96887ab7de))
+
+
+### Bug Fixes
+
+* **deps:** bump the production-dependencies group with 4 updates ([#73](https://github.com/chrischall/apple-icloud-mcp/issues/73)) ([3d7818a](https://github.com/chrischall/apple-icloud-mcp/commit/3d7818ad71366b03f50ca5da45211c9fcb820c47))
+* **mail:** keep reading HTML mail linear on a flood of comments ([#76](https://github.com/chrischall/apple-icloud-mcp/issues/76)) ([19680ae](https://github.com/chrischall/apple-icloud-mcp/commit/19680aed374428335496f179a286b79ac2cec682))
+
 ## [0.4.0](https://github.com/chrischall/apple-icloud-mcp/compare/v0.3.7...v0.4.0) (2026-11-04)
 
 
