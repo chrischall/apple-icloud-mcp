@@ -199,6 +199,25 @@ describe('htmlToText', () => {
     expect(bombMs).toBeLessThan(Math.max(500, controlMs * 20));
   });
 
+  it('stays linear on a flood of comments, whichever way they end (one message must not stall the server)', () => {
+    const n = 40_000;
+    const control = '<p>x</p>'.repeat(n);
+    let t0 = performance.now();
+    htmlToText(control);
+    const controlMs = performance.now() - t0;
+    // Closed with `-->` and no `--!>` anywhere, then the reverse: each used to search to the end per comment.
+    for (const bomb of ['<!-- a -->x'.repeat(n), '<!--a--!>x'.repeat(n)]) {
+      t0 = performance.now();
+      const text = htmlToText(bomb);
+      const bombMs = performance.now() - t0;
+      expect(text).toBe('x'.repeat(n));
+      // Quadratic took ~24 s here; linear is the same order as the control.
+      expect(bombMs).toBeLessThan(Math.max(500, controlMs * 20));
+    }
+    // Mixed endings: a terminator found for an earlier comment is reused, never skipped past.
+    expect(htmlToText('<!--a--!>b<!--c-->d<!--e--!>f')).toBe('bdf');
+  });
+
   it('prints long sign-in links in full', () => {
     const link = `https://id.example.com/verify?token=${'a'.repeat(900)}`;
     expect(htmlToText(`<a href="${link}">Verify</a>`)).toBe(`Verify (${link})`);

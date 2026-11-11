@@ -74,6 +74,12 @@ function tokenize(html: string): Token[] {
   const lower = html.toLowerCase();
   const len = html.length;
   let i = 0;
+  // The next `-->` and `--!>`, each found once and moved forward only:
+  // searching afresh from every comment rescanned to the end of a body that
+  // has none, quadratic in the number of comments (40,000 took ~24 s).
+  // -2: not searched yet; -1: none left.
+  let nextDash = -2;
+  let nextBang = -2;
   while (i < len) {
     const lt = html.indexOf('<', i);
     if (lt === -1) {
@@ -85,8 +91,10 @@ function tokenize(html: string): Token[] {
       // A comment ends at the first `-->` — which may overlap its opening, so `<!-->` and `<!--->`
       // are empty comments — or at `--!>`, as the HTML tokenizer reads them. Searching for `-->`
       // only after `<!--` made those forms swallow visible text up to some later comment.
-      const dash = html.indexOf('-->', lt + 2);
-      const bang = html.indexOf('--!>', lt + 4);
+      if (nextDash === -2 || (nextDash !== -1 && nextDash < lt + 2)) nextDash = html.indexOf('-->', lt + 2);
+      if (nextBang === -2 || (nextBang !== -1 && nextBang < lt + 4)) nextBang = html.indexOf('--!>', lt + 4);
+      const dash = nextDash;
+      const bang = nextBang;
       if (dash !== -1 && (bang === -1 || dash < bang)) i = dash + 3;
       else i = bang === -1 ? len : bang + 4;
       continue;
