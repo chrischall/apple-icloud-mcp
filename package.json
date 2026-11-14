@@ -62,7 +62,7 @@
     "imapflow": "^2.10.2",
     "nodemailer": "^10.3.1",
     "postal-mime": "^4.2.0",
-    "timezones-ical-library": "^2.4.0",
+    "timezones-ical-library": "^3.0.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
