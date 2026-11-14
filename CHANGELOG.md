@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/chrischall/apple-icloud-mcp/compare/v0.5.0...v0.5.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** bump the production-dependencies group across 1 directory with 5 updates ([#77](https://github.com/chrischall/apple-icloud-mcp/issues/77)) ([13fa8db](https://github.com/chrischall/apple-icloud-mcp/commit/13fa8db43f6a082a2a684d026e07f1ddc36a120b))
+* **deps:** bump timezones-ical-library ([#78](https://github.com/chrischall/apple-icloud-mcp/issues/78)) ([c6db247](https://github.com/chrischall/apple-icloud-mcp/commit/c6db247a016909036559c7f3e281d6e70b1107a9))
+
 ## [0.5.0](https://github.com/chrischall/apple-icloud-mcp/compare/v0.4.0...v0.5.0) (2026-11-11)
 
 
